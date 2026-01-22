@@ -1,0 +1,131 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyrrm"
+version = "0.1.0"
+description = "Python Rainfall-Runoff Models - A comprehensive library for hydrological modeling"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "ACT Government", email = "hydrology@act.gov.au"}
+]
+keywords = [
+    "hydrology",
+    "rainfall-runoff",
+    "sacramento",
+    "gr4j",
+    "calibration",
+    "modeling",
+    "water-resources"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Hydrology",
+]
+requires-python = ">=3.9"
+
+dependencies = [
+    "numpy>=1.20",
+    "pandas>=1.3",
+    "scipy>=1.7",
+    "matplotlib>=3.4",
+]
+
+[project.optional-dependencies]
+# SpotPy calibration (standard DREAM, SCE-UA, MCMC)
+calibration = [
+    "spotpy>=1.5",
+]
+# PyDREAM calibration (MT-DREAM(ZS) with multi-try and snooker updates)
+# Note: pydream may need to be installed from source
+# https://github.com/LoLab-VU/PyDREAM
+pydream = [
+    "pydream>=1.0",
+]
+# All calibration methods
+calibration-all = [
+    "spotpy>=1.5",
+    "pydream>=1.0",
+]
+sensitivity = [
+    "SALib>=1.4",
+]
+full = [
+    "spotpy>=1.5",
+    "pydream>=1.0",
+    "SALib>=1.4",
+    "seaborn>=0.11",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=3.0",
+    "black>=22.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/actgov/pyrrm"
+Documentation = "https://pyrrm.readthedocs.io"
+Repository = "https://github.com/actgov/pyrrm"
+Issues = "https://github.com/actgov/pyrrm/issues"
+
+[tool.setuptools.packages.find]
+include = ["pyrrm*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

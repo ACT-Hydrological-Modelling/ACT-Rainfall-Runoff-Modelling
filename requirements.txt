@@ -1,0 +1,28 @@
+# pyrrm - Python Rainfall-Runoff Models
+# Core dependencies
+numpy>=1.20
+pandas>=1.3
+scipy>=1.7
+matplotlib>=3.4
+
+# Calibration (optional)
+# SpotPy: Standard DREAM, SCE-UA, and other MCMC methods
+spotpy>=1.5
+
+# PyDREAM: MT-DREAM(ZS) with multi-try sampling and snooker updates
+# Provides advanced features for multi-modal posteriors
+# Install from: https://github.com/LoLab-VU/PyDREAM
+# pip install pydream
+pydream>=1.0
+
+# Sensitivity analysis (optional)
+SALib>=1.4
+
+# Visualization enhancements (optional)
+seaborn>=0.11
+
+# Development dependencies (optional)
+# pytest>=7.0
+# pytest-cov>=3.0
+# black>=22.0
+# ruff>=0.1

@@ -1,0 +1,15 @@
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/bin/Debug/net9.0/CSharpRunner
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/bin/Debug/net9.0/CSharpRunner.deps.json
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/bin/Debug/net9.0/CSharpRunner.runtimeconfig.json
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/bin/Debug/net9.0/CSharpRunner.dll
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/bin/Debug/net9.0/CSharpRunner.pdb
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/obj/Debug/net9.0/CSharpRunner.GeneratedMSBuildEditorConfig.editorconfig
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/obj/Debug/net9.0/CSharpRunner.AssemblyInfoInputs.cache
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/obj/Debug/net9.0/CSharpRunner.AssemblyInfo.cs
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/obj/Debug/net9.0/CSharpRunner.csproj.CoreCompileInputs.cache
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/obj/Debug/net9.0/CSharpRunner.sourcelink.json
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/obj/Debug/net9.0/CSharpRunner.dll
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/obj/Debug/net9.0/refint/CSharpRunner.dll
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/obj/Debug/net9.0/CSharpRunner.pdb
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/obj/Debug/net9.0/CSharpRunner.genruntimeconfig.cache
+/Users/jcastilla/Desktop/ACTGOV/ACT-Rainfall-Runoff-Modelling/benchmark/CSharpRunner/obj/Debug/net9.0/ref/CSharpRunner.dll

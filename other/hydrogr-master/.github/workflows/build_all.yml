@@ -1,0 +1,51 @@
+name: Build for all platforms
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build_for_linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python_version: ['3.10', '3.11', '3.12', '3.13']
+        target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run build and test
+        uses: ./.github/actions/build_and_test
+        with:
+          python_version: ${{ matrix.python_version }}
+          architecture: ${{ matrix.target }}
+
+  build_for_windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python_version: ['3.10', '3.11', '3.12', '3.13']
+        target: [x64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run build and test
+        uses: ./.github/actions/build_and_test
+        with:
+          python_version: ${{ matrix.python_version }}
+          architecture: ${{ matrix.target }}
+          run_tests: 'true'
+
+  build_for_macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        python_version: ['3.10', '3.11', '3.12', '3.13']
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run build and test
+        uses: ./.github/actions/build_and_test
+        with:
+          python_version: ${{ matrix.python_version }}
+          architecture: ${{ matrix.target }}
+
+
