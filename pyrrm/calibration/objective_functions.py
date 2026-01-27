@@ -584,7 +584,7 @@ class WeightedObjective(ObjectiveFunction):
             
             # Normalize: convert to 0-1 scale where 1 is best
             if self.normalize:
-                if obj.maximize:
+                if _should_maximize(obj):
                     # For NSE, KGE: clip to [-1, 1] then scale to [0, 1]
                     value = (np.clip(value, -1, 1) + 1) / 2
                 else:
@@ -592,7 +592,7 @@ class WeightedObjective(ObjectiveFunction):
                     value = np.exp(-abs(value) / 10)
             else:
                 # Just flip sign for minimization objectives
-                if not obj.maximize:
+                if not _should_maximize(obj):
                     value = -value
             
             total += weight * value
@@ -692,6 +692,26 @@ def is_new_interface(objective) -> bool:
         True if using new interface, False for legacy
     """
     return hasattr(objective, 'direction')
+
+
+def _should_maximize(objective) -> bool:
+    """
+    Check if an objective function should be maximized.
+    
+    Handles both old interface (maximize property) and new interface (direction attribute).
+    
+    Args:
+        objective: Objective function to check
+        
+    Returns:
+        True if objective should be maximized, False if minimized
+    """
+    if hasattr(objective, 'direction'):
+        return objective.direction == 'maximize'
+    elif hasattr(objective, 'maximize'):
+        return objective.maximize
+    else:
+        return True  # Default to maximize
 
 
 def get_calibration_value(objective, simulated: np.ndarray, observed: np.ndarray) -> float:

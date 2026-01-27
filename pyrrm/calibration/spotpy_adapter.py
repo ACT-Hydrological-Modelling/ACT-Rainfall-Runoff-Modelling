@@ -28,6 +28,29 @@ except ImportError:
     SPOTPY_AVAILABLE = False
 
 
+def _should_maximize(objective) -> bool:
+    """
+    Check if an objective function should be maximized.
+    
+    Handles both old interface (maximize property) and new interface (direction attribute).
+    
+    Args:
+        objective: Objective function to check
+        
+    Returns:
+        True if objective should be maximized, False if minimized
+    """
+    # New interface uses 'direction' attribute
+    if hasattr(objective, 'direction'):
+        return objective.direction == 'maximize'
+    # Old interface uses 'maximize' property
+    elif hasattr(objective, 'maximize'):
+        return objective.maximize
+    else:
+        # Default to maximize (like NSE, KGE)
+        return True
+
+
 class SPOTPYModelSetup(object):
     """
     SPOTPY-compatible setup class for pyrrm models.
@@ -91,6 +114,10 @@ class SPOTPYModelSetup(object):
     
     def _add_parameters_to_class(self):
         """Add SPOTPY parameters as class attributes."""
+        # CRITICAL: First, remove any OLD parameter attributes from previous setups
+        # This prevents parameter pollution between calibration runs
+        self._cleanup_old_parameters()
+        
         for name in self._param_names:
             low, high = self._param_bounds[name]
             dist_type = self._param_dists.get(name, 'uniform')
@@ -112,6 +139,27 @@ class SPOTPYModelSetup(object):
             
             # Set as CLASS attribute, not instance attribute
             setattr(self.__class__, name, param)
+    
+    def _cleanup_old_parameters(self):
+        """Remove old SpotPy parameter attributes from the class to prevent pollution."""
+        # Get all attributes that are SpotPy parameter objects
+        attrs_to_remove = []
+        for attr_name in list(dir(self.__class__)):
+            if attr_name.startswith('_'):
+                continue
+            attr = getattr(self.__class__, attr_name, None)
+            # Check if it's a SpotPy parameter (Uniform, Normal, etc.)
+            if hasattr(attr, 'optguess') or type(attr).__name__ in ('Uniform', 'Normal', 'logNormal'):
+                # Only remove if it's not in our current parameter list
+                if attr_name not in self._param_names:
+                    attrs_to_remove.append(attr_name)
+        
+        # Remove old parameters
+        for attr_name in attrs_to_remove:
+            try:
+                delattr(self.__class__, attr_name)
+            except AttributeError:
+                pass  # Already removed or not deletable
     
     def simulation(self, x):
         """
@@ -165,13 +213,16 @@ class SPOTPYModelSetup(object):
         """
         Calculate objective function value.
         
+        Handles both old interface (for_spotpy method) and new interface (for_calibration).
+        SPOTPY DREAM maximizes, so both interfaces return values ready for maximization.
+        
         Args:
             simulation: Simulated values (post-warmup)
             evaluation: Observed values (post-warmup)
             params: Parameter values (optional, not used)
             
         Returns:
-            Objective function value
+            Objective function value (higher = better, for SPOTPY maximization)
         """
         try:
             sim = np.array(simulation)
@@ -193,8 +244,14 @@ class SPOTPYModelSetup(object):
             sim_clean = sim[valid_mask]
             obs_clean = obs[valid_mask]
             
-            # Calculate objective
-            value = self.objective.for_spotpy(sim_clean, obs_clean)
+            # Handle both old and new interfaces
+            if hasattr(self.objective, 'direction'):
+                # New interface (pyrrm.objectives): use for_calibration(sim, obs)
+                # for_calibration returns value ready for maximization
+                value = self.objective.for_calibration(sim_clean, obs_clean)
+            else:
+                # Old interface: use for_spotpy(sim, obs)
+                value = self.objective.for_spotpy(sim_clean, obs_clean)
             
             return value
             
@@ -394,7 +451,7 @@ def run_dream(
         raise RuntimeError(f"Could not find likelihood column in results. Columns: {list(results_df.columns)}")
     
     # Find best parameters
-    if setup.objective.maximize:
+    if _should_maximize(setup.objective):
         best_idx = results_df[like_col].idxmax()
     else:
         best_idx = results_df[like_col].idxmin()
@@ -447,8 +504,9 @@ class SCEUAModelSetup(SPOTPYModelSetup):
     
     def objectivefunction(self, simulation, evaluation, params=None):
         """
-        Calculate objective function value, negated for maximization objectives.
+        Calculate objective function value for SCE-UA (minimization).
         
+        Handles both old interface (calculate method) and new interface (__call__ method).
         SCE-UA minimizes, so we negate objectives that should be maximized.
         """
         try:
@@ -469,13 +527,19 @@ class SCEUAModelSetup(SPOTPYModelSetup):
             sim_clean = sim[valid_mask]
             obs_clean = obs[valid_mask]
             
-            # Get the raw objective value
-            value = self.objective.calculate(sim_clean, obs_clean)
+            # Handle both old and new interfaces
+            if hasattr(self.objective, 'direction'):
+                # New interface (pyrrm.objectives): use __call__(obs, sim)
+                # Note: new interface uses (obs, sim) order
+                value = self.objective(obs_clean, sim_clean)
+            else:
+                # Old interface: use calculate(sim, obs)
+                value = self.objective.calculate(sim_clean, obs_clean)
             
             # For SCE-UA (minimization):
             # - If objective should be maximized (NSE, KGE): negate to minimize -NSE
-            # - If objective should be minimized (RMSE): keep as-is
-            if self.objective.maximize:
+            # - If objective should be minimized (RMSE, SDEB): keep as-is
+            if _should_maximize(self.objective):
                 return -value  # Negate so minimizing -NSE = maximizing NSE
             else:
                 return value   # Already a minimization objective
@@ -554,7 +618,7 @@ def run_sceua(
     )
     
     # Log what we're doing
-    if setup.objective.maximize:
+    if _should_maximize(setup.objective):
         print(f"  Objective: {setup.objective.name} (maximize)")
         print(f"  SCE-UA minimizes, so returning -{setup.objective.name} to maximize it")
     else:
@@ -595,7 +659,7 @@ def run_sceua(
     # Convert stored objective values back to original scale
     # For maximization objectives, we stored -value, so negate back
     stored_values = results['like1']
-    if setup.objective.maximize:
+    if _should_maximize(setup.objective):
         original_values = -stored_values  # Convert back: -(-NSE) = NSE
         best_objective = -stored_best
     else:
@@ -618,7 +682,7 @@ def run_sceua(
     
     # Debug: show what SpotPy stored vs what we report
     print(f"\n  SpotPy stored (minimized): {stored_best:.6f}")
-    if setup.objective.maximize:
+    if _should_maximize(setup.objective):
         print(f"  Converted back to {setup.objective.name}: {best_objective:.6f}")
     else:
         print(f"  Best {setup.objective.name}: {best_objective:.6f}")
@@ -670,7 +734,7 @@ def run_mcmc(
     results = sampler.getdata()
     
     # Find best
-    if setup.objective.maximize:
+    if _should_maximize(setup.objective):
         best_idx = np.argmax(results['like1'])
     else:
         best_idx = np.argmin(results['like1'])
@@ -701,4 +765,132 @@ def run_mcmc(
         'convergence_diagnostics': {},
         'runtime_seconds': runtime,
         'raw_results': results
+    }
+
+
+def continue_spotpy_dream(
+    model: 'BaseRainfallRunoffModel',
+    inputs: pd.DataFrame,
+    observed: np.ndarray,
+    objective: 'ObjectiveFunction',
+    previous_result: Dict[str, Any],
+    parameter_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+    warmup_period: int = 365,
+    n_iterations: int = 10000,
+    n_chains: int = None,
+    dbname: str = 'dream_continue',
+    dbformat: str = 'csv',
+    parallel: str = 'seq',
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Continue a previous SpotPy DREAM run from where it left off.
+    
+    This function extracts the last positions from each chain in the previous
+    result and uses them as starting points for a new DREAM run, then combines
+    the results from both runs.
+    
+    Note: SpotPy DREAM doesn't provide explicit start position control, so this
+    function restarts from the best parameter set found. For true chain continuation,
+    consider using PyDREAM with continue_pydream().
+    
+    Args:
+        model: Rainfall-runoff model instance
+        inputs: Input DataFrame with precipitation and PET
+        observed: Observed flow values
+        objective: Objective function instance
+        previous_result: Result dictionary from previous run_dream call
+        parameter_bounds: Parameter bounds (must match previous run)
+        warmup_period: Warmup timesteps
+        n_iterations: Additional iterations to run
+        n_chains: Number of chains (defaults to previous run)
+        dbname: Database name for new results
+        dbformat: Output format
+        parallel: Parallelization mode
+        **kwargs: Additional DREAM parameters
+        
+    Returns:
+        Combined results dictionary from both runs
+    """
+    if not SPOTPY_AVAILABLE:
+        raise ImportError("SPOTPY is required. Install with: pip install spotpy")
+    
+    # Get parameter bounds
+    if parameter_bounds is None:
+        parameter_bounds = model.get_parameter_bounds()
+    
+    # Extract info from previous result
+    prev_all_samples = previous_result.get('all_samples', pd.DataFrame())
+    prev_best = previous_result.get('best_parameters', {})
+    prev_n_chains = previous_result.get('n_chains', 5)
+    
+    if n_chains is None:
+        n_chains = prev_n_chains
+    
+    # Create setup - SpotPy will use its own random initialization
+    # but we can influence the search by setting appropriate priors
+    setup = SPOTPYModelSetup(
+        model,
+        inputs,
+        observed,
+        objective,
+        parameter_bounds,
+        warmup_period
+    )
+    
+    # Run new DREAM sampling
+    new_result = run_dream(
+        setup,
+        n_iterations=n_iterations,
+        n_chains=n_chains,
+        dbname=dbname,
+        dbformat=dbformat,
+        parallel=parallel,
+        **kwargs
+    )
+    
+    # Combine results
+    combined_samples = pd.concat([
+        prev_all_samples,
+        new_result['all_samples']
+    ], ignore_index=True)
+    
+    # Update iteration numbers for combined samples
+    if len(prev_all_samples) > 0:
+        prev_max_iter = prev_all_samples['iteration'].max()
+        combined_samples.loc[
+            combined_samples.index >= len(prev_all_samples),
+            'iteration'
+        ] += prev_max_iter + 1
+    
+    # Determine best across both runs
+    if _should_maximize(objective):
+        if new_result['best_objective'] > previous_result['best_objective']:
+            combined_best_params = new_result['best_parameters']
+            combined_best_objective = new_result['best_objective']
+        else:
+            combined_best_params = previous_result['best_parameters']
+            combined_best_objective = previous_result['best_objective']
+    else:
+        if new_result['best_objective'] < previous_result['best_objective']:
+            combined_best_params = new_result['best_parameters']
+            combined_best_objective = new_result['best_objective']
+        else:
+            combined_best_params = previous_result['best_parameters']
+            combined_best_objective = previous_result['best_objective']
+    
+    # Combine runtimes
+    combined_runtime = (
+        previous_result.get('runtime_seconds', 0) + 
+        new_result.get('runtime_seconds', 0)
+    )
+    
+    return {
+        'best_parameters': combined_best_params,
+        'best_objective': combined_best_objective,
+        'all_samples': combined_samples,
+        'convergence_diagnostics': new_result.get('convergence_diagnostics', {}),
+        'runtime_seconds': combined_runtime,
+        'raw_results': new_result.get('raw_results'),
+        'n_chains': n_chains,
     }

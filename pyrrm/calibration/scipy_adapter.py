@@ -22,6 +22,20 @@ if TYPE_CHECKING:
     from pyrrm.calibration.objective_functions import ObjectiveFunction
 
 
+def _should_maximize(objective) -> bool:
+    """
+    Check if an objective function should be maximized.
+    
+    Handles both old interface (maximize property) and new interface (direction attribute).
+    """
+    if hasattr(objective, 'direction'):
+        return objective.direction == 'maximize'
+    elif hasattr(objective, 'maximize'):
+        return objective.maximize
+    else:
+        return True  # Default to maximize
+
+
 @dataclass
 class ScipyCalibrationResult:
     """Container for scipy calibration results."""
@@ -79,7 +93,7 @@ class ScipyModelWrapper:
         # Tracking
         self._history: List[Dict[str, Any]] = []
         self._n_calls = 0
-        self._best_value = np.inf if not objective.maximize else -np.inf
+        self._best_value = np.inf if not _should_maximize(objective) else -np.inf
         self._best_params: Dict[str, float] = {}
     
     def get_bounds(self) -> List[Tuple[float, float]]:
@@ -136,7 +150,7 @@ class ScipyModelWrapper:
             scipy_value = 1e10  # Large penalty
         else:
             # scipy minimizes, so negate for maximization objectives
-            scipy_value = -value if self.objective.maximize else value
+            scipy_value = -value if _should_maximize(self.objective) else value
         
         # Track history
         record = {'iteration': self._n_calls, **params, 'objective': value}
@@ -144,8 +158,8 @@ class ScipyModelWrapper:
         
         # Track best
         is_better = (
-            (self.objective.maximize and value > self._best_value) or
-            (not self.objective.maximize and value < self._best_value)
+            (_should_maximize(self.objective) and value > self._best_value) or
+            (not _should_maximize(self.objective) and value < self._best_value)
         )
         if not np.isnan(value) and is_better:
             self._best_value = value
@@ -224,7 +238,7 @@ def calibrate_differential_evolution(
     runtime = time.time() - start_time
     
     best_params = wrapper.vector_to_params(result.x)
-    best_objective = -result.fun if objective.maximize else result.fun
+    best_objective = -result.fun if _should_maximize(objective) else result.fun
     
     return ScipyCalibrationResult(
         best_parameters=best_params,
@@ -305,7 +319,7 @@ def calibrate_dual_annealing(
     runtime = time.time() - start_time
     
     best_params = wrapper.vector_to_params(result.x)
-    best_objective = -result.fun if objective.maximize else result.fun
+    best_objective = -result.fun if _should_maximize(objective) else result.fun
     
     return ScipyCalibrationResult(
         best_parameters=best_params,
@@ -390,7 +404,7 @@ def calibrate_basinhopping(
     runtime = time.time() - start_time
     
     best_params = wrapper.vector_to_params(result.x)
-    best_objective = -result.fun if objective.maximize else result.fun
+    best_objective = -result.fun if _should_maximize(objective) else result.fun
     
     return ScipyCalibrationResult(
         best_parameters=best_params,
@@ -464,7 +478,7 @@ def calibrate_minimize(
     runtime = time.time() - start_time
     
     best_params = wrapper.vector_to_params(result.x)
-    best_objective = -result.fun if objective.maximize else result.fun
+    best_objective = -result.fun if _should_maximize(objective) else result.fun
     
     return ScipyCalibrationResult(
         best_parameters=best_params,

@@ -11,10 +11,21 @@ Supported DREAM implementations:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING, Literal
+from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING, Literal, Union
+from datetime import datetime
+from pathlib import Path
+import json
+import os
 import numpy as np
 import pandas as pd
 import warnings
+
+# Check for optional parquet support
+try:
+    import pyarrow
+    PARQUET_AVAILABLE = True
+except ImportError:
+    PARQUET_AVAILABLE = False
 
 if TYPE_CHECKING:
     from pyrrm.models.base import BaseRainfallRunoffModel
@@ -53,6 +64,8 @@ class CalibrationResult:
         objective_name: Name of objective function
         success: Whether calibration converged successfully
         message: Additional information or warnings
+        _raw_result: Internal storage for implementation-specific data
+                    (used for continuation/checkpointing)
     """
     best_parameters: Dict[str, float]
     best_objective: float
@@ -63,6 +76,7 @@ class CalibrationResult:
     objective_name: str = ""
     success: bool = True
     message: str = ""
+    _raw_result: Optional[Dict[str, Any]] = field(default=None, repr=False)
     
     def summary(self) -> str:
         """Generate text summary of results."""
@@ -93,6 +107,250 @@ class CalibrationResult:
             f"best_{self.objective_name}={self.best_objective:.4f}, "
             f"runtime={self.runtime_seconds:.1f}s)"
         )
+    
+    def to_dict(self, include_samples: bool = False) -> Dict[str, Any]:
+        """
+        Convert to JSON-serializable dictionary.
+        
+        Args:
+            include_samples: Whether to include all_samples DataFrame
+                           (can be large, excluded by default)
+        
+        Returns:
+            Dictionary representation of the calibration result
+        """
+        data = {
+            'best_parameters': self.best_parameters,
+            'best_objective': float(self.best_objective),
+            'convergence_diagnostics': self._serialize_diagnostics(),
+            'runtime_seconds': float(self.runtime_seconds),
+            'method': self.method,
+            'objective_name': self.objective_name,
+            'success': self.success,
+            'message': self.message,
+            'saved_at': datetime.now().isoformat(),
+            'n_samples': len(self.all_samples) if self.all_samples is not None else 0,
+        }
+        
+        if include_samples and self.all_samples is not None:
+            data['all_samples'] = self.all_samples.to_dict(orient='records')
+        
+        return data
+    
+    def _serialize_diagnostics(self) -> Dict[str, Any]:
+        """Convert convergence_diagnostics to JSON-serializable format."""
+        serialized = {}
+        for key, value in self.convergence_diagnostics.items():
+            if isinstance(value, np.ndarray):
+                serialized[key] = value.tolist()
+            elif isinstance(value, (np.floating, np.integer)):
+                serialized[key] = float(value)
+            elif isinstance(value, dict):
+                # Recursively handle nested dicts
+                serialized[key] = {
+                    k: v.tolist() if isinstance(v, np.ndarray) 
+                    else float(v) if isinstance(v, (np.floating, np.integer))
+                    else v
+                    for k, v in value.items()
+                }
+            else:
+                serialized[key] = value
+        return serialized
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'CalibrationResult':
+        """
+        Create CalibrationResult from dictionary.
+        
+        Args:
+            data: Dictionary with calibration result data
+            
+        Returns:
+            CalibrationResult instance
+        """
+        # Handle all_samples
+        if 'all_samples' in data and data['all_samples']:
+            all_samples = pd.DataFrame(data['all_samples'])
+        else:
+            all_samples = pd.DataFrame()
+        
+        return cls(
+            best_parameters=data['best_parameters'],
+            best_objective=data['best_objective'],
+            all_samples=all_samples,
+            convergence_diagnostics=data.get('convergence_diagnostics', {}),
+            runtime_seconds=data.get('runtime_seconds', 0.0),
+            method=data.get('method', ''),
+            objective_name=data.get('objective_name', ''),
+            success=data.get('success', True),
+            message=data.get('message', ''),
+        )
+    
+    def save(
+        self, 
+        path: str, 
+        include_samples: bool = True,
+        include_chains: bool = True
+    ) -> List[str]:
+        """
+        Save calibration result to disk.
+        
+        Creates multiple files:
+        - {path}_meta.json: Metadata, best params, diagnostics
+        - {path}_samples.parquet (or .csv): All samples (if include_samples=True)
+        - {path}_chains.npz: Chain data for PyDREAM continuation (if available)
+        
+        Args:
+            path: Base path for output files (without extension)
+            include_samples: Whether to save all_samples DataFrame
+            include_chains: Whether to save chain data for continuation
+            
+        Returns:
+            List of created file paths
+            
+        Example:
+            >>> result.save('calibrations/catchment_410734')
+            ['calibrations/catchment_410734_meta.json',
+             'calibrations/catchment_410734_samples.parquet']
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        
+        created_files = []
+        
+        # Save metadata as JSON
+        meta_path = str(path) + '_meta.json'
+        meta_data = self.to_dict(include_samples=False)
+        
+        # Add chain info if available
+        if self._raw_result is not None:
+            meta_data['has_chain_data'] = (
+                'sampled_params_by_chain' in self._raw_result
+            )
+            if 'parameter_names' in self._raw_result:
+                meta_data['parameter_names'] = self._raw_result['parameter_names']
+        else:
+            meta_data['has_chain_data'] = False
+        
+        with open(meta_path, 'w') as f:
+            json.dump(meta_data, f, indent=2)
+        created_files.append(meta_path)
+        
+        # Save samples
+        if include_samples and self.all_samples is not None and len(self.all_samples) > 0:
+            if PARQUET_AVAILABLE:
+                samples_path = str(path) + '_samples.parquet'
+                self.all_samples.to_parquet(samples_path, index=False)
+            else:
+                samples_path = str(path) + '_samples.csv'
+                self.all_samples.to_csv(samples_path, index=False)
+            created_files.append(samples_path)
+        
+        # Save chain data for PyDREAM continuation
+        if include_chains and self._raw_result is not None:
+            if 'sampled_params_by_chain' in self._raw_result:
+                chains_path = str(path) + '_chains.npz'
+                chain_data = {
+                    'sampled_params_by_chain': np.array(
+                        self._raw_result['sampled_params_by_chain'], 
+                        dtype=object
+                    ),
+                    'log_ps_by_chain': np.array(
+                        self._raw_result['log_ps_by_chain'],
+                        dtype=object
+                    ),
+                }
+                if 'parameter_names' in self._raw_result:
+                    chain_data['parameter_names'] = np.array(
+                        self._raw_result['parameter_names']
+                    )
+                np.savez_compressed(chains_path, **chain_data)
+                created_files.append(chains_path)
+        
+        return created_files
+    
+    @classmethod
+    def load(cls, path: str) -> 'CalibrationResult':
+        """
+        Load calibration result from disk.
+        
+        Args:
+            path: Base path used when saving (without extension),
+                  or path to _meta.json file
+                  
+        Returns:
+            CalibrationResult instance
+            
+        Example:
+            >>> result = CalibrationResult.load('calibrations/catchment_410734')
+            >>> print(result.best_parameters)
+        """
+        # Handle both base path and full meta path
+        path_str = str(path)
+        if path_str.endswith('_meta.json'):
+            meta_path = path_str
+            base_path = path_str[:-10]  # Remove '_meta.json'
+        else:
+            meta_path = path_str + '_meta.json'
+            base_path = path_str
+        
+        # Load metadata
+        if not os.path.exists(meta_path):
+            raise FileNotFoundError(f"Calibration result not found: {meta_path}")
+        
+        with open(meta_path, 'r') as f:
+            meta_data = json.load(f)
+        
+        # Try to load samples
+        all_samples = pd.DataFrame()
+        samples_parquet = base_path + '_samples.parquet'
+        samples_csv = base_path + '_samples.csv'
+        
+        if os.path.exists(samples_parquet):
+            if PARQUET_AVAILABLE:
+                all_samples = pd.read_parquet(samples_parquet)
+            else:
+                warnings.warn(
+                    f"Parquet file found but pyarrow not installed. "
+                    f"Install with: pip install pyarrow"
+                )
+        elif os.path.exists(samples_csv):
+            all_samples = pd.read_csv(samples_csv)
+        
+        # Load chain data if available
+        raw_result = None
+        chains_path = base_path + '_chains.npz'
+        if os.path.exists(chains_path):
+            chain_data = np.load(chains_path, allow_pickle=True)
+            raw_result = {
+                'sampled_params_by_chain': list(chain_data['sampled_params_by_chain']),
+                'log_ps_by_chain': list(chain_data['log_ps_by_chain']),
+            }
+            if 'parameter_names' in chain_data:
+                raw_result['parameter_names'] = list(chain_data['parameter_names'])
+        
+        return cls(
+            best_parameters=meta_data['best_parameters'],
+            best_objective=meta_data['best_objective'],
+            all_samples=all_samples,
+            convergence_diagnostics=meta_data.get('convergence_diagnostics', {}),
+            runtime_seconds=meta_data.get('runtime_seconds', 0.0),
+            method=meta_data.get('method', ''),
+            objective_name=meta_data.get('objective_name', ''),
+            success=meta_data.get('success', True),
+            message=meta_data.get('message', ''),
+            _raw_result=raw_result,
+        )
+    
+    def can_resume(self) -> bool:
+        """
+        Check if this result can be used to resume calibration.
+        
+        Returns True if chain data is available (PyDREAM results).
+        """
+        if self._raw_result is None:
+            return False
+        return 'sampled_params_by_chain' in self._raw_result
 
 
 class CalibrationRunner:
@@ -207,6 +465,10 @@ class CalibrationRunner:
         # PyDREAM-specific options
         multitry: int = 5,
         snooker: float = 0.1,
+        # Checkpoint options
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_interval: int = 5000,
+        resume_from: Optional[str] = None,
         **kwargs
     ) -> CalibrationResult:
         """
@@ -238,13 +500,45 @@ class CalibrationRunner:
             PyDREAM-specific args:
                 multitry: Number of proposal points per iteration (1=standard DREAM)
                 snooker: Probability of snooker update (0 to disable)
+            
+            Checkpoint args:
+                checkpoint_dir: Directory for automatic checkpoints (None to disable)
+                checkpoint_interval: Save checkpoint every N iterations
+                resume_from: Path to checkpoint or CalibrationResult to resume from
                 
             **kwargs: Additional implementation-specific parameters
             
         Returns:
             CalibrationResult with best parameters and MCMC chain
+            
+        Example with checkpointing:
+            >>> result = runner.run_dream(
+            ...     implementation='pydream',
+            ...     n_iterations=100000,
+            ...     checkpoint_dir='./checkpoints',
+            ...     checkpoint_interval=5000
+            ... )
+            
+        Example resuming from checkpoint:
+            >>> result = runner.run_dream(
+            ...     implementation='pydream',
+            ...     n_iterations=50000,  # Additional iterations
+            ...     resume_from='./checkpoints'  # Load latest from dir
+            ... )
         """
         implementation = implementation.lower()
+        
+        # Handle resume_from
+        if resume_from is not None:
+            return self._resume_dream(
+                resume_from=resume_from,
+                implementation=implementation,
+                n_iterations=n_iterations,
+                n_chains=n_chains,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_interval=checkpoint_interval,
+                **kwargs
+            )
         
         if implementation == 'spotpy':
             return self.run_spotpy_dream(
@@ -262,12 +556,149 @@ class CalibrationRunner:
                 n_chains=n_chains,
                 multitry=multitry,
                 snooker=snooker,
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_interval=checkpoint_interval,
                 **kwargs
             )
         else:
             raise ValueError(
                 f"Unknown DREAM implementation: '{implementation}'. "
                 f"Choose 'spotpy' or 'pydream'."
+            )
+    
+    def _resume_dream(
+        self,
+        resume_from: str,
+        implementation: str,
+        n_iterations: int,
+        n_chains: int,
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_interval: int = 5000,
+        **kwargs
+    ) -> CalibrationResult:
+        """
+        Resume DREAM calibration from checkpoint or saved result.
+        
+        Args:
+            resume_from: Path to checkpoint directory, checkpoint file, or saved result
+            implementation: DREAM implementation to use
+            n_iterations: Additional iterations to run
+            n_chains: Number of chains
+            checkpoint_dir: Directory for new checkpoints
+            checkpoint_interval: Checkpoint interval
+            **kwargs: Additional parameters
+            
+        Returns:
+            CalibrationResult combining previous and new results
+        """
+        from pyrrm.calibration.checkpoint import CheckpointManager
+        
+        # Determine what we're resuming from
+        resume_path = Path(resume_from)
+        
+        if resume_path.is_dir():
+            # Load from checkpoint directory
+            manager = CheckpointManager(str(resume_path))
+            previous_result = manager.load_latest_checkpoint()
+            if previous_result is None:
+                raise ValueError(f"No checkpoints found in {resume_from}")
+        elif resume_path.suffix == '.json' or (resume_path.parent / (resume_path.name + '.json')).exists():
+            # Load from specific checkpoint or CalibrationResult
+            try:
+                # Try loading as CalibrationResult
+                prev_calib_result = CalibrationResult.load(str(resume_path))
+                previous_result = prev_calib_result._raw_result or {}
+                previous_result.update({
+                    'best_parameters': prev_calib_result.best_parameters,
+                    'best_objective': prev_calib_result.best_objective,
+                    'all_samples': prev_calib_result.all_samples,
+                    'convergence_diagnostics': prev_calib_result.convergence_diagnostics,
+                    'runtime_seconds': prev_calib_result.runtime_seconds,
+                })
+            except FileNotFoundError:
+                # Try loading as checkpoint
+                manager = CheckpointManager(str(resume_path.parent))
+                previous_result = manager.load_checkpoint(
+                    str(resume_path).replace('.json', '')
+                )
+                if previous_result is None:
+                    raise ValueError(f"Could not load checkpoint: {resume_from}")
+        else:
+            raise ValueError(
+                f"Cannot resume from {resume_from}. "
+                f"Provide a checkpoint directory, checkpoint file, or saved CalibrationResult."
+            )
+        
+        # Continue based on implementation
+        if implementation == 'pydream':
+            if 'sampled_params_by_chain' not in previous_result:
+                raise ValueError(
+                    "Cannot resume PyDREAM: previous result does not contain chain data. "
+                    "Use SpotPy DREAM or start fresh."
+                )
+            
+            from pyrrm.calibration.pydream_adapter import continue_pydream
+            
+            result = continue_pydream(
+                model=self.model,
+                inputs=self.inputs,
+                observed=self.observed,
+                objective=self.objective,
+                previous_result=previous_result,
+                parameter_bounds=self._param_bounds,
+                warmup_period=self.warmup_period,
+                niterations=n_iterations,
+                **kwargs
+            )
+            
+            # Store raw result for potential continuation
+            raw_result = {
+                'sampled_params_by_chain': result.get('sampled_params_by_chain'),
+                'log_ps_by_chain': result.get('log_ps_by_chain'),
+                'parameter_names': result.get('parameter_names'),
+            }
+            
+            converged = result.get('convergence_diagnostics', {}).get('converged', None)
+            success = converged if converged is not None else True
+            
+            return CalibrationResult(
+                best_parameters=result['best_parameters'],
+                best_objective=result['best_objective'],
+                all_samples=result['all_samples'],
+                convergence_diagnostics=result['convergence_diagnostics'],
+                runtime_seconds=result['runtime_seconds'],
+                method='PyDREAM (MT-DREAM(ZS)) [resumed]',
+                objective_name=self.objective.name,
+                success=success,
+                _raw_result=raw_result,
+            )
+        
+        else:  # SpotPy
+            from pyrrm.calibration.spotpy_adapter import continue_spotpy_dream
+            
+            result = continue_spotpy_dream(
+                model=self.model,
+                inputs=self.inputs,
+                observed=self.observed,
+                objective=self.objective,
+                previous_result=previous_result,
+                parameter_bounds=self._param_bounds,
+                warmup_period=self.warmup_period,
+                n_iterations=n_iterations,
+                n_chains=n_chains,
+                **kwargs
+            )
+            
+            return CalibrationResult(
+                best_parameters=result['best_parameters'],
+                best_objective=result['best_objective'],
+                all_samples=result['all_samples'],
+                convergence_diagnostics=result['convergence_diagnostics'],
+                runtime_seconds=result['runtime_seconds'],
+                method='SpotPy-DREAM [resumed]',
+                objective_name=self.objective.name,
+                success=True,
+                _raw_result=result,
             )
     
     def run_spotpy_dream(
@@ -356,6 +787,14 @@ class CalibrationRunner:
             **kwargs
         )
         
+        # Store raw result for potential continuation
+        raw_result = {
+            'dbname': dbname,
+            'dbformat': dbformat,
+            'n_chains': n_chains,
+            'raw_results': result.get('raw_results'),
+        }
+        
         return CalibrationResult(
             best_parameters=result['best_parameters'],
             best_objective=result['best_objective'],
@@ -364,7 +803,8 @@ class CalibrationRunner:
             runtime_seconds=result['runtime_seconds'],
             method='SpotPy-DREAM',
             objective_name=self.objective.name,
-            success=True
+            success=True,
+            _raw_result=raw_result,
         )
     
     def run_pydream(
@@ -383,6 +823,8 @@ class CalibrationRunner:
         dbformat: str = 'csv',
         write_interval: int = 1,
         verbose: bool = True,
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_interval: int = 5000,
         **kwargs
     ) -> CalibrationResult:
         """
@@ -441,6 +883,8 @@ class CalibrationRunner:
             dbformat: Output format ('csv' only, for SpotPy compatibility)
             write_interval: Write every N evaluations (1=all, 10=every 10th)
             verbose: Whether to print progress
+            checkpoint_dir: Directory for automatic checkpoints (None to disable)
+            checkpoint_interval: Save checkpoint every N iterations
             **kwargs: Additional PyDREAM parameters
             
         Returns:
@@ -479,9 +923,31 @@ class CalibrationRunner:
             **kwargs
         )
         
+        # Save checkpoint if checkpoint_dir specified
+        if checkpoint_dir is not None:
+            from pyrrm.calibration.checkpoint import CheckpointManager
+            manager = CheckpointManager(
+                checkpoint_dir, 
+                checkpoint_interval=checkpoint_interval
+            )
+            manager.save_checkpoint(
+                result, 
+                iteration=n_iterations, 
+                method='PyDREAM (MT-DREAM(ZS))'
+            )
+            if verbose:
+                print(f"Checkpoint saved to {checkpoint_dir}")
+        
         # Determine convergence status
         converged = result.get('convergence_diagnostics', {}).get('converged', None)
         success = converged if converged is not None else True
+        
+        # Store raw result for potential continuation
+        raw_result = {
+            'sampled_params_by_chain': result.get('sampled_params_by_chain'),
+            'log_ps_by_chain': result.get('log_ps_by_chain'),
+            'parameter_names': result.get('parameter_names'),
+        }
         
         return CalibrationResult(
             best_parameters=result['best_parameters'],
@@ -491,7 +957,8 @@ class CalibrationRunner:
             runtime_seconds=result['runtime_seconds'],
             method='PyDREAM (MT-DREAM(ZS))',
             objective_name=self.objective.name,
-            success=success
+            success=success,
+            _raw_result=raw_result,
         )
     
     def run_sceua(
@@ -694,3 +1161,85 @@ class CalibrationRunner:
         outputs['observed'] = self.observed
         
         return outputs
+    
+    @classmethod
+    def resume(
+        cls,
+        checkpoint_path: str,
+        model: 'BaseRainfallRunoffModel',
+        inputs: pd.DataFrame,
+        observed: np.ndarray,
+        objective: Optional['ObjectiveFunction'] = None,
+        additional_iterations: int = 10000,
+        implementation: str = 'pydream',
+        parameter_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        warmup_period: int = 365,
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_interval: int = 5000,
+        **kwargs
+    ) -> CalibrationResult:
+        """
+        Resume calibration from a saved checkpoint or CalibrationResult.
+        
+        This is a high-level convenience method that:
+        1. Loads the checkpoint/result
+        2. Creates a new CalibrationRunner
+        3. Continues the calibration
+        4. Returns combined results
+        
+        Args:
+            checkpoint_path: Path to checkpoint directory, checkpoint file,
+                           or saved CalibrationResult base path
+            model: Rainfall-runoff model instance
+            inputs: Input DataFrame with precipitation and PET
+            observed: Observed flow values
+            objective: Objective function (if None, uses NSE)
+            additional_iterations: Number of additional iterations to run
+            implementation: DREAM implementation ('spotpy' or 'pydream')
+            parameter_bounds: Parameter bounds (if None, uses model defaults)
+            warmup_period: Warmup timesteps excluded from objective
+            checkpoint_dir: Directory for new checkpoints (optional)
+            checkpoint_interval: Checkpoint save interval
+            **kwargs: Additional implementation-specific parameters
+            
+        Returns:
+            CalibrationResult combining previous and new results
+            
+        Example:
+            >>> # Resume from checkpoint directory
+            >>> result = CalibrationRunner.resume(
+            ...     checkpoint_path='./checkpoints',
+            ...     model=model,
+            ...     inputs=inputs,
+            ...     observed=observed,
+            ...     additional_iterations=50000
+            ... )
+            
+            >>> # Resume from saved CalibrationResult
+            >>> result = CalibrationRunner.resume(
+            ...     checkpoint_path='calibrations/run1',  # loads run1_meta.json
+            ...     model=model,
+            ...     inputs=inputs,
+            ...     observed=observed,
+            ...     additional_iterations=20000
+            ... )
+        """
+        # Create runner
+        runner = cls(
+            model=model,
+            inputs=inputs,
+            observed=observed,
+            objective=objective or NSE(),
+            parameter_bounds=parameter_bounds,
+            warmup_period=warmup_period
+        )
+        
+        # Use the run_dream method with resume_from
+        return runner.run_dream(
+            implementation=implementation,
+            n_iterations=additional_iterations,
+            resume_from=checkpoint_path,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_interval=checkpoint_interval,
+            **kwargs
+        )

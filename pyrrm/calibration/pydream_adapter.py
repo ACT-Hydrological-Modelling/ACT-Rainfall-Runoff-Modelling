@@ -48,6 +48,20 @@ except ImportError:
     SCIPY_AVAILABLE = False
 
 
+def _should_maximize(objective) -> bool:
+    """
+    Check if an objective function should be maximized.
+    
+    Handles both old interface (maximize property) and new interface (direction attribute).
+    """
+    if hasattr(objective, 'direction'):
+        return objective.direction == 'maximize'
+    elif hasattr(objective, 'maximize'):
+        return objective.maximize
+    else:
+        return True  # Default to maximize
+
+
 class PyDREAMProgressWriter:
     """
     Process-safe CSV writer for tracking PyDREAM calibration progress.
@@ -302,7 +316,7 @@ class PyDREAMLikelihood:
                 log_likelihood = -np.inf
             else:
                 # PyDREAM maximizes log-likelihood
-                if objective.maximize:
+                if _should_maximize(objective):
                     log_likelihood = obj_value
                 else:
                     log_likelihood = -obj_value
@@ -649,7 +663,7 @@ def run_pydream(
     
     # Convert to objective value
     # Reverse the transformation done in likelihood function
-    if objective.maximize:
+    if _should_maximize(objective):
         best_objective = best_log_likelihood
     else:
         best_objective = -best_log_likelihood
@@ -816,7 +830,7 @@ def continue_pydream(
     }
     
     # Update best if previous was better
-    if objective.maximize:
+    if _should_maximize(objective):
         if previous_result['best_objective'] > new_result['best_objective']:
             combined_result['best_parameters'] = previous_result['best_parameters']
             combined_result['best_objective'] = previous_result['best_objective']

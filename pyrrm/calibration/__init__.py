@@ -107,6 +107,7 @@ try:
         run_dream as run_spotpy_dream,
         run_sceua,
         run_mcmc,
+        continue_spotpy_dream,
         SPOTPY_AVAILABLE,
     )
 except ImportError:
@@ -115,6 +116,10 @@ except ImportError:
     run_spotpy_dream = None
     run_sceua = None
     run_mcmc = None
+    continue_spotpy_dream = None
+
+# Import checkpoint manager
+from pyrrm.calibration.checkpoint import CheckpointManager, CheckpointInfo
 
 __all__ = [
     # Core classes
@@ -165,4 +170,8 @@ __all__ = [
     "run_spotpy_dream",
     "run_sceua",
     "run_mcmc",
+    "continue_spotpy_dream",
+    # Checkpointing
+    "CheckpointManager",
+    "CheckpointInfo",
 ]
