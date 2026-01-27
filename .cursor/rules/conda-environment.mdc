@@ -1,0 +1,86 @@
+---
+description: "Always activate the pyrrm conda environment for all development tasks"
+globs:
+alwaysApply: true
+---
+
+# Conda Environment Activation
+
+**CRITICAL**: All terminal commands and Python execution in this project MUST use the `pyrrm` conda environment.
+
+## Environment Activation
+
+Before running ANY terminal command that involves Python, pip, or running scripts, ALWAYS activate the conda environment first:
+
+```bash
+conda activate pyrrm
+```
+
+## When Starting a New Terminal Session
+
+Always begin with:
+```bash
+conda activate pyrrm
+```
+
+## Running Python Commands
+
+```bash
+# Correct - environment activated first
+conda activate pyrrm && python script.py
+
+# Correct - for pip installs
+conda activate pyrrm && pip install package_name
+
+# Correct - for jupytext sync
+conda activate pyrrm && jupytext --sync notebooks/script.py
+```
+
+## Environment Details
+
+The `pyrrm` conda environment contains all required dependencies:
+
+- **Python**: 3.11
+- **Core**: numpy, pandas, scipy, matplotlib, seaborn
+- **Calibration**: spotpy, pydream, scikit-learn
+- **Sensitivity**: SALib
+- **Notebooks**: jupytext
+- **pyrrm**: Installed in editable mode
+
+## Installation Reference
+
+If the environment needs to be recreated:
+```bash
+# Create environment
+conda create -n pyrrm python=3.11 -y
+
+# Activate and install dependencies
+conda activate pyrrm
+pip install numpy pandas scipy matplotlib seaborn
+pip install spotpy pydream SALib scikit-learn jupytext
+pip install ipykernel
+
+# Register kernel for Jupyter/Cursor notebooks
+python -m ipykernel install --user --name pyrrm --display-name "Python (pyrrm)"
+
+# Install pyrrm in editable mode
+cd /path/to/ACT-Rainfall-Runoff-Modelling
+pip install -e .
+```
+
+## Verification
+
+To verify the environment is correctly set up:
+```bash
+conda activate pyrrm
+python -c "import pyrrm; print('pyrrm imported successfully')"
+python -c "import spotpy; print('spotpy available')"
+python -c "import pydream; print('pydream available')"
+```
+
+## NEVER Forget
+
+- **ALWAYS** activate `pyrrm` before running Python
+- **ALWAYS** activate `pyrrm` before pip install
+- **ALWAYS** activate `pyrrm` before jupytext commands
+- **ALWAYS** activate `pyrrm` before running tests

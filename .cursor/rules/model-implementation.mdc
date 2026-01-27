@@ -1,0 +1,170 @@
+---
+description: "Guidelines for implementing new rainfall-runoff models in pyrrm"
+globs: ["pyrrm/models/**/*.py"]
+alwaysApply: false
+---
+
+# Implementing New Rainfall-Runoff Models
+
+When implementing a new rainfall-runoff model, follow these established patterns.
+
+## Required Base Class
+
+All models must inherit from `BaseRainfallRunoffModel`:
+
+```python
+from pyrrm.models.base import BaseRainfallRunoffModel
+
+class NewModel(BaseRainfallRunoffModel):
+    """
+    Model Name and brief description.
+    
+    Reference:
+        Author et al. (Year). Paper title. Journal, Volume(Issue), Pages.
+        DOI: xxx
+    """
+```
+
+## Required Methods
+
+### 1. Constructor with Default Parameters
+
+```python
+def __init__(self, parameters: Optional[Dict[str, float]] = None):
+    """
+    Initialize model with optional custom parameters.
+    
+    Args:
+        parameters: Dict of parameter values. Uses defaults if None.
+    """
+    default_params = self._default_parameters()
+    if parameters:
+        default_params.update(parameters)
+    super().__init__(default_params)
+    self.reset()
+```
+
+### 2. Default Parameters
+
+```python
+def _default_parameters(self) -> Dict[str, float]:
+    """Return default parameter values with physical meanings."""
+    return {
+        'X1': 350.0,  # Production store capacity (mm)
+        'X2': 0.0,    # Groundwater exchange coefficient (mm)
+        'X3': 90.0,   # Routing store capacity (mm)
+        'X4': 1.7,    # Unit hydrograph time base (days)
+    }
+```
+
+### 3. Parameter Bounds for Calibration
+
+```python
+def get_parameter_bounds(self) -> Dict[str, Tuple[float, float]]:
+    """
+    Return parameter bounds for calibration.
+    
+    Returns:
+        Dict mapping parameter names to (min, max) tuples
+    """
+    return {
+        'X1': (1.0, 1500.0),
+        'X2': (-5.0, 5.0),
+        'X3': (1.0, 500.0),
+        'X4': (0.5, 10.0),
+    }
+```
+
+### 4. Single Timestep Execution
+
+```python
+def run_timestep(self, precipitation: float, pet: float) -> Dict[str, float]:
+    """
+    Execute model for a single timestep.
+    
+    Args:
+        precipitation: Precipitation input (mm)
+        pet: Potential evapotranspiration input (mm)
+        
+    Returns:
+        Dict with 'flow' (required) and any state variables
+    """
+    # Model logic here
+    flow = self._compute_flow(precipitation, pet)
+    
+    return {
+        'flow': flow,
+        'store1': self._states['store1'],
+        'store2': self._states['store2'],
+    }
+```
+
+### 5. Multi-Timestep Wrapper
+
+```python
+def run(self, inputs: pd.DataFrame) -> pd.DataFrame:
+    """
+    Run model for multiple timesteps.
+    
+    Args:
+        inputs: DataFrame with 'precipitation' and 'pet' columns
+        
+    Returns:
+        DataFrame with model outputs including 'flow'
+    """
+    results = []
+    for _, row in inputs.iterrows():
+        output = self.run_timestep(row['precipitation'], row['pet'])
+        results.append(output)
+    
+    return pd.DataFrame(results, index=inputs.index)
+```
+
+### 6. State Reset
+
+```python
+def reset(self) -> None:
+    """Reset all model states to initial conditions."""
+    self._states = {
+        'store1': 0.0,
+        'store2': 0.0,
+    }
+    # Initialize any unit hydrographs, etc.
+```
+
+## File Location
+
+- Place model file in `pyrrm/models/`
+- Name file after model: `newmodel.py`
+- Add export to `pyrrm/models/__init__.py`
+
+## Porting from External Sources
+
+When porting from another language (C#, Rust, Fortran):
+
+1. **Preserve nomenclature**: Keep original variable names where possible
+2. **Document translations**: Note any naming changes in comments
+3. **Verify numerically**: Compare outputs against reference implementation
+4. **Handle precision**: Be aware of floating-point differences between languages
+
+Example from Sacramento port:
+```python
+# Original C#: uztwm (Upper Zone Tension Water Maximum)
+# Kept as: self.uztwm
+```
+
+## Unit Hydrograph Components
+
+If model uses unit hydrographs, use shared utilities:
+
+```python
+from pyrrm.models.utils.s_curves import s_curves1, s_curves2
+from pyrrm.models.utils.unit_hydrograph import UnitHydrograph
+```
+
+## Testing New Models
+
+1. Create test case with known inputs/outputs
+2. Compare against reference implementation if available
+3. Test edge cases: zero rainfall, zero PET, extreme values
+4. Verify mass balance where applicable

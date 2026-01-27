@@ -1,0 +1,73 @@
+---
+description: "High-level agent instructions for pyrrm library development"
+globs:
+alwaysApply: true
+---
+
+# pyrrm - AI Agent Development Instructions
+
+This document provides high-level guidance for AI agents working on the `pyrrm` (Python Rainfall-Runoff Models) library.
+
+## Project Overview
+
+`pyrrm` is a comprehensive rainfall-runoff modeling library providing:
+- Multiple hydrological models (Sacramento, GR4J, GR5J, GR6J)
+- Flexible calibration framework (SpotPy, PyDREAM, SciPy)
+- Sensitivity analysis using Sobol methods
+- Visualization tools for model outputs and calibration results
+
+## Critical Workflow: Jupyter Notebooks with Jupytext
+
+**IMPORTANT**: When working with Jupyter notebooks, use the Jupytext paired workflow:
+
+1. **NEVER directly edit `.ipynb` files**
+2. **ALWAYS edit the paired `.py` script** using percent format (`# %%` cell delimiters)
+3. The user will sync changes using `jupytext --sync`
+
+Example Python script format:
+```python
+# %% [markdown]
+# # Notebook Title
+
+# %%
+import pyrrm
+# Code here
+```
+
+## Code Style Guidelines
+
+- Use type hints for all function signatures
+- Use Google-style docstrings with Args, Returns, Example sections
+- Handle optional dependencies with try/except and availability flags
+- Provide helpful, actionable error messages
+
+## Adding New Models
+
+1. Inherit from `pyrrm.models.base.BaseRainfallRunoffModel`
+2. Implement required methods: `__init__`, `run_timestep`, `run`, `reset`, `get_parameter_bounds`
+3. Place in `pyrrm/models/` and export from `__init__.py`
+4. Verify against reference implementation if available
+
+## Adding Calibration Methods
+
+1. Create adapter in `pyrrm/calibration/newmethod_adapter.py`
+2. Add `run_newmethod()` to `CalibrationRunner` in `runner.py`
+3. Export from `pyrrm/calibration/__init__.py`
+4. Use standard return format: dict with `best_parameters`, `best_objective`, `all_samples`, `runtime_seconds`
+
+## File Locations
+
+- Models: `pyrrm/models/`
+- Calibration: `pyrrm/calibration/`
+- Analysis: `pyrrm/analysis/`
+- Visualization: `pyrrm/visualization/`
+- Examples: `pyrrm/examples/`
+- Test data: `test_data/`
+- Notebooks: `notebooks/` (as Jupytext-paired scripts)
+
+## Dependencies
+
+Core: numpy, pandas, scipy, matplotlib
+Optional: spotpy, pydream, SALib, seaborn
+
+Handle optional dependencies gracefully - the library should work with only core dependencies installed.

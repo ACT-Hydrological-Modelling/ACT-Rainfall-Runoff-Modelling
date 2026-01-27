@@ -1,0 +1,148 @@
+---
+description: "Core development guidelines for the pyrrm rainfall-runoff modeling library"
+globs: ["pyrrm/**/*.py"]
+alwaysApply: true
+---
+
+# pyrrm Development Guidelines
+
+This project is a Python rainfall-runoff modeling library (`pyrrm`) that provides:
+- Multiple rainfall-runoff models (Sacramento, GR4J, GR5J, GR6J)
+- Flexible calibration framework (SpotPy DREAM, PyDREAM, SciPy)
+- Sensitivity analysis using Sobol methods
+- Comprehensive visualization tools
+
+## Project Structure
+
+```
+pyrrm/
+├── models/           # Rainfall-runoff model implementations
+│   ├── base.py       # BaseRainfallRunoffModel abstract class
+│   ├── sacramento.py # Sacramento model
+│   ├── gr4j.py       # GR4J model
+│   └── utils/        # Shared utilities (unit hydrographs, S-curves)
+├── calibration/      # Calibration framework
+│   ├── runner.py           # CalibrationRunner unified interface
+│   ├── spotpy_adapter.py   # SpotPy DREAM/SCE-UA adapter
+│   ├── pydream_adapter.py  # PyDREAM MT-DREAM(ZS) adapter
+│   ├── scipy_adapter.py    # SciPy optimization adapter
+│   └── objective_functions.py  # NSE, KGE, RMSE, etc.
+├── analysis/         # Post-calibration analysis
+│   ├── sensitivity.py      # Sobol sensitivity analysis
+│   └── diagnostics.py      # Model diagnostics
+├── visualization/    # Plotting functions
+│   ├── model_plots.py      # Hydrographs, FDC, scatter plots
+│   ├── calibration_plots.py # Parameter traces, posteriors
+│   └── sensitivity_plots.py # Sobol indices visualization
+├── data/             # Data handling utilities
+│   └── input_handler.py
+└── examples/         # Example scripts
+```
+
+## Code Style Principles
+
+### 1. Type Hints
+Always use type hints for function signatures:
+```python
+def run_model(
+    self,
+    inputs: pd.DataFrame,
+    warmup_period: int = 365
+) -> pd.DataFrame:
+```
+
+### 2. Docstrings
+Use Google-style docstrings with Args, Returns, and Example sections:
+```python
+def calculate_nse(simulated: np.ndarray, observed: np.ndarray) -> float:
+    """
+    Calculate Nash-Sutcliffe Efficiency.
+    
+    Args:
+        simulated: Array of simulated values
+        observed: Array of observed values
+        
+    Returns:
+        NSE value in range (-inf, 1] where 1 is perfect
+        
+    Example:
+        >>> nse = calculate_nse(sim, obs)
+        >>> print(f"NSE: {nse:.4f}")
+    """
+```
+
+### 3. Optional Dependencies
+Handle optional dependencies gracefully:
+```python
+try:
+    import spotpy
+    SPOTPY_AVAILABLE = True
+except ImportError:
+    SPOTPY_AVAILABLE = False
+
+# Later in code
+if not SPOTPY_AVAILABLE:
+    raise ImportError("SpotPy required. Install with: pip install spotpy")
+```
+
+### 4. Error Messages
+Provide helpful, actionable error messages:
+```python
+raise ValueError(
+    f"Unknown implementation: '{impl}'. "
+    f"Choose from: 'spotpy', 'pydream'."
+)
+```
+
+## Model Implementation Pattern
+
+All models inherit from `BaseRainfallRunoffModel`:
+
+```python
+class NewModel(BaseRainfallRunoffModel):
+    """Model docstring with references."""
+    
+    def __init__(self, parameters: Optional[Dict[str, float]] = None):
+        super().__init__(parameters or self._default_parameters())
+    
+    def _default_parameters(self) -> Dict[str, float]:
+        return {'param1': 100.0, 'param2': 0.5}
+    
+    def get_parameter_bounds(self) -> Dict[str, Tuple[float, float]]:
+        return {'param1': (1.0, 500.0), 'param2': (0.0, 1.0)}
+    
+    def run_timestep(self, precipitation: float, pet: float) -> Dict[str, float]:
+        # Single timestep logic
+        return {'flow': flow, 'state1': state1}
+    
+    def run(self, inputs: pd.DataFrame) -> pd.DataFrame:
+        # Multi-timestep wrapper
+        ...
+    
+    def reset(self) -> None:
+        # Reset states to initial conditions
+        ...
+```
+
+## Calibration Adapter Pattern
+
+When adding new calibration methods, follow the adapter pattern:
+
+```python
+# 1. Create adapter file: pyrrm/calibration/new_adapter.py
+# 2. Define functions to convert between pyrrm and the external library
+# 3. Add to CalibrationRunner with run_newmethod() 
+# 4. Export from __init__.py
+```
+
+## Testing Considerations
+
+- New models should be verifiable against reference implementations
+- Calibration methods should work with toy problems
+- Visualization functions should handle edge cases (empty data, NaN values)
+
+## Version Control
+
+- This project uses git
+- Large binary files (notebooks with outputs) should use Jupytext pairing
+- Test data goes in `test_data/` directory

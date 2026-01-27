@@ -1,0 +1,253 @@
+---
+description: "Guidelines for adding new calibration method adapters to pyrrm"
+globs: ["pyrrm/calibration/**/*.py"]
+alwaysApply: false
+---
+
+# Adding Calibration Method Adapters
+
+When integrating a new calibration/optimization library into pyrrm, follow this adapter pattern.
+
+## Adapter Structure
+
+Create a new adapter file in `pyrrm/calibration/`:
+
+```
+pyrrm/calibration/
+├── newlib_adapter.py  # New adapter file
+├── runner.py          # Update with new method
+└── __init__.py        # Export new functions
+```
+
+## Adapter Template
+
+```python
+"""
+NewLibrary adapter for pyrrm model calibration.
+
+This module provides an interface between pyrrm models and NewLibrary's
+optimization algorithms.
+
+NewLibrary Reference:
+    Author et al. (Year). Paper title. Journal.
+    URL: https://...
+"""
+
+from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING, Callable
+import numpy as np
+import pandas as pd
+import warnings
+import time
+
+if TYPE_CHECKING:
+    from pyrrm.models.base import BaseRainfallRunoffModel
+    from pyrrm.calibration.objective_functions import ObjectiveFunction
+
+# Check for optional dependency
+try:
+    import newlibrary
+    NEWLIB_AVAILABLE = True
+except ImportError:
+    NEWLIB_AVAILABLE = False
+
+
+def create_newlib_objective(
+    model: 'BaseRainfallRunoffModel',
+    inputs: pd.DataFrame,
+    observed: np.ndarray,
+    objective: 'ObjectiveFunction',
+    parameter_names: List[str],
+    warmup_period: int = 365
+) -> Callable[[np.ndarray], float]:
+    """
+    Create objective function compatible with NewLibrary.
+    
+    Args:
+        model: Rainfall-runoff model instance
+        inputs: Input DataFrame with precipitation and PET
+        observed: Observed flow values
+        objective: Objective function instance
+        parameter_names: List of parameter names in order
+        warmup_period: Warmup timesteps to exclude
+        
+    Returns:
+        Callable compatible with NewLibrary's optimizer
+    """
+    observed_flat = np.asarray(observed).flatten()
+    
+    def objective_func(param_array: np.ndarray) -> float:
+        params = dict(zip(parameter_names, param_array.flatten()))
+        
+        model.reset()
+        model.set_parameters(params)
+        
+        try:
+            results = model.run(inputs)
+            simulated = results['flow'].values
+            
+            sim = simulated[warmup_period:]
+            obs = observed_flat[warmup_period:]
+            
+            value = objective.calculate(sim, obs)
+            
+            # Convert based on NewLibrary's optimization direction
+            # If NewLibrary minimizes, negate for maximization objectives
+            if objective.maximize:
+                return -value  # NewLibrary minimizes, so negate
+            return value
+            
+        except Exception as e:
+            warnings.warn(f"Simulation failed: {e}")
+            return np.inf  # Return worst value on failure
+    
+    return objective_func
+
+
+def run_newlib(
+    model: 'BaseRainfallRunoffModel',
+    inputs: pd.DataFrame,
+    observed: np.ndarray,
+    objective: 'ObjectiveFunction',
+    parameter_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+    warmup_period: int = 365,
+    # NewLibrary-specific options
+    n_iterations: int = 10000,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Run NewLibrary calibration algorithm.
+    
+    Args:
+        model: Rainfall-runoff model instance
+        inputs: Input DataFrame
+        observed: Observed flow values
+        objective: Objective function
+        parameter_bounds: Parameter bounds
+        warmup_period: Warmup timesteps
+        n_iterations: Number of iterations
+        **kwargs: Additional NewLibrary options
+        
+    Returns:
+        Dict with best_parameters, best_objective, all_samples, etc.
+    """
+    if not NEWLIB_AVAILABLE:
+        raise ImportError(
+            "NewLibrary is required. Install with: pip install newlibrary"
+        )
+    
+    start_time = time.time()
+    
+    # Get parameter bounds
+    if parameter_bounds is None:
+        parameter_bounds = model.get_parameter_bounds()
+    
+    param_names = list(parameter_bounds.keys())
+    bounds = [parameter_bounds[name] for name in param_names]
+    
+    # Create objective function
+    obj_func = create_newlib_objective(
+        model, inputs, observed, objective, param_names, warmup_period
+    )
+    
+    # Run optimization (adjust for NewLibrary's API)
+    result = newlibrary.optimize(
+        obj_func,
+        bounds=bounds,
+        maxiter=n_iterations,
+        **kwargs
+    )
+    
+    runtime = time.time() - start_time
+    
+    # Convert result to standard format
+    best_params = dict(zip(param_names, result.x))
+    best_obj = result.fun
+    if objective.maximize:
+        best_obj = -best_obj  # Convert back
+    
+    return {
+        'best_parameters': best_params,
+        'best_objective': best_obj,
+        'all_samples': pd.DataFrame(),  # Build from result history if available
+        'convergence_diagnostics': {},
+        'runtime_seconds': runtime,
+    }
+```
+
+## Update CalibrationRunner
+
+Add method to `pyrrm/calibration/runner.py`:
+
+```python
+def run_newlib(
+    self,
+    n_iterations: int = 10000,
+    **kwargs
+) -> CalibrationResult:
+    """
+    Run NewLibrary calibration.
+    
+    Args:
+        n_iterations: Number of iterations
+        **kwargs: Additional options
+        
+    Returns:
+        CalibrationResult
+    """
+    if not NEWLIB_AVAILABLE:
+        raise ImportError("NewLibrary required. pip install newlibrary")
+    
+    from pyrrm.calibration.newlib_adapter import run_newlib
+    
+    result = run_newlib(
+        model=self.model,
+        inputs=self.inputs,
+        observed=self.observed,
+        objective=self.objective,
+        parameter_bounds=self._param_bounds,
+        warmup_period=self.warmup_period,
+        n_iterations=n_iterations,
+        **kwargs
+    )
+    
+    return CalibrationResult(
+        best_parameters=result['best_parameters'],
+        best_objective=result['best_objective'],
+        all_samples=result['all_samples'],
+        convergence_diagnostics=result['convergence_diagnostics'],
+        runtime_seconds=result['runtime_seconds'],
+        method='NewLibrary',
+        objective_name=self.objective.name,
+        success=True
+    )
+```
+
+## Update Exports
+
+In `pyrrm/calibration/__init__.py`:
+
+```python
+try:
+    from pyrrm.calibration.newlib_adapter import (
+        run_newlib,
+        NEWLIB_AVAILABLE,
+    )
+except ImportError:
+    NEWLIB_AVAILABLE = False
+    run_newlib = None
+
+__all__ = [
+    # ... existing exports ...
+    "run_newlib",
+    "NEWLIB_AVAILABLE",
+]
+```
+
+## Key Principles
+
+1. **Handle optional dependencies**: Use try/except for imports
+2. **Unified return format**: Always return dict with standard keys
+3. **Objective direction**: Handle maximize vs minimize correctly
+4. **Error handling**: Return worst-case values on simulation failure
+5. **Parameter mapping**: Convert between array and dict representations
+6. **Timing**: Track runtime for performance comparison
