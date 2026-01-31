@@ -40,6 +40,30 @@
 #
 # - ~15 minutes to work through the concepts
 # - ~30-60 minutes for calibration to run (can be shortened)
+#
+# ## Saving Calibration Results
+#
+# All calibrations in this notebook are automatically saved using `CalibrationReport` objects.
+# These reports are stored as pickle files in `test_data/reports/` and include:
+#
+# - **Complete calibration results** (best parameters, all samples, diagnostics)
+# - **Input and observed data** for visualization and re-simulation
+# - **Model configuration** for reproducing results
+#
+# After running this notebook, you can load any saved calibration:
+#
+# ```python
+# from pyrrm.calibration import CalibrationReport
+# report = CalibrationReport.load('test_data/reports/410734_nse.pkl')
+# report.plot_report_card()  # Generate comprehensive visualization
+# ```
+#
+# Saved reports can also be used to generate interactive HTML dashboards:
+#
+# ```python
+# fig = report.plot_report_card_interactive()
+# fig.write_html('my_report.html')
+# ```
 
 # %% [markdown]
 # ---
@@ -202,6 +226,13 @@ print("\nLibraries loaded successfully!")
 # Import pyrrm components
 from pyrrm.models.sacramento import Sacramento
 from pyrrm.calibration import CalibrationRunner, SPOTPY_AVAILABLE, PYDREAM_AVAILABLE
+
+# Reload modules to pick up any code changes (useful during development)
+import importlib
+import pyrrm.visualization.report_plots
+import pyrrm.calibration.report
+importlib.reload(pyrrm.visualization.report_plots)
+importlib.reload(pyrrm.calibration.report)
 from pyrrm.calibration.objective_functions import NSE, KGE, calculate_metrics
 
 print("\npyrrm components imported:")
@@ -498,8 +529,26 @@ print("  NSE < 0   → Worse than mean")
 
 # %% [markdown]
 # **Note**: There are many other objective functions available in `pyrrm.objectives`.
-# See **Notebook 03: Objective Functions** for a detailed exploration of
+# See **Notebook 04: Objective Functions** for a detailed exploration of
 # different metrics and how they affect calibration results.
+#
+# ### The KGE Family
+#
+# The **Kling-Gupta Efficiency (KGE)** is an increasingly popular alternative to NSE.
+# KGE decomposes model performance into three interpretable components:
+#
+# - **r** (correlation): Timing accuracy
+# - **α** (variability): How well the model reproduces flow variability
+# - **β** (bias): Volume balance
+#
+# | Variant | Description | Best For |
+# |---------|-------------|----------|
+# | **KGE (2009)** | Original formulation | General use |
+# | **KGE (2012)** | Modified variability ratio (CV-based) | Default recommendation |
+# | **KGE (2021)** | Alternative bias formulation | Near-zero means |
+# | **KGE Non-parametric** | Uses Spearman correlation + FDC variability | Skewed distributions |
+#
+# Like NSE, KGE can be combined with **flow transformations** to emphasize different flow regimes.
 
 # %% [markdown]
 # ---
@@ -570,15 +619,16 @@ print(f"Warmup period: {WARMUP_DAYS} days")
 #
 # | Algorithm | Type | Speed | Uncertainty? | Best For |
 # |-----------|------|-------|--------------|----------|
-# | **SCE-UA** | Optimization | Fast | No | Quick calibration |
+# | **SCE-UA Direct** | Optimization | Fast | No | Quick calibration (recommended) |
 # | **SciPy DE** | Optimization | Fast | No | Simple cases |
 # | **SpotPy DREAM** | MCMC | Slow | Yes | Full uncertainty |
 # | **PyDREAM** | MCMC | Slow | Yes | Complex problems |
 #
-# For this quickstart, we'll use **SCE-UA** (Shuffled Complex Evolution) -
-# a classic hydrology algorithm that's fast and reliable.
+# For this quickstart, we'll use **SCE-UA Direct** - a vendored implementation
+# of the Shuffled Complex Evolution algorithm. This is a classic hydrology
+# algorithm that's fast, reliable, and requires no external dependencies.
 #
-# **Note**: See **Notebook 04: Algorithm Comparison** for a detailed
+# **Note**: See **Notebook 05: Algorithm Comparison** for a detailed
 # comparison of all available algorithms.
 
 # %%
@@ -587,24 +637,35 @@ print("=" * 70)
 print("RUNNING SCE-UA CALIBRATION")
 print("=" * 70)
 print(f"\nObjective: {objective.name}")
-print(f"Algorithm: SCE-UA (Shuffled Complex Evolution)")
+print(f"Algorithm: SCE-UA Direct (Shuffled Complex Evolution)")
 print("\nThis may take a few minutes...")
 print("Progress will be shown below.\n")
 
 # SCE-UA settings
-# - n_iterations: Maximum function evaluations
-# - ngs: Number of complexes (more = better search, but slower)
-# For quick demo, we use fewer iterations. Increase for production!
-result = runner.run_sceua(
-    n_iterations=5000,  # Full dataset calibration
-    ngs=7,               # Number of complexes
-    kstop=3,             # Stop if no improvement in 3 loops
-    pcento=0.01,         # Convergence criterion
-    dbname='quickstart_sceua',
-    dbformat='csv'
+# - n_complexes: Number of complexes (auto-determined if None)
+# - max_evals: Maximum function evaluations
+n_params = len(runner._param_bounds)
+max_evals = 10000
+
+print(f"SCE-UA Configuration: max_evals={max_evals}, n_params={n_params}")
+
+result = runner.run_sceua_direct(
+    max_evals=max_evals,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,  # Allow more iterations without improvement
+    tolerance=1e-4          # More lenient improvement threshold
 )
 
 print("\n" + result.summary())
+
+# Save calibration report
+from pyrrm.calibration import CalibrationReport
+nse_report = runner.create_report(result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+nse_report.save('../test_data/reports/410734_nse')
+print(f"\nCalibration saved to: test_data/reports/410734_nse.pkl")
 
 # %% [markdown]
 # ### Understanding the Output
@@ -911,34 +972,76 @@ print(f"  √Q:          range [{obs_sqrt.min():.2f}, {obs_sqrt.max():.2f}]")
 
 # %%
 # Import objective functions from pyrrm.objectives (new unified interface)
-from pyrrm.objectives import NSE, FlowTransformation, SDEB
+from pyrrm.objectives import NSE, KGE, KGENonParametric, FlowTransformation, SDEB
 
-# Create objective function instances using the new interface with FlowTransformation
-# All objectives use the same interface: objective(obs, sim) returns a metric value
+# ==============================================================================
+# NSE-BASED OBJECTIVE FUNCTIONS (with flow transformations)
+# ==============================================================================
 
 # LogNSE: NSE with log transformation - balances all flow ranges
-log_objective = NSE(transform=FlowTransformation('log', epsilon_value=0.01))
+log_nse_objective = NSE(transform=FlowTransformation('log', epsilon_value=0.01))
 
 # InverseNSE: NSE with inverse transformation (1/Q) - heavily emphasizes low flows
-inv_objective = NSE(transform=FlowTransformation('inverse', epsilon_value=0.01))
+inv_nse_objective = NSE(transform=FlowTransformation('inverse', epsilon_value=0.01))
 
 # SqrtNSE: NSE with square root transformation (√Q) - balanced emphasis
-sqrt_objective = NSE(transform=FlowTransformation('sqrt'))
+sqrt_nse_objective = NSE(transform=FlowTransformation('sqrt'))
 
 # SDEB: Sum of Daily Flows, Daily Exceedance Curve and Bias (Lerat et al., 2013)
 # Parameters: alpha=0.1 (low chronological weight), lam=0.5 (sqrt transform)
 sdeb_objective = SDEB(alpha=0.1, lam=0.5)
 
-print("Objective functions defined (all using new pyrrm.objectives interface):")
+# ==============================================================================
+# KGE-BASED OBJECTIVE FUNCTIONS (with flow transformations)
+# ==============================================================================
+
+# Standard KGE (2012 variant, recommended) - on original flows
+kge_objective = KGE(variant='2012')
+
+# KGE with inverse transformation (1/Q) - heavily emphasizes low flows
+# Uses 'inverse' transform to weight errors towards low flow periods
+kge_inv_objective = KGE(variant='2012', transform=FlowTransformation('inverse', epsilon_value=0.01))
+
+# KGE with log transformation - balances all flow ranges
+# NOTE: Santos et al. (2018) warn about log+KGE numerical instabilities
+# Consider sqrt or inverse for production use
+kge_log_objective = KGE(variant='2012', transform=FlowTransformation('log', epsilon_value=0.01))
+
+# KGE with square root transformation - balanced, recommended for general use
+kge_sqrt_objective = KGE(variant='2012', transform=FlowTransformation('sqrt'))
+
+# Non-parametric KGE (Pool et al., 2018) - robust to outliers and skewed distributions
+# Uses Spearman correlation instead of Pearson, better for extreme events
+kge_np_objective = KGENonParametric()
+
+print("=" * 70)
+print("OBJECTIVE FUNCTIONS DEFINED")
+print("=" * 70)
+print("\nNSE-based objectives (with flow transformations):")
 print(f"  - NSE(log):     log(Q) transform - balances all flow ranges")
 print(f"  - NSE(inverse): 1/Q transform - heavily emphasizes low flows")
 print(f"  - NSE(sqrt):    √Q transform - moderate emphasis on low flows")
 print(f"  - SDEB:         Combines chronological + FDC errors with bias penalty")
+print("\nKGE-based objectives (with flow transformations):")
+print(f"  - KGE:          Standard KGE (2012) on original flows")
+print(f"  - KGE(inverse): 1/Q transform - heavily emphasizes low flows")
+print(f"  - KGE(log):     log(Q) transform (use with caution, see Santos 2018)")
+print(f"  - KGE(sqrt):    √Q transform - balanced, recommended")
+print(f"  - KGE_np:       Non-parametric KGE (robust to outliers)")
 
 # %% [markdown]
 # ### Calibrating with Multiple Objective Functions
 #
 # Now let's run calibrations with each transformation and compare the results.
+
+# %%
+# SCE-UA configuration for Sacramento model
+# Sacramento has 22 parameters
+N_PARAMS_SAC = 22
+MAX_EVALS_SAC = 10000
+
+print(f"SCE-UA Direct Configuration for Sacramento ({N_PARAMS_SAC} parameters):")
+print(f"  max_evals = {MAX_EVALS_SAC}")
 
 # %%
 # Run calibration with LogNSE
@@ -951,19 +1054,25 @@ log_runner = CalibrationRunner(
     model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
     inputs=cal_inputs,
     observed=cal_observed,
-    objective=log_objective,
+    objective=log_nse_objective,
     warmup_period=WARMUP_DAYS
 )
 
-log_result = log_runner.run_sceua(
-    n_iterations=5000,
-    ngs=7,
-    kstop=3,
-    pcento=0.01,
-    dbname='quickstart_lognse',
-    dbformat='csv'
+log_result = log_runner.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
 )
 print("\n" + log_result.summary())
+
+# Save calibration report
+log_report = log_runner.create_report(log_result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+log_report.save('../test_data/reports/410734_lognse')
+print(f"Calibration saved to: test_data/reports/410734_lognse.pkl")
 
 # %%
 # Run calibration with InverseNSE
@@ -976,19 +1085,25 @@ inv_runner = CalibrationRunner(
     model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
     inputs=cal_inputs,
     observed=cal_observed,
-    objective=inv_objective,
+    objective=inv_nse_objective,
     warmup_period=WARMUP_DAYS
 )
 
-inv_result = inv_runner.run_sceua(
-    n_iterations=5000,
-    ngs=7,
-    kstop=3,
-    pcento=0.01,
-    dbname='quickstart_invnse',
-    dbformat='csv'
+inv_result = inv_runner.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
 )
 print("\n" + inv_result.summary())
+
+# Save calibration report
+inv_report = inv_runner.create_report(inv_result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+inv_report.save('../test_data/reports/410734_invnse')
+print(f"Calibration saved to: test_data/reports/410734_invnse.pkl")
 
 # %%
 # Run calibration with SqrtNSE
@@ -1001,19 +1116,25 @@ sqrt_runner = CalibrationRunner(
     model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
     inputs=cal_inputs,
     observed=cal_observed,
-    objective=sqrt_objective,
+    objective=sqrt_nse_objective,
     warmup_period=WARMUP_DAYS
 )
 
-sqrt_result = sqrt_runner.run_sceua(
-    n_iterations=5000,
-    ngs=7,
-    kstop=3,
-    pcento=0.01,
-    dbname='quickstart_sqrtnse',
-    dbformat='csv'
+sqrt_result = sqrt_runner.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
 )
 print("\n" + sqrt_result.summary())
+
+# Save calibration report
+sqrt_report = sqrt_runner.create_report(sqrt_result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+sqrt_report.save('../test_data/reports/410734_sqrtnse')
+print(f"Calibration saved to: test_data/reports/410734_sqrtnse.pkl")
 
 # %%
 # Run calibration with SDEB
@@ -1032,18 +1153,210 @@ sdeb_runner = CalibrationRunner(
     warmup_period=WARMUP_DAYS
 )
 
-sdeb_result = sdeb_runner.run_sceua(
-    n_iterations=5000,
-    ngs=7,
-    kstop=3,
-    pcento=0.01,
-    dbname='quickstart_sdeb',
-    dbformat='csv'
+sdeb_result = sdeb_runner.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
 )
 print("\n" + sdeb_result.summary())
 
+# Save calibration report
+sdeb_report = sdeb_runner.create_report(sdeb_result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+sdeb_report.save('../test_data/reports/410734_sdeb')
+print(f"Calibration saved to: test_data/reports/410734_sdeb.pkl")
+
+# %% [markdown]
+# ---
+# ## Step 7b: KGE-Based Calibrations
+#
+# Now let's run calibrations using the **Kling-Gupta Efficiency (KGE)** family.
+# KGE decomposes performance into correlation, variability, and bias components,
+# making it easier to diagnose where models succeed or fail.
+#
+# We'll calibrate with:
+# - **KGE (standard)**: On original flows, emphasizes high flows
+# - **KGE(inverse)**: 1/Q transformation, heavily emphasizes low flows
+# - **KGE(sqrt)**: √Q transformation, balanced emphasis (recommended)
+# - **KGE(log)**: log(Q) transformation (use with caution, see Santos 2018)
+# - **KGE_np**: Non-parametric variant, robust to outliers
+
 # %%
-# Run simulations with all calibrated parameter sets
+# Run calibration with standard KGE
+print("=" * 70)
+print("CALIBRATION 5: Standard KGE (2012)")
+print("=" * 70)
+print("\nKGE decomposes into correlation, variability, and bias components.")
+print("Variant 2012 uses coefficient of variation ratio (recommended).")
+print("\nRunning calibration...\n")
+
+kge_runner = CalibrationRunner(
+    model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
+    inputs=cal_inputs,
+    observed=cal_observed,
+    objective=kge_objective,
+    warmup_period=WARMUP_DAYS
+)
+
+kge_result = kge_runner.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
+)
+print("\n" + kge_result.summary())
+
+# Save calibration report
+kge_report = kge_runner.create_report(kge_result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+kge_report.save('../test_data/reports/410734_kge')
+print(f"Calibration saved to: test_data/reports/410734_kge.pkl")
+
+# %%
+# Run calibration with KGE(inverse)
+print("=" * 70)
+print("CALIBRATION 6: KGE with Inverse Transform (1/Q)")
+print("=" * 70)
+print("\nInverse transformation heavily emphasizes low flows.")
+print("Useful for drought analysis and environmental flow assessments.")
+print("\nRunning calibration...\n")
+
+kge_inv_runner = CalibrationRunner(
+    model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
+    inputs=cal_inputs,
+    observed=cal_observed,
+    objective=kge_inv_objective,
+    warmup_period=WARMUP_DAYS
+)
+
+kge_inv_result = kge_inv_runner.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
+)
+print("\n" + kge_inv_result.summary())
+
+# Save calibration report
+kge_inv_report = kge_inv_runner.create_report(kge_inv_result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+kge_inv_report.save('../test_data/reports/410734_kge_inv')
+print(f"Calibration saved to: test_data/reports/410734_kge_inv.pkl")
+
+# %%
+# Run calibration with KGE(sqrt)
+print("=" * 70)
+print("CALIBRATION 7: KGE with Square Root Transform (√Q)")
+print("=" * 70)
+print("\nSquare root transformation provides balanced emphasis.")
+print("Recommended for general water resources applications.")
+print("\nRunning calibration...\n")
+
+kge_sqrt_runner = CalibrationRunner(
+    model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
+    inputs=cal_inputs,
+    observed=cal_observed,
+    objective=kge_sqrt_objective,
+    warmup_period=WARMUP_DAYS
+)
+
+kge_sqrt_result = kge_sqrt_runner.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
+)
+print("\n" + kge_sqrt_result.summary())
+
+# Save calibration report
+kge_sqrt_report = kge_sqrt_runner.create_report(kge_sqrt_result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+kge_sqrt_report.save('../test_data/reports/410734_kge_sqrt')
+print(f"Calibration saved to: test_data/reports/410734_kge_sqrt.pkl")
+
+# %%
+# Run calibration with KGE(log) - use with caution
+import warnings
+print("=" * 70)
+print("CALIBRATION 8: KGE with Log Transform (log Q)")
+print("=" * 70)
+print("\nWARNING: Santos et al. (2018) showed that log transform with KGE")
+print("can cause numerical instabilities and unit-dependence issues.")
+print("Consider sqrt or inverse transforms for production use.")
+print("\nRunning calibration...\n")
+
+# Suppress the warning during calibration (we've already warned)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    kge_log_runner = CalibrationRunner(
+        model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
+        inputs=cal_inputs,
+        observed=cal_observed,
+        objective=kge_log_objective,
+        warmup_period=WARMUP_DAYS
+    )
+
+    kge_log_result = kge_log_runner.run_sceua_direct(
+        max_evals=MAX_EVALS_SAC,
+        seed=42,
+        verbose=True,
+        max_tolerant_iter=100,
+        tolerance=1e-4
+    )
+print("\n" + kge_log_result.summary())
+
+# Save calibration report
+kge_log_report = kge_log_runner.create_report(kge_log_result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+kge_log_report.save('../test_data/reports/410734_kge_log')
+print(f"Calibration saved to: test_data/reports/410734_kge_log.pkl")
+
+# %%
+# Run calibration with Non-parametric KGE
+print("=" * 70)
+print("CALIBRATION 9: Non-parametric KGE (Pool et al., 2018)")
+print("=" * 70)
+print("\nNon-parametric KGE uses Spearman rank correlation instead of Pearson.")
+print("More robust to outliers and skewed flow distributions.")
+print("Better suited for flashy catchments with extreme events.")
+print("\nRunning calibration...\n")
+
+kge_np_runner = CalibrationRunner(
+    model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
+    inputs=cal_inputs,
+    observed=cal_observed,
+    objective=kge_np_objective,
+    warmup_period=WARMUP_DAYS
+)
+
+kge_np_result = kge_np_runner.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
+)
+print("\n" + kge_np_result.summary())
+
+# Save calibration report
+kge_np_report = kge_np_runner.create_report(kge_np_result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+kge_np_report.save('../test_data/reports/410734_kge_np')
+print(f"Calibration saved to: test_data/reports/410734_kge_np.pkl")
+
+# %%
+# Run simulations with all calibrated parameter sets (NSE-based objectives)
 log_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
 log_model.set_parameters(log_result.best_parameters)
 log_model.reset()
@@ -1064,46 +1377,89 @@ sdeb_model.set_parameters(sdeb_result.best_parameters)
 sdeb_model.reset()
 sdeb_sim_flow = sdeb_model.run(cal_data)['runoff'].values[WARMUP_DAYS:]
 
-# Calculate all metrics for comparison
+# Run simulations with KGE-based calibrated parameter sets
+kge_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+kge_model.set_parameters(kge_result.best_parameters)
+kge_model.reset()
+kge_sim_flow = kge_model.run(cal_data)['runoff'].values[WARMUP_DAYS:]
+
+kge_inv_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+kge_inv_model.set_parameters(kge_inv_result.best_parameters)
+kge_inv_model.reset()
+kge_inv_sim_flow = kge_inv_model.run(cal_data)['runoff'].values[WARMUP_DAYS:]
+
+kge_sqrt_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+kge_sqrt_model.set_parameters(kge_sqrt_result.best_parameters)
+kge_sqrt_model.reset()
+kge_sqrt_sim_flow = kge_sqrt_model.run(cal_data)['runoff'].values[WARMUP_DAYS:]
+
+kge_log_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+kge_log_model.set_parameters(kge_log_result.best_parameters)
+kge_log_model.reset()
+kge_log_sim_flow = kge_log_model.run(cal_data)['runoff'].values[WARMUP_DAYS:]
+
+kge_np_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+kge_np_model.set_parameters(kge_np_result.best_parameters)
+kge_np_model.reset()
+kge_np_sim_flow = kge_np_model.run(cal_data)['runoff'].values[WARMUP_DAYS:]
+
+# Calculate all metrics for comparison (NSE-based calibrations)
 nse_metrics = calculate_metrics(sim_flow, obs_flow)
 log_metrics = calculate_metrics(log_sim_flow, obs_flow)
 inv_metrics = calculate_metrics(inv_sim_flow, obs_flow)
 sqrt_metrics = calculate_metrics(sqrt_sim_flow, obs_flow)
 sdeb_metrics = calculate_metrics(sdeb_sim_flow, obs_flow)
 
-# Calculate transformed NSE values for each calibration
+# Calculate metrics for KGE-based calibrations
+kge_metrics = calculate_metrics(kge_sim_flow, obs_flow)
+kge_inv_metrics = calculate_metrics(kge_inv_sim_flow, obs_flow)
+kge_sqrt_metrics = calculate_metrics(kge_sqrt_sim_flow, obs_flow)
+kge_log_metrics = calculate_metrics(kge_log_sim_flow, obs_flow)
+kge_np_metrics = calculate_metrics(kge_np_sim_flow, obs_flow)
+
+# Calculate transformed NSE/KGE values for each calibration using the objective functions
 # All objectives from pyrrm.objectives use __call__(obs, sim) interface
-nse_lognse = log_objective(obs_flow, sim_flow)
-nse_invnse = inv_objective(obs_flow, sim_flow)
-nse_sqrtnse = sqrt_objective(obs_flow, sim_flow)
+nse_lognse = log_nse_objective(obs_flow, sim_flow)
+nse_invnse = inv_nse_objective(obs_flow, sim_flow)
+nse_sqrtnse = sqrt_nse_objective(obs_flow, sim_flow)
 nse_sdeb = sdeb_objective(obs_flow, sim_flow)
 
-log_lognse = log_objective(obs_flow, log_sim_flow)
-log_invnse = inv_objective(obs_flow, log_sim_flow)
-log_sqrtnse = sqrt_objective(obs_flow, log_sim_flow)
+log_lognse = log_nse_objective(obs_flow, log_sim_flow)
+log_invnse = inv_nse_objective(obs_flow, log_sim_flow)
+log_sqrtnse = sqrt_nse_objective(obs_flow, log_sim_flow)
 log_sdeb = sdeb_objective(obs_flow, log_sim_flow)
 
-inv_lognse = log_objective(obs_flow, inv_sim_flow)
-inv_invnse = inv_objective(obs_flow, inv_sim_flow)
-inv_sqrtnse = sqrt_objective(obs_flow, inv_sim_flow)
+inv_lognse = log_nse_objective(obs_flow, inv_sim_flow)
+inv_invnse = inv_nse_objective(obs_flow, inv_sim_flow)
+inv_sqrtnse = sqrt_nse_objective(obs_flow, inv_sim_flow)
 inv_sdeb = sdeb_objective(obs_flow, inv_sim_flow)
 
-sqrt_lognse = log_objective(obs_flow, sqrt_sim_flow)
-sqrt_invnse = inv_objective(obs_flow, sqrt_sim_flow)
-sqrt_sqrtnse = sqrt_objective(obs_flow, sqrt_sim_flow)
+sqrt_lognse = log_nse_objective(obs_flow, sqrt_sim_flow)
+sqrt_invnse = inv_nse_objective(obs_flow, sqrt_sim_flow)
+sqrt_sqrtnse = sqrt_nse_objective(obs_flow, sqrt_sim_flow)
 sqrt_sdeb = sdeb_objective(obs_flow, sqrt_sim_flow)
 
-sdeb_lognse = log_objective(obs_flow, sdeb_sim_flow)
-sdeb_invnse = inv_objective(obs_flow, sdeb_sim_flow)
-sdeb_sqrtnse = sqrt_objective(obs_flow, sdeb_sim_flow)
+sdeb_lognse = log_nse_objective(obs_flow, sdeb_sim_flow)
+sdeb_invnse = inv_nse_objective(obs_flow, sdeb_sim_flow)
+sdeb_sqrtnse = sqrt_nse_objective(obs_flow, sdeb_sim_flow)
 sdeb_sdeb = sdeb_objective(obs_flow, sdeb_sim_flow)
+
+# KGE objective values for all calibrations
+kge_kge = kge_objective(obs_flow, kge_sim_flow)
+kge_inv_kge = kge_objective(obs_flow, kge_inv_sim_flow)
+kge_sqrt_kge = kge_objective(obs_flow, kge_sqrt_sim_flow)
+kge_log_kge = kge_objective(obs_flow, kge_log_sim_flow)
+kge_np_kge = kge_np_objective(obs_flow, kge_np_sim_flow)
 
 # %% [markdown]
 # ### Comprehensive Comparison of All Calibrations
+#
+# Now let's compare all objective functions side by side. We'll organize the results into
+# two tables: one for NSE-based objectives and one for KGE-based objectives.
 
 # %%
 print("=" * 95)
-print("COMPARISON: ALL OBJECTIVE FUNCTION CALIBRATIONS")
+print("COMPARISON: NSE-BASED OBJECTIVE FUNCTION CALIBRATIONS")
 print("=" * 95)
 print(f"\n{'Metric':<12} {'NSE (Q)':>12} {'LogNSE':>12} {'InvNSE':>12} {'SqrtNSE':>12} {'SDEB':>12}")
 print("-" * 76)
@@ -1119,20 +1475,66 @@ print("\n" + "-" * 76)
 print("Note: NSE/LogNSE/InvNSE/SqrtNSE are maximized (higher=better).")
 print("      SDEB is minimized (lower=better).")
 
+# %%
+print("\n" + "=" * 95)
+print("COMPARISON: KGE-BASED OBJECTIVE FUNCTION CALIBRATIONS")
+print("=" * 95)
+print(f"\n{'Metric':<12} {'KGE':>12} {'KGE(inv)':>12} {'KGE(sqrt)':>12} {'KGE(log)':>12} {'KGE_np':>12}")
+print("-" * 76)
+print(f"{'NSE':<12} {kge_metrics['NSE']:>12.4f} {kge_inv_metrics['NSE']:>12.4f} {kge_sqrt_metrics['NSE']:>12.4f} {kge_log_metrics['NSE']:>12.4f} {kge_np_metrics['NSE']:>12.4f}")
+print(f"{'KGE':<12} {kge_metrics['KGE']:>12.4f} {kge_inv_metrics['KGE']:>12.4f} {kge_sqrt_metrics['KGE']:>12.4f} {kge_log_metrics['KGE']:>12.4f} {kge_np_metrics['KGE']:>12.4f}")
+print(f"{'LogNSE':<12} {kge_metrics['LogNSE']:>12.4f} {kge_inv_metrics['LogNSE']:>12.4f} {kge_sqrt_metrics['LogNSE']:>12.4f} {kge_log_metrics['LogNSE']:>12.4f} {kge_np_metrics['LogNSE']:>12.4f}")
+print(f"{'PBIAS (%)':<12} {kge_metrics['PBIAS']:>12.2f} {kge_inv_metrics['PBIAS']:>12.2f} {kge_sqrt_metrics['PBIAS']:>12.2f} {kge_log_metrics['PBIAS']:>12.2f} {kge_np_metrics['PBIAS']:>12.2f}")
+print(f"{'RMSE':<12} {kge_metrics['RMSE']:>12.2f} {kge_inv_metrics['RMSE']:>12.2f} {kge_sqrt_metrics['RMSE']:>12.2f} {kge_log_metrics['RMSE']:>12.2f} {kge_np_metrics['RMSE']:>12.2f}")
+
+print("\n" + "-" * 76)
+print("Note: KGE family metrics are maximized (higher=better).")
+print("      KGE > -0.41 indicates improvement over mean benchmark (Knoben et al., 2019).")
+
+# %% [markdown]
+# ### KGE vs NSE: Which to Use?
+#
+# **Key differences:**
+#
+# | Aspect | NSE | KGE |
+# |--------|-----|-----|
+# | **Decomposition** | None (single score) | r, α, β components |
+# | **Benchmark** | NSE=0 means model = mean | KGE=-0.41 means model = mean |
+# | **Bias sensitivity** | Squared errors | Linear bias term |
+# | **Interpretability** | "Variance explained" | "Correlation + variability + bias" |
+#
+# **When to use KGE:**
+# - When you want to understand *why* a model performs well/poorly (diagnose components)
+# - When you need to balance timing, variability, and bias explicitly
+# - For comparing models across different catchments (more interpretable decomposition)
+#
+# **When to use NSE:**
+# - When benchmarking against existing literature (NSE is more widely used)
+# - When you primarily care about variance explained
+# - For consistency with regulatory/reporting requirements
+
 # %% [markdown]
 # ### Visual Comparison: All Objective Functions
 #
-# Let's compare how all five calibrations perform across different flow ranges.
+# Let's compare how all calibrations perform across different flow ranges.
+# We'll create two visualizations: one for NSE-based objectives and one for KGE-based objectives.
 
 # %%
 # Define colors for each calibration
 colors = {
     'observed': 'black',
+    # NSE-based
     'nse': '#E41A1C',      # Red
     'log': '#377EB8',      # Blue  
     'inv': '#4DAF4A',      # Green
     'sqrt': '#984EA3',     # Purple
-    'sdeb': '#FF7F00'      # Orange
+    'sdeb': '#FF7F00',     # Orange
+    # KGE-based
+    'kge': '#A65628',      # Brown
+    'kge_inv': '#F781BF',  # Pink
+    'kge_sqrt': '#999999', # Gray
+    'kge_log': '#66C2A5',  # Teal
+    'kge_np': '#FC8D62'    # Salmon
 }
 
 # Compare hydrographs
@@ -1150,19 +1552,19 @@ fig = make_subplots(
     ]
 )
 
-# 1. Full hydrograph (log scale)
+# 1. Full hydrograph (log scale) - with legendgroup for linked legend selection
 fig.add_trace(go.Scatter(x=comparison.index, y=obs_flow, name='Observed',
-              line=dict(color=colors['observed'], width=1.5)), row=1, col=1)
+              legendgroup='observed', line=dict(color=colors['observed'], width=1.5)), row=1, col=1)
 fig.add_trace(go.Scatter(x=comparison.index, y=sim_flow, name='NSE (Q)',
-              line=dict(color=colors['nse'], width=1)), row=1, col=1)
+              legendgroup='nse', line=dict(color=colors['nse'], width=1)), row=1, col=1)
 fig.add_trace(go.Scatter(x=comparison.index, y=log_sim_flow, name='LogNSE',
-              line=dict(color=colors['log'], width=1)), row=1, col=1)
+              legendgroup='log', line=dict(color=colors['log'], width=1)), row=1, col=1)
 fig.add_trace(go.Scatter(x=comparison.index, y=inv_sim_flow, name='InvNSE (1/Q)',
-              line=dict(color=colors['inv'], width=1)), row=1, col=1)
+              legendgroup='inv', line=dict(color=colors['inv'], width=1)), row=1, col=1)
 fig.add_trace(go.Scatter(x=comparison.index, y=sqrt_sim_flow, name='SqrtNSE (√Q)',
-              line=dict(color=colors['sqrt'], width=1)), row=1, col=1)
+              legendgroup='sqrt', line=dict(color=colors['sqrt'], width=1)), row=1, col=1)
 fig.add_trace(go.Scatter(x=comparison.index, y=sdeb_sim_flow, name='SDEB',
-              line=dict(color=colors['sdeb'], width=1)), row=1, col=1)
+              legendgroup='sdeb', line=dict(color=colors['sdeb'], width=1)), row=1, col=1)
 
 # 2. Flow Duration Curves
 obs_sorted = np.sort(obs_flow)[::-1]
@@ -1174,45 +1576,45 @@ sdeb_sorted = np.sort(sdeb_sim_flow)[::-1]
 exceedance = np.arange(1, len(obs_sorted) + 1) / len(obs_sorted) * 100
 
 fig.add_trace(go.Scatter(x=exceedance, y=obs_sorted, name='Observed',
-              line=dict(color=colors['observed'], width=2), showlegend=False), row=1, col=2)
+              legendgroup='observed', line=dict(color=colors['observed'], width=2), showlegend=False), row=1, col=2)
 fig.add_trace(go.Scatter(x=exceedance, y=nse_sorted, name='NSE',
-              line=dict(color=colors['nse'], width=1.5), showlegend=False), row=1, col=2)
+              legendgroup='nse', line=dict(color=colors['nse'], width=1.5), showlegend=False), row=1, col=2)
 fig.add_trace(go.Scatter(x=exceedance, y=log_sorted, name='LogNSE',
-              line=dict(color=colors['log'], width=1.5), showlegend=False), row=1, col=2)
+              legendgroup='log', line=dict(color=colors['log'], width=1.5), showlegend=False), row=1, col=2)
 fig.add_trace(go.Scatter(x=exceedance, y=inv_sorted, name='InvNSE',
-              line=dict(color=colors['inv'], width=1.5), showlegend=False), row=1, col=2)
+              legendgroup='inv', line=dict(color=colors['inv'], width=1.5), showlegend=False), row=1, col=2)
 fig.add_trace(go.Scatter(x=exceedance, y=sqrt_sorted, name='SqrtNSE',
-              line=dict(color=colors['sqrt'], width=1.5), showlegend=False), row=1, col=2)
+              legendgroup='sqrt', line=dict(color=colors['sqrt'], width=1.5), showlegend=False), row=1, col=2)
 fig.add_trace(go.Scatter(x=exceedance, y=sdeb_sorted, name='SDEB',
-              line=dict(color=colors['sdeb'], width=1.5), showlegend=False), row=1, col=2)
+              legendgroup='sdeb', line=dict(color=colors['sdeb'], width=1.5), showlegend=False), row=1, col=2)
 
 # 3. Low flow detail
 low_mask = obs_flow < 200
 fig.add_trace(go.Scatter(x=comparison.index[low_mask], y=obs_flow[low_mask],
-              line=dict(color=colors['observed'], width=1.5), showlegend=False), row=2, col=1)
+              legendgroup='observed', line=dict(color=colors['observed'], width=1.5), showlegend=False), row=2, col=1)
 fig.add_trace(go.Scatter(x=comparison.index[low_mask], y=sim_flow[low_mask],
-              line=dict(color=colors['nse'], width=1), showlegend=False), row=2, col=1)
+              legendgroup='nse', line=dict(color=colors['nse'], width=1), showlegend=False), row=2, col=1)
 fig.add_trace(go.Scatter(x=comparison.index[low_mask], y=log_sim_flow[low_mask],
-              line=dict(color=colors['log'], width=1), showlegend=False), row=2, col=1)
+              legendgroup='log', line=dict(color=colors['log'], width=1), showlegend=False), row=2, col=1)
 fig.add_trace(go.Scatter(x=comparison.index[low_mask], y=inv_sim_flow[low_mask],
-              line=dict(color=colors['inv'], width=1), showlegend=False), row=2, col=1)
+              legendgroup='inv', line=dict(color=colors['inv'], width=1), showlegend=False), row=2, col=1)
 fig.add_trace(go.Scatter(x=comparison.index[low_mask], y=sqrt_sim_flow[low_mask],
-              line=dict(color=colors['sqrt'], width=1), showlegend=False), row=2, col=1)
+              legendgroup='sqrt', line=dict(color=colors['sqrt'], width=1), showlegend=False), row=2, col=1)
 fig.add_trace(go.Scatter(x=comparison.index[low_mask], y=sdeb_sim_flow[low_mask],
-              line=dict(color=colors['sdeb'], width=1), showlegend=False), row=2, col=1)
+              legendgroup='sdeb', line=dict(color=colors['sdeb'], width=1), showlegend=False), row=2, col=1)
 
 # 4. Scatter plot - all calibrations
 max_flow = max(obs_flow.max(), sim_flow.max())
 fig.add_trace(go.Scatter(x=obs_flow, y=sim_flow, mode='markers', name='NSE',
-              marker=dict(color=colors['nse'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+              legendgroup='nse', marker=dict(color=colors['nse'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
 fig.add_trace(go.Scatter(x=obs_flow, y=log_sim_flow, mode='markers', name='LogNSE',
-              marker=dict(color=colors['log'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+              legendgroup='log', marker=dict(color=colors['log'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
 fig.add_trace(go.Scatter(x=obs_flow, y=inv_sim_flow, mode='markers', name='InvNSE',
-              marker=dict(color=colors['inv'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+              legendgroup='inv', marker=dict(color=colors['inv'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
 fig.add_trace(go.Scatter(x=obs_flow, y=sqrt_sim_flow, mode='markers', name='SqrtNSE',
-              marker=dict(color=colors['sqrt'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+              legendgroup='sqrt', marker=dict(color=colors['sqrt'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
 fig.add_trace(go.Scatter(x=obs_flow, y=sdeb_sim_flow, mode='markers', name='SDEB',
-              marker=dict(color=colors['sdeb'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+              legendgroup='sdeb', marker=dict(color=colors['sdeb'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
 fig.add_trace(go.Scatter(x=[0, max_flow], y=[0, max_flow], mode='lines',
               line=dict(color='black', dash='dash'), showlegend=False), row=2, col=2)
 
@@ -1225,7 +1627,7 @@ fig.update_yaxes(title_text="Simulated (ML/day)", type="log", row=2, col=2)
 fig.update_xaxes(title_text="Observed (ML/day)", type="log", row=2, col=2)
 
 fig.update_layout(
-    title="<b>Comparison: Effect of Objective Functions on Calibration</b><br>" +
+    title="<b>Comparison: NSE-Based Objective Functions</b><br>" +
           "<sup>NSE=peaks | LogNSE=balanced | InvNSE=low flows | SqrtNSE=moderate | SDEB=FDC+timing</sup>",
     height=750,
     legend=dict(orientation='h', y=1.02, x=0.5, xanchor='center')
@@ -1233,7 +1635,270 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# ### Key Observations
+# ### Visual Comparison: KGE-Based Calibrations
+
+# %%
+# Compare KGE-based calibrations
+fig_kge = make_subplots(
+    rows=2, cols=2,
+    subplot_titles=(
+        'Full Hydrograph (Log Scale)',
+        'Flow Duration Curves',
+        'Low Flow Detail (< 200 ML/day)',
+        'Scatter: KGE Calibrations vs Observed'
+    ),
+    specs=[
+        [{"type": "scatter"}, {"type": "scatter"}],
+        [{"type": "scatter"}, {"type": "scatter"}]
+    ]
+)
+
+# 1. Full hydrograph (log scale) - KGE calibrations with legendgroup for linked legend selection
+fig_kge.add_trace(go.Scatter(x=comparison.index, y=obs_flow, name='Observed',
+              legendgroup='observed', line=dict(color=colors['observed'], width=1.5)), row=1, col=1)
+fig_kge.add_trace(go.Scatter(x=comparison.index, y=kge_sim_flow, name='KGE',
+              legendgroup='kge', line=dict(color=colors['kge'], width=1)), row=1, col=1)
+fig_kge.add_trace(go.Scatter(x=comparison.index, y=kge_inv_sim_flow, name='KGE(1/Q)',
+              legendgroup='kge_inv', line=dict(color=colors['kge_inv'], width=1)), row=1, col=1)
+fig_kge.add_trace(go.Scatter(x=comparison.index, y=kge_sqrt_sim_flow, name='KGE(√Q)',
+              legendgroup='kge_sqrt', line=dict(color=colors['kge_sqrt'], width=1)), row=1, col=1)
+fig_kge.add_trace(go.Scatter(x=comparison.index, y=kge_log_sim_flow, name='KGE(log)',
+              legendgroup='kge_log', line=dict(color=colors['kge_log'], width=1)), row=1, col=1)
+fig_kge.add_trace(go.Scatter(x=comparison.index, y=kge_np_sim_flow, name='KGE_np',
+              legendgroup='kge_np', line=dict(color=colors['kge_np'], width=1)), row=1, col=1)
+
+# 2. Flow Duration Curves - KGE calibrations
+kge_sorted = np.sort(kge_sim_flow)[::-1]
+kge_inv_sorted = np.sort(kge_inv_sim_flow)[::-1]
+kge_sqrt_sorted = np.sort(kge_sqrt_sim_flow)[::-1]
+kge_log_sorted = np.sort(kge_log_sim_flow)[::-1]
+kge_np_sorted = np.sort(kge_np_sim_flow)[::-1]
+
+fig_kge.add_trace(go.Scatter(x=exceedance, y=obs_sorted, name='Observed',
+              legendgroup='observed', line=dict(color=colors['observed'], width=2), showlegend=False), row=1, col=2)
+fig_kge.add_trace(go.Scatter(x=exceedance, y=kge_sorted, name='KGE',
+              legendgroup='kge', line=dict(color=colors['kge'], width=1.5), showlegend=False), row=1, col=2)
+fig_kge.add_trace(go.Scatter(x=exceedance, y=kge_inv_sorted, name='KGE(1/Q)',
+              legendgroup='kge_inv', line=dict(color=colors['kge_inv'], width=1.5), showlegend=False), row=1, col=2)
+fig_kge.add_trace(go.Scatter(x=exceedance, y=kge_sqrt_sorted, name='KGE(√Q)',
+              legendgroup='kge_sqrt', line=dict(color=colors['kge_sqrt'], width=1.5), showlegend=False), row=1, col=2)
+fig_kge.add_trace(go.Scatter(x=exceedance, y=kge_log_sorted, name='KGE(log)',
+              legendgroup='kge_log', line=dict(color=colors['kge_log'], width=1.5), showlegend=False), row=1, col=2)
+fig_kge.add_trace(go.Scatter(x=exceedance, y=kge_np_sorted, name='KGE_np',
+              legendgroup='kge_np', line=dict(color=colors['kge_np'], width=1.5), showlegend=False), row=1, col=2)
+
+# 3. Low flow detail - KGE calibrations
+low_mask = obs_flow < 200
+fig_kge.add_trace(go.Scatter(x=comparison.index[low_mask], y=obs_flow[low_mask],
+              legendgroup='observed', line=dict(color=colors['observed'], width=1.5), showlegend=False), row=2, col=1)
+fig_kge.add_trace(go.Scatter(x=comparison.index[low_mask], y=kge_sim_flow[low_mask],
+              legendgroup='kge', line=dict(color=colors['kge'], width=1), showlegend=False), row=2, col=1)
+fig_kge.add_trace(go.Scatter(x=comparison.index[low_mask], y=kge_inv_sim_flow[low_mask],
+              legendgroup='kge_inv', line=dict(color=colors['kge_inv'], width=1), showlegend=False), row=2, col=1)
+fig_kge.add_trace(go.Scatter(x=comparison.index[low_mask], y=kge_sqrt_sim_flow[low_mask],
+              legendgroup='kge_sqrt', line=dict(color=colors['kge_sqrt'], width=1), showlegend=False), row=2, col=1)
+fig_kge.add_trace(go.Scatter(x=comparison.index[low_mask], y=kge_log_sim_flow[low_mask],
+              legendgroup='kge_log', line=dict(color=colors['kge_log'], width=1), showlegend=False), row=2, col=1)
+fig_kge.add_trace(go.Scatter(x=comparison.index[low_mask], y=kge_np_sim_flow[low_mask],
+              legendgroup='kge_np', line=dict(color=colors['kge_np'], width=1), showlegend=False), row=2, col=1)
+
+# 4. Scatter plot - all KGE calibrations
+fig_kge.add_trace(go.Scatter(x=obs_flow, y=kge_sim_flow, mode='markers', name='KGE',
+              legendgroup='kge', marker=dict(color=colors['kge'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_kge.add_trace(go.Scatter(x=obs_flow, y=kge_inv_sim_flow, mode='markers', name='KGE(1/Q)',
+              legendgroup='kge_inv', marker=dict(color=colors['kge_inv'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_kge.add_trace(go.Scatter(x=obs_flow, y=kge_sqrt_sim_flow, mode='markers', name='KGE(√Q)',
+              legendgroup='kge_sqrt', marker=dict(color=colors['kge_sqrt'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_kge.add_trace(go.Scatter(x=obs_flow, y=kge_log_sim_flow, mode='markers', name='KGE(log)',
+              legendgroup='kge_log', marker=dict(color=colors['kge_log'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_kge.add_trace(go.Scatter(x=obs_flow, y=kge_np_sim_flow, mode='markers', name='KGE_np',
+              legendgroup='kge_np', marker=dict(color=colors['kge_np'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_kge.add_trace(go.Scatter(x=[0, max_flow], y=[0, max_flow], mode='lines',
+              line=dict(color='black', dash='dash'), showlegend=False), row=2, col=2)
+
+# Update axes
+fig_kge.update_yaxes(title_text="Flow (ML/day)", type="log", row=1, col=1)
+fig_kge.update_yaxes(title_text="Flow (ML/day)", type="log", row=1, col=2)
+fig_kge.update_xaxes(title_text="Exceedance (%)", row=1, col=2)
+fig_kge.update_yaxes(title_text="Flow (ML/day)", row=2, col=1)
+fig_kge.update_yaxes(title_text="Simulated (ML/day)", type="log", row=2, col=2)
+fig_kge.update_xaxes(title_text="Observed (ML/day)", type="log", row=2, col=2)
+
+fig_kge.update_layout(
+    title="<b>Comparison: KGE-Based Objective Functions</b><br>" +
+          "<sup>KGE=peaks | KGE(1/Q)=low flows | KGE(√Q)=balanced | KGE(log)=medium | KGE_np=robust</sup>",
+    height=750,
+    legend=dict(orientation='h', y=1.02, x=0.5, xanchor='center')
+)
+fig_kge.show()
+
+# %% [markdown]
+# ### Visual Comparison: All Objective Functions Combined
+#
+# This figure combines all NSE-based and KGE-based calibrations for direct comparison.
+# Use the legend to toggle individual datasets on/off across all subplots.
+
+# %%
+# Combined comparison: All NSE-based and KGE-based calibrations
+fig_all = make_subplots(
+    rows=2, cols=2,
+    subplot_titles=(
+        'Full Hydrograph (Log Scale)',
+        'Flow Duration Curves',
+        'Low Flow Detail (< 200 ML/day)',
+        'Scatter: All Calibrations vs Observed'
+    ),
+    specs=[
+        [{"type": "scatter"}, {"type": "scatter"}],
+        [{"type": "scatter"}, {"type": "scatter"}]
+    ]
+)
+
+# 1. Full hydrograph (log scale) - All calibrations with legendgroup for linked legend selection
+# Observed
+fig_all.add_trace(go.Scatter(x=comparison.index, y=obs_flow, name='Observed',
+              legendgroup='observed', line=dict(color=colors['observed'], width=2)), row=1, col=1)
+
+# NSE-based objectives
+fig_all.add_trace(go.Scatter(x=comparison.index, y=sim_flow, name='NSE (Q)',
+              legendgroup='nse', line=dict(color=colors['nse'], width=1)), row=1, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index, y=log_sim_flow, name='LogNSE',
+              legendgroup='log', line=dict(color=colors['log'], width=1)), row=1, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index, y=inv_sim_flow, name='InvNSE (1/Q)',
+              legendgroup='inv', line=dict(color=colors['inv'], width=1)), row=1, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index, y=sqrt_sim_flow, name='SqrtNSE (√Q)',
+              legendgroup='sqrt', line=dict(color=colors['sqrt'], width=1)), row=1, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index, y=sdeb_sim_flow, name='SDEB',
+              legendgroup='sdeb', line=dict(color=colors['sdeb'], width=1)), row=1, col=1)
+
+# KGE-based objectives
+fig_all.add_trace(go.Scatter(x=comparison.index, y=kge_sim_flow, name='KGE',
+              legendgroup='kge', line=dict(color=colors['kge'], width=1)), row=1, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index, y=kge_inv_sim_flow, name='KGE(1/Q)',
+              legendgroup='kge_inv', line=dict(color=colors['kge_inv'], width=1)), row=1, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index, y=kge_sqrt_sim_flow, name='KGE(√Q)',
+              legendgroup='kge_sqrt', line=dict(color=colors['kge_sqrt'], width=1)), row=1, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index, y=kge_log_sim_flow, name='KGE(log)',
+              legendgroup='kge_log', line=dict(color=colors['kge_log'], width=1)), row=1, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index, y=kge_np_sim_flow, name='KGE_np',
+              legendgroup='kge_np', line=dict(color=colors['kge_np'], width=1)), row=1, col=1)
+
+# 2. Flow Duration Curves - All calibrations
+# Observed
+fig_all.add_trace(go.Scatter(x=exceedance, y=obs_sorted, name='Observed',
+              legendgroup='observed', line=dict(color=colors['observed'], width=2), showlegend=False), row=1, col=2)
+
+# NSE-based objectives
+fig_all.add_trace(go.Scatter(x=exceedance, y=nse_sorted, name='NSE',
+              legendgroup='nse', line=dict(color=colors['nse'], width=1.5), showlegend=False), row=1, col=2)
+fig_all.add_trace(go.Scatter(x=exceedance, y=log_sorted, name='LogNSE',
+              legendgroup='log', line=dict(color=colors['log'], width=1.5), showlegend=False), row=1, col=2)
+fig_all.add_trace(go.Scatter(x=exceedance, y=inv_sorted, name='InvNSE',
+              legendgroup='inv', line=dict(color=colors['inv'], width=1.5), showlegend=False), row=1, col=2)
+fig_all.add_trace(go.Scatter(x=exceedance, y=sqrt_sorted, name='SqrtNSE',
+              legendgroup='sqrt', line=dict(color=colors['sqrt'], width=1.5), showlegend=False), row=1, col=2)
+fig_all.add_trace(go.Scatter(x=exceedance, y=sdeb_sorted, name='SDEB',
+              legendgroup='sdeb', line=dict(color=colors['sdeb'], width=1.5), showlegend=False), row=1, col=2)
+
+# KGE-based objectives
+fig_all.add_trace(go.Scatter(x=exceedance, y=kge_sorted, name='KGE',
+              legendgroup='kge', line=dict(color=colors['kge'], width=1.5), showlegend=False), row=1, col=2)
+fig_all.add_trace(go.Scatter(x=exceedance, y=kge_inv_sorted, name='KGE(1/Q)',
+              legendgroup='kge_inv', line=dict(color=colors['kge_inv'], width=1.5), showlegend=False), row=1, col=2)
+fig_all.add_trace(go.Scatter(x=exceedance, y=kge_sqrt_sorted, name='KGE(√Q)',
+              legendgroup='kge_sqrt', line=dict(color=colors['kge_sqrt'], width=1.5), showlegend=False), row=1, col=2)
+fig_all.add_trace(go.Scatter(x=exceedance, y=kge_log_sorted, name='KGE(log)',
+              legendgroup='kge_log', line=dict(color=colors['kge_log'], width=1.5), showlegend=False), row=1, col=2)
+fig_all.add_trace(go.Scatter(x=exceedance, y=kge_np_sorted, name='KGE_np',
+              legendgroup='kge_np', line=dict(color=colors['kge_np'], width=1.5), showlegend=False), row=1, col=2)
+
+# 3. Low flow detail - All calibrations
+# Observed
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=obs_flow[low_mask],
+              legendgroup='observed', line=dict(color=colors['observed'], width=1.5), showlegend=False), row=2, col=1)
+
+# NSE-based objectives
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=sim_flow[low_mask],
+              legendgroup='nse', line=dict(color=colors['nse'], width=1), showlegend=False), row=2, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=log_sim_flow[low_mask],
+              legendgroup='log', line=dict(color=colors['log'], width=1), showlegend=False), row=2, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=inv_sim_flow[low_mask],
+              legendgroup='inv', line=dict(color=colors['inv'], width=1), showlegend=False), row=2, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=sqrt_sim_flow[low_mask],
+              legendgroup='sqrt', line=dict(color=colors['sqrt'], width=1), showlegend=False), row=2, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=sdeb_sim_flow[low_mask],
+              legendgroup='sdeb', line=dict(color=colors['sdeb'], width=1), showlegend=False), row=2, col=1)
+
+# KGE-based objectives
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=kge_sim_flow[low_mask],
+              legendgroup='kge', line=dict(color=colors['kge'], width=1), showlegend=False), row=2, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=kge_inv_sim_flow[low_mask],
+              legendgroup='kge_inv', line=dict(color=colors['kge_inv'], width=1), showlegend=False), row=2, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=kge_sqrt_sim_flow[low_mask],
+              legendgroup='kge_sqrt', line=dict(color=colors['kge_sqrt'], width=1), showlegend=False), row=2, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=kge_log_sim_flow[low_mask],
+              legendgroup='kge_log', line=dict(color=colors['kge_log'], width=1), showlegend=False), row=2, col=1)
+fig_all.add_trace(go.Scatter(x=comparison.index[low_mask], y=kge_np_sim_flow[low_mask],
+              legendgroup='kge_np', line=dict(color=colors['kge_np'], width=1), showlegend=False), row=2, col=1)
+
+# 4. Scatter plot - All calibrations
+# NSE-based objectives
+fig_all.add_trace(go.Scatter(x=obs_flow, y=sim_flow, mode='markers', name='NSE',
+              legendgroup='nse', marker=dict(color=colors['nse'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_all.add_trace(go.Scatter(x=obs_flow, y=log_sim_flow, mode='markers', name='LogNSE',
+              legendgroup='log', marker=dict(color=colors['log'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_all.add_trace(go.Scatter(x=obs_flow, y=inv_sim_flow, mode='markers', name='InvNSE',
+              legendgroup='inv', marker=dict(color=colors['inv'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_all.add_trace(go.Scatter(x=obs_flow, y=sqrt_sim_flow, mode='markers', name='SqrtNSE',
+              legendgroup='sqrt', marker=dict(color=colors['sqrt'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_all.add_trace(go.Scatter(x=obs_flow, y=sdeb_sim_flow, mode='markers', name='SDEB',
+              legendgroup='sdeb', marker=dict(color=colors['sdeb'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+
+# KGE-based objectives
+fig_all.add_trace(go.Scatter(x=obs_flow, y=kge_sim_flow, mode='markers', name='KGE',
+              legendgroup='kge', marker=dict(color=colors['kge'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_all.add_trace(go.Scatter(x=obs_flow, y=kge_inv_sim_flow, mode='markers', name='KGE(1/Q)',
+              legendgroup='kge_inv', marker=dict(color=colors['kge_inv'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_all.add_trace(go.Scatter(x=obs_flow, y=kge_sqrt_sim_flow, mode='markers', name='KGE(√Q)',
+              legendgroup='kge_sqrt', marker=dict(color=colors['kge_sqrt'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_all.add_trace(go.Scatter(x=obs_flow, y=kge_log_sim_flow, mode='markers', name='KGE(log)',
+              legendgroup='kge_log', marker=dict(color=colors['kge_log'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+fig_all.add_trace(go.Scatter(x=obs_flow, y=kge_np_sim_flow, mode='markers', name='KGE_np',
+              legendgroup='kge_np', marker=dict(color=colors['kge_np'], size=2, opacity=0.3), showlegend=False), row=2, col=2)
+
+# 1:1 line
+fig_all.add_trace(go.Scatter(x=[0, max_flow], y=[0, max_flow], mode='lines',
+              line=dict(color='black', dash='dash'), showlegend=False), row=2, col=2)
+
+# Update axes
+fig_all.update_yaxes(title_text="Flow (ML/day)", type="log", row=1, col=1)
+fig_all.update_yaxes(title_text="Flow (ML/day)", type="log", row=1, col=2)
+fig_all.update_xaxes(title_text="Exceedance (%)", row=1, col=2)
+fig_all.update_yaxes(title_text="Flow (ML/day)", row=2, col=1)
+fig_all.update_yaxes(title_text="Simulated (ML/day)", type="log", row=2, col=2)
+fig_all.update_xaxes(title_text="Observed (ML/day)", type="log", row=2, col=2)
+
+fig_all.update_layout(
+    title="<b>Comparison: All Objective Functions (NSE + KGE)</b><br>" +
+          "<sup>Click legend items to toggle visibility across all subplots | NSE-based: solid warm colors | KGE-based: muted colors</sup>",
+    height=800,
+    legend=dict(
+        orientation='h', 
+        y=1.02, 
+        x=0.5, 
+        xanchor='center',
+        font=dict(size=10),
+        itemwidth=40
+    )
+)
+fig_all.show()
+
+print("\nLegend guide:")
+print("  NSE-based: NSE (red), LogNSE (blue), InvNSE (green), SqrtNSE (purple), SDEB (orange)")
+print("  KGE-based: KGE (brown), KGE(1/Q) (pink), KGE(√Q) (gray), KGE(log) (teal), KGE_np (salmon)")
+
+# %% [markdown]
+# ### Key Observations: NSE-Based Objectives
 #
 # **NSE (Q) Calibration** (red):
 # - Best at matching peak flows
@@ -1258,27 +1923,59 @@ fig.show()
 # - Used in Australian SOURCE platform
 # - Reduces sensitivity to peak timing errors
 #
+# ### Key Observations: KGE-Based Objectives
+#
+# **KGE Calibration** (brown):
+# - Standard KGE on original flows (2012 variant)
+# - Emphasizes high flows (like NSE) but with interpretable components
+# - Check r, α, β to diagnose model behavior
+#
+# **KGE(1/Q) Calibration** (pink):
+# - Inverse transformation, heavily emphasizes low flows
+# - Useful for drought indices and environmental flow studies
+# - May sacrifice peak flow accuracy
+#
+# **KGE(√Q) Calibration** (gray):
+# - Balanced emphasis between high and low flows
+# - **Recommended for general water resources applications**
+# - Good compromise without the numerical issues of log transform
+#
+# **KGE(log) Calibration** (teal):
+# - Log transformation (use with caution!)
+# - Santos et al. (2018) showed potential numerical instabilities
+# - Consider sqrt or inverse transforms instead
+#
+# **KGE Non-parametric** (salmon):
+# - Uses Spearman rank correlation (robust to outliers)
+# - Better for catchments with extreme events
+# - More robust to non-Gaussian error distributions
+#
 # ### Which Objective to Choose?
 #
-# | Application | Recommended | Reason |
-# |-------------|-------------|--------|
-# | Flood forecasting | NSE (Q) | Peaks matter most |
-# | Water supply | LogNSE or SqrtNSE | Balance matters |
-# | Drought/low flow | InvNSE (1/Q) | Low flows critical |
-# | Environmental flows | LogNSE or InvNSE | Baseflow important |
-# | General purpose | LogNSE or SDEB | Best balance |
+# | Application | Recommended Objectives | Reason |
+# |-------------|------------------------|--------|
+# | Flood forecasting | NSE (Q), KGE | Peaks matter most |
+# | Water supply | LogNSE, KGE(√Q), SqrtNSE | Balance matters |
+# | Drought/low flow | InvNSE, KGE(1/Q) | Low flows critical |
+# | Environmental flows | LogNSE, KGE(1/Q) | Baseflow important |
+# | General purpose | LogNSE, KGE(√Q), SDEB | Best balance |
 # | Uncertain timing | SDEB | Reduces timing sensitivity |
+# | Flashy catchments | KGE_np | Robust to outliers |
+# | Model diagnostics | KGE family | Interpretable components |
 
 # %% [markdown]
 # ### Parameter Comparison Across All Objective Functions
 
 # %%
 # Compare parameters across all calibrations
-print("=" * 105)
+print("=" * 145)
 print("PARAMETER COMPARISON ACROSS ALL OBJECTIVE FUNCTIONS")
-print("=" * 105)
-print(f"\n{'Parameter':<10} {'NSE (Q)':>12} {'LogNSE':>12} {'InvNSE':>12} {'SqrtNSE':>12} {'SDEB':>12}")
-print("-" * 74)
+print("=" * 145)
+
+# All objective functions in one table (NSE-based | KGE-based)
+print(f"\n{'':^10} |{'--- NSE-Based ---':^62}|{'--- KGE-Based ---':^62}")
+print(f"{'Parameter':<10} {'NSE(Q)':>10} {'LogNSE':>10} {'InvNSE':>10} {'SqrtNSE':>10} {'SDEB':>10} | {'KGE':>10} {'KGE(1/Q)':>10} {'KGE(√Q)':>10} {'KGE(log)':>10} {'KGE_np':>10}")
+print("-" * 135)
 
 for param in result.best_parameters.keys():
     nse_val = result.best_parameters[param]
@@ -1286,7 +1983,12 @@ for param in result.best_parameters.keys():
     inv_val = inv_result.best_parameters[param]
     sqrt_val = sqrt_result.best_parameters[param]
     sdeb_val = sdeb_result.best_parameters[param]
-    print(f"{param:<10} {nse_val:>12.4f} {log_val:>12.4f} {inv_val:>12.4f} {sqrt_val:>12.4f} {sdeb_val:>12.4f}")
+    kge_val = kge_result.best_parameters[param]
+    kge_inv_val = kge_inv_result.best_parameters[param]
+    kge_sqrt_val = kge_sqrt_result.best_parameters[param]
+    kge_log_val = kge_log_result.best_parameters[param]
+    kge_np_val = kge_np_result.best_parameters[param]
+    print(f"{param:<10} {nse_val:>10.4f} {log_val:>10.4f} {inv_val:>10.4f} {sqrt_val:>10.4f} {sdeb_val:>10.4f} | {kge_val:>10.4f} {kge_inv_val:>10.4f} {kge_sqrt_val:>10.4f} {kge_log_val:>10.4f} {kge_np_val:>10.4f}")
 
 # %%
 # Visual comparison of calibrated parameters across all objective functions
@@ -1300,33 +2002,42 @@ def normalize_param(value, param_name):
     low, high = param_bounds[param_name]
     return (value - low) / (high - low) * 100
 
-# Prepare data for each method
-methods = ['NSE (Q)', 'LogNSE', 'InvNSE (1/Q)', 'SqrtNSE (√Q)', 'SDEB']
-results_list = [result, log_result, inv_result, sqrt_result, sdeb_result]
-method_colors = [colors['nse'], colors['log'], colors['inv'], colors['sqrt'], colors['sdeb']]
+# Format text to show actual value (smart formatting based on magnitude)
+def format_value(v):
+    if abs(v) >= 100:
+        return f'{v:.1f}'
+    elif abs(v) >= 10:
+        return f'{v:.2f}'
+    elif abs(v) >= 1:
+        return f'{v:.3f}'
+    else:
+        return f'{v:.4f}'
 
-# Create figure with subplots - one column per method
+# Prepare data for all methods (NSE-based + KGE-based)
+methods = ['NSE (Q)', 'LogNSE', 'InvNSE', 'SqrtNSE', 'SDEB', 
+           'KGE', 'KGE(1/Q)', 'KGE(√Q)', 'KGE(log)', 'KGE_np']
+results_list = [result, log_result, inv_result, sqrt_result, sdeb_result,
+                kge_result, kge_inv_result, kge_sqrt_result, kge_log_result, kge_np_result]
+method_colors = [colors['nse'], colors['log'], colors['inv'], colors['sqrt'], colors['sdeb'],
+                 colors['kge'], colors['kge_inv'], colors['kge_sqrt'], colors['kge_log'], colors['kge_np']]
+
+# Create figure with subplots - 2 rows x 5 columns
 fig = make_subplots(
-    rows=1, cols=5,
+    rows=2, cols=5,
     subplot_titles=methods,
-    horizontal_spacing=0.02
+    horizontal_spacing=0.02,
+    vertical_spacing=0.15,
+    row_titles=['NSE-Based', 'KGE-Based']
 )
 
-for col, (method_result, color) in enumerate(zip(results_list, method_colors), 1):
+for idx, (method_result, color) in enumerate(zip(results_list, method_colors)):
+    # Determine row and column (0-4 -> row 1, 5-9 -> row 2)
+    row = (idx // 5) + 1
+    col = (idx % 5) + 1
+    
     # Get actual values and normalized values for this method
     actual_values = [method_result.best_parameters[p] for p in param_names]
     norm_values = [normalize_param(v, p) for v, p in zip(actual_values, param_names)]
-    
-    # Format text to show actual value (smart formatting based on magnitude)
-    def format_value(v):
-        if abs(v) >= 100:
-            return f'{v:.1f}'
-        elif abs(v) >= 10:
-            return f'{v:.2f}'
-        elif abs(v) >= 1:
-            return f'{v:.3f}'
-        else:
-            return f'{v:.4f}'
     
     bar_text = [format_value(v) for v in actual_values]
     
@@ -1345,31 +2056,32 @@ for col, (method_result, color) in enumerate(zip(results_list, method_colors), 1
             marker_color=color,
             text=bar_text,
             textposition='inside',
-            textfont=dict(color='white', size=9),
+            textfont=dict(color='white', size=8),
             showlegend=False,
             hovertext=hover_text,
             hoverinfo='text'
         ),
-        row=1, col=col
+        row=row, col=col
     )
     
     # Add vertical line at 50%
-    fig.add_vline(x=50, line_dash="dash", line_color="gray", opacity=0.5, row=1, col=col)
+    fig.add_vline(x=50, line_dash="dash", line_color="gray", opacity=0.5, row=row, col=col)
 
 # Update layout
 fig.update_xaxes(range=[0, 100], tickvals=[0, 50, 100], ticktext=['0%', '50%', '100%'])
 fig.update_yaxes(categoryorder='array', categoryarray=param_names[::-1])  # Reverse for top-to-bottom
 
-# Only show y-axis labels on first subplot
-for col in range(2, 6):
-    fig.update_yaxes(showticklabels=False, row=1, col=col)
+# Only show y-axis labels on first column
+for row in [1, 2]:
+    for col in range(2, 6):
+        fig.update_yaxes(showticklabels=False, row=row, col=col)
 
 fig.update_layout(
-    title="<b>Visual Comparison: Calibrated Parameters Across Objective Functions</b><br>" +
+    title="<b>Visual Comparison: Calibrated Parameters Across All Objective Functions</b><br>" +
           "<sup>Bar position = % within bounds | Bar text = actual parameter value | Hover for details</sup>",
-    height=650,
-    width=1200,
-    bargap=0.3
+    height=1200,
+    width=1600,
+    bargap=0.15
 )
 
 fig.show()
@@ -1379,6 +2091,7 @@ print("  - Bar length shows position within parameter bounds (0% = lower, 100% =
 print("  - Numbers on bars show the actual calibrated parameter values")
 print("  - Hover over bars for full details (value, position %, and bounds)")
 print("  - Parameters at extremes (near 0% or 100%) may indicate bounds should be reviewed")
+print("  - Top row: NSE-based objectives | Bottom row: KGE-based objectives")
 
 # %% [markdown]
 # ---
@@ -1390,41 +2103,71 @@ print("  - Parameters at extremes (near 0% or 100%) may indicate bounds should b
 # 2. **Set up the Sacramento model** with automatic unit conversion
 # 3. **Calibrated with standard NSE** (emphasizes high flows)
 # 4. **Explored flow transformations** (log, inverse, sqrt)
-# 5. **Calibrated with multiple objectives** (LogNSE, InvNSE, SqrtNSE, SDEB)
-# 6. **Compared results** to understand the trade-offs
+# 5. **Calibrated with multiple NSE objectives** (LogNSE, InvNSE, SqrtNSE, SDEB)
+# 6. **Calibrated with KGE family** (KGE, KGE(1/Q), KGE(√Q), KGE(log), KGE_np)
+# 7. **Compared results** to understand the trade-offs
 #
 # ### Key Takeaways
 #
-# - **NSE** is biased towards high flows due to squared errors
-# - **Flow transformations** redistribute error weights across flow magnitudes:
-#   - **log(Q)**: Balances all flow ranges
-#   - **1/Q**: Heavily emphasizes low flows
-#   - **√Q**: Moderate emphasis on low flows
-# - **SDEB** combines chronological + FDC + bias (reduces timing sensitivity)
-# - Choose your objective based on your application (floods vs drought vs general)
+# #### NSE vs KGE
+# - **NSE** is the traditional metric (variance explained), biased towards high flows
+# - **KGE** decomposes into interpretable components (r, α, β) - useful for diagnostics
+# - **KGE > -0.41** indicates improvement over mean benchmark
+#
+# #### Flow Transformations (work with both NSE and KGE)
+# - **log(Q)**: Balances all flow ranges (use cautiously with KGE)
+# - **1/Q**: Heavily emphasizes low flows
+# - **√Q**: Moderate emphasis on low flows (recommended for KGE)
+#
+# #### Special Objectives
+# - **SDEB**: Combines chronological + FDC + bias (reduces timing sensitivity)
+# - **KGE Non-parametric**: Robust to outliers, uses Spearman correlation
+#
+# ### Recommended Objectives by Application
+#
+# | Application | NSE-based | KGE-based |
+# |-------------|-----------|-----------|
+# | Flood forecasting | NSE (Q) | KGE |
+# | Water supply | LogNSE, SqrtNSE | KGE(√Q) |
+# | Drought/low flow | InvNSE | KGE(1/Q) |
+# | Environmental flows | LogNSE | KGE(1/Q), KGE(√Q) |
+# | General purpose | LogNSE, SDEB | KGE(√Q), KGE_np |
+# | Flashy catchments | - | KGE_np |
 #
 # ### Your Results
 
 # %%
-print("=" * 105)
+print("=" * 115)
 print("CALIBRATION SUMMARY - ALL OBJECTIVE FUNCTIONS")
-print("=" * 105)
+print("=" * 115)
 print(f"""
 Catchment: Gauge 410734 (Queanbeyan River)
 Calibration period: {CAL_START.date()} to {CAL_END.date()}
-Model: Sacramento | Algorithm: SCE-UA (5,000 iterations)
+Model: Sacramento | Algorithm: SCE-UA Direct (10,000 evaluations)
 
-┌───────────────────────────────────────────────────────────────────────────────────────────────┐
-│  OBJECTIVE FUNCTION COMPARISON                                                                │
-├──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────────┤
-│  Metric      │   NSE (Q)    │   LogNSE     │  InvNSE(1/Q) │  SqrtNSE(√Q) │      SDEB        │
-├──────────────┼──────────────┼──────────────┼──────────────┼──────────────┼──────────────────┤
-│  NSE         │ {nse_metrics['NSE']:>10.4f}   │ {log_metrics['NSE']:>10.4f}   │ {inv_metrics['NSE']:>10.4f}   │ {sqrt_metrics['NSE']:>10.4f}   │ {sdeb_metrics['NSE']:>10.4f}       │
-│  KGE         │ {nse_metrics['KGE']:>10.4f}   │ {log_metrics['KGE']:>10.4f}   │ {inv_metrics['KGE']:>10.4f}   │ {sqrt_metrics['KGE']:>10.4f}   │ {sdeb_metrics['KGE']:>10.4f}       │
-│  PBIAS (%)   │ {nse_metrics['PBIAS']:>+10.2f}   │ {log_metrics['PBIAS']:>+10.2f}   │ {inv_metrics['PBIAS']:>+10.2f}   │ {sqrt_metrics['PBIAS']:>+10.2f}   │ {sdeb_metrics['PBIAS']:>+10.2f}       │
-├──────────────┼──────────────┼──────────────┼──────────────┼──────────────┼──────────────────┤
-│  Best for    │ Flood peaks  │ General use  │ Low flows    │ Balanced     │ FDC + timing     │
-└──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  NSE-BASED OBJECTIVE FUNCTION COMPARISON                                                                │
+├──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────────────────────┤
+│  Metric      │   NSE (Q)    │   LogNSE     │  InvNSE(1/Q) │  SqrtNSE(√Q) │      SDEB                    │
+├──────────────┼──────────────┼──────────────┼──────────────┼──────────────┼──────────────────────────────┤
+│  NSE         │ {nse_metrics['NSE']:>10.4f}   │ {log_metrics['NSE']:>10.4f}   │ {inv_metrics['NSE']:>10.4f}   │ {sqrt_metrics['NSE']:>10.4f}   │ {sdeb_metrics['NSE']:>10.4f}                   │
+│  KGE         │ {nse_metrics['KGE']:>10.4f}   │ {log_metrics['KGE']:>10.4f}   │ {inv_metrics['KGE']:>10.4f}   │ {sqrt_metrics['KGE']:>10.4f}   │ {sdeb_metrics['KGE']:>10.4f}                   │
+│  PBIAS (%)   │ {nse_metrics['PBIAS']:>+10.2f}   │ {log_metrics['PBIAS']:>+10.2f}   │ {inv_metrics['PBIAS']:>+10.2f}   │ {sqrt_metrics['PBIAS']:>+10.2f}   │ {sdeb_metrics['PBIAS']:>+10.2f}                   │
+├──────────────┼──────────────┼──────────────┼──────────────┼──────────────┼──────────────────────────────┤
+│  Best for    │ Flood peaks  │ General use  │ Low flows    │ Balanced     │ FDC + timing                 │
+└──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  KGE-BASED OBJECTIVE FUNCTION COMPARISON                                                                │
+├──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────────────────────┤
+│  Metric      │   KGE        │  KGE(1/Q)    │   KGE(√Q)    │   KGE(log)   │   KGE_np                     │
+├──────────────┼──────────────┼──────────────┼──────────────┼──────────────┼──────────────────────────────┤
+│  NSE         │ {kge_metrics['NSE']:>10.4f}   │ {kge_inv_metrics['NSE']:>10.4f}   │ {kge_sqrt_metrics['NSE']:>10.4f}   │ {kge_log_metrics['NSE']:>10.4f}   │ {kge_np_metrics['NSE']:>10.4f}                   │
+│  KGE         │ {kge_metrics['KGE']:>10.4f}   │ {kge_inv_metrics['KGE']:>10.4f}   │ {kge_sqrt_metrics['KGE']:>10.4f}   │ {kge_log_metrics['KGE']:>10.4f}   │ {kge_np_metrics['KGE']:>10.4f}                   │
+│  PBIAS (%)   │ {kge_metrics['PBIAS']:>+10.2f}   │ {kge_inv_metrics['PBIAS']:>+10.2f}   │ {kge_sqrt_metrics['PBIAS']:>+10.2f}   │ {kge_log_metrics['PBIAS']:>+10.2f}   │ {kge_np_metrics['PBIAS']:>+10.2f}                   │
+├──────────────┼──────────────┼──────────────┼──────────────┼──────────────┼──────────────────────────────┤
+│  Best for    │ Flood peaks  │ Low flows    │ Balanced     │ Use caution  │ Outlier-robust               │
+└──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────────────────────┘
 """)
 
 # Save calibrated parameters
@@ -1556,6 +2299,7 @@ print("  6. Volume/Error: PBIAS, RMSE, Pearson r, Spearman ρ")
 # %%
 # Compute comprehensive evaluation for all calibrations
 print("Computing comprehensive evaluation for all calibrations...")
+print("\nNSE-based objectives:")
 
 eval_nse = comprehensive_evaluation(obs_flow, sim_flow, "NSE(Q)")
 eval_log = comprehensive_evaluation(obs_flow, log_sim_flow, "LogNSE")
@@ -1563,11 +2307,18 @@ eval_inv = comprehensive_evaluation(obs_flow, inv_sim_flow, "InvNSE(1/Q)")
 eval_sqrt = comprehensive_evaluation(obs_flow, sqrt_sim_flow, "SqrtNSE(√Q)")
 eval_sdeb = comprehensive_evaluation(obs_flow, sdeb_sim_flow, "SDEB")
 
-print("Done! Creating comparison table...")
+print("KGE-based objectives:")
+eval_kge = comprehensive_evaluation(obs_flow, kge_sim_flow, "KGE")
+eval_kge_inv = comprehensive_evaluation(obs_flow, kge_inv_sim_flow, "KGE(1/Q)")
+eval_kge_sqrt = comprehensive_evaluation(obs_flow, kge_sqrt_sim_flow, "KGE(√Q)")
+eval_kge_log = comprehensive_evaluation(obs_flow, kge_log_sim_flow, "KGE(log)")
+eval_kge_np = comprehensive_evaluation(obs_flow, kge_np_sim_flow, "KGE_np")
+
+print("Done! Creating comparison tables...")
 
 # %%
-# Create comprehensive comparison DataFrame
-comparison_data = {
+# Create comprehensive comparison DataFrame for NSE-based objectives
+comparison_data_nse = {
     'NSE(Q)': eval_nse,
     'LogNSE': eval_log,
     'InvNSE(1/Q)': eval_inv,
@@ -1575,8 +2326,22 @@ comparison_data = {
     'SDEB': eval_sdeb
 }
 
+# Create comprehensive comparison DataFrame for KGE-based objectives
+comparison_data_kge = {
+    'KGE': eval_kge,
+    'KGE(1/Q)': eval_kge_inv,
+    'KGE(√Q)': eval_kge_sqrt,
+    'KGE(log)': eval_kge_log,
+    'KGE_np': eval_kge_np
+}
+
+# Combine all comparisons
+comparison_data = {**comparison_data_nse, **comparison_data_kge}
+
 # Convert to DataFrame
 comp_df = pd.DataFrame(comparison_data)
+comp_df_nse = pd.DataFrame(comparison_data_nse)
+comp_df_kge = pd.DataFrame(comparison_data_kge)
 
 # %% [markdown]
 # ### Comprehensive Evaluation Results
@@ -1585,11 +2350,11 @@ comp_df = pd.DataFrame(comparison_data)
 # This provides a much fairer comparison than using only NSE/KGE/PBIAS.
 
 # %%
-# Display comprehensive comparison with formatting
-print("=" * 115)
-print("COMPREHENSIVE MODEL EVALUATION - ALL METRICS")
-print("=" * 115)
-print(f"\nCalibration objectives: NSE(Q), LogNSE, InvNSE(1/Q), SqrtNSE(√Q), SDEB")
+# Display comprehensive comparison with formatting - ALL objective functions
+print("=" * 175)
+print("COMPREHENSIVE MODEL EVALUATION - ALL OBJECTIVE FUNCTIONS")
+print("=" * 175)
+print(f"\nCalibration objectives: NSE(Q), LogNSE, InvNSE, SqrtNSE, SDEB | KGE, KGE(1/Q), KGE(√Q), KGE(log), KGE_np")
 print(f"Evaluation period: {len(obs_flow):,} days (after warmup)")
 print()
 
@@ -1607,29 +2372,54 @@ categories = {
     'VOLUME & TIMING': ['PBIAS (%)', 'RMSE', 'Pearson r', 'Spearman ρ']
 }
 
+# Column width for values
+w = 11  # width for each value column
+
 for category, metrics_list in categories.items():
-    print(f"\n{'─' * 115}")
+    print(f"\n{'─' * 175}")
     print(f"  {category}")
-    print(f"{'─' * 115}")
-    print(f"  {'Metric':<28} {'NSE(Q)':>14} {'LogNSE':>14} {'InvNSE(1/Q)':>14} {'SqrtNSE(√Q)':>14} {'SDEB':>14}")
-    print(f"  {'-' * 113}")
+    print(f"{'─' * 175}")
+    # Header with NSE-based and KGE-based groups
+    header = f"  {'Metric':<26} |{'NSE(Q)':>{w}}{'LogNSE':>{w}}{'InvNSE':>{w}}{'SqrtNSE':>{w}}{'SDEB':>{w}} |{'KGE':>{w}}{'KGE(1/Q)':>{w}}{'KGE(√Q)':>{w}}{'KGE(log)':>{w}}{'KGE_np':>{w}}"
+    print(header)
+    print(f"  {'-' * 173}")
     
     for metric in metrics_list:
-        if metric in comp_df.index:
-            row = comp_df.loc[metric]
-            # Format based on metric type
-            if 'Error' in metric or 'Bias' in metric:
-                # Error/bias metrics: show sign, smaller magnitude is better
-                values = [f"{v:>+13.2f}" if not pd.isna(v) else f"{'N/A':>14}" for v in row]
-            elif metric == 'RMSE':
-                # RMSE: no sign, smaller is better
-                values = [f"{v:>14.2f}" if not pd.isna(v) else f"{'N/A':>14}" for v in row]
-            else:
-                # Efficiency metrics: higher is better
-                values = [f"{v:>14.4f}" if not pd.isna(v) else f"{'N/A':>14}" for v in row]
-            print(f"  {metric:<28} {values[0]} {values[1]} {values[2]} {values[3]} {values[4]}")
+        nse_values = []
+        kge_values = []
+        
+        # Get NSE-based values
+        if metric in comp_df_nse.index:
+            row_nse = comp_df_nse.loc[metric]
+            for v in row_nse:
+                if 'Error' in metric or 'Bias' in metric:
+                    nse_values.append(f"{v:>+{w-1}.2f}" if not pd.isna(v) else f"{'N/A':>{w}}")
+                elif metric == 'RMSE':
+                    nse_values.append(f"{v:>{w}.2f}" if not pd.isna(v) else f"{'N/A':>{w}}")
+                else:
+                    nse_values.append(f"{v:>{w}.4f}" if not pd.isna(v) else f"{'N/A':>{w}}")
+        else:
+            nse_values = [f"{'N/A':>{w}}"] * 5
+            
+        # Get KGE-based values
+        if metric in comp_df_kge.index:
+            row_kge = comp_df_kge.loc[metric]
+            for v in row_kge:
+                if 'Error' in metric or 'Bias' in metric:
+                    kge_values.append(f"{v:>+{w-1}.2f}" if not pd.isna(v) else f"{'N/A':>{w}}")
+                elif metric == 'RMSE':
+                    kge_values.append(f"{v:>{w}.2f}" if not pd.isna(v) else f"{'N/A':>{w}}")
+                else:
+                    kge_values.append(f"{v:>{w}.4f}" if not pd.isna(v) else f"{'N/A':>{w}}")
+        else:
+            kge_values = [f"{'N/A':>{w}}"] * 5
+        
+        # Print combined row
+        nse_str = ''.join(nse_values)
+        kge_str = ''.join(kge_values)
+        print(f"  {metric:<26} |{nse_str} |{kge_str}")
 
-print(f"\n{'=' * 115}")
+print(f"\n{'=' * 175}")
 
 # %% [markdown]
 # ### Interpretation Guide
@@ -1677,14 +2467,15 @@ print(f"\n{'=' * 115}")
 # %%
 # Visual comparison: Radar/polar plot of key metrics (normalized)
 # Select representative metrics from each category for visualization
+# Compare NSE-based objectives
 
 key_metrics = ['NSE', 'KGE', 'NSE (log Q)', 'NSE (1/Q)', 'Pearson r']
-key_metrics_present = [m for m in key_metrics if m in comp_df.index]
+key_metrics_present = [m for m in key_metrics if m in comp_df_nse.index]
 
-# Create radar chart data
-fig_radar = go.Figure()
+# Create radar chart for NSE-based objectives
+fig_radar_nse = go.Figure()
 
-colors_radar = {
+colors_radar_nse = {
     'NSE(Q)': '#E41A1C',
     'LogNSE': '#377EB8',
     'InvNSE(1/Q)': '#4DAF4A',
@@ -1692,31 +2483,69 @@ colors_radar = {
     'SDEB': '#FF7F00'
 }
 
-for method in comp_df.columns:
-    values = [comp_df.loc[m, method] for m in key_metrics_present]
+for method in comp_df_nse.columns:
+    values = [comp_df_nse.loc[m, method] for m in key_metrics_present]
     # Close the radar chart
     values_closed = values + [values[0]]
     metrics_closed = key_metrics_present + [key_metrics_present[0]]
     
-    fig_radar.add_trace(go.Scatterpolar(
+    fig_radar_nse.add_trace(go.Scatterpolar(
         r=values_closed,
         theta=metrics_closed,
         fill='toself',
         name=method,
-        line=dict(color=colors_radar[method]),
+        line=dict(color=colors_radar_nse[method]),
         opacity=0.6
     ))
 
-fig_radar.update_layout(
+fig_radar_nse.update_layout(
     polar=dict(
         radialaxis=dict(visible=True, range=[0, 1])
     ),
-    title="<b>Radar Chart: Key Efficiency Metrics Comparison</b><br>" +
+    title="<b>Radar Chart: NSE-Based Objectives Comparison</b><br>" +
           "<sup>Outer = better performance | Each calibration's strengths are visible</sup>",
     height=500,
     showlegend=True
 )
-fig_radar.show()
+fig_radar_nse.show()
+
+# %%
+# Create radar chart for KGE-based objectives
+fig_radar_kge = go.Figure()
+
+colors_radar_kge = {
+    'KGE': '#A65628',
+    'KGE(1/Q)': '#F781BF',
+    'KGE(√Q)': '#999999',
+    'KGE(log)': '#66C2A5',
+    'KGE_np': '#FC8D62'
+}
+
+for method in comp_df_kge.columns:
+    values = [comp_df_kge.loc[m, method] for m in key_metrics_present]
+    # Close the radar chart
+    values_closed = values + [values[0]]
+    metrics_closed = key_metrics_present + [key_metrics_present[0]]
+    
+    fig_radar_kge.add_trace(go.Scatterpolar(
+        r=values_closed,
+        theta=metrics_closed,
+        fill='toself',
+        name=method,
+        line=dict(color=colors_radar_kge[method]),
+        opacity=0.6
+    ))
+
+fig_radar_kge.update_layout(
+    polar=dict(
+        radialaxis=dict(visible=True, range=[0, 1])
+    ),
+    title="<b>Radar Chart: KGE-Based Objectives Comparison</b><br>" +
+          "<sup>Outer = better performance | Each calibration's strengths are visible</sup>",
+    height=500,
+    showlegend=True
+)
+fig_radar_kge.show()
 
 # %%
 # Heatmap of all metrics (normalized for visual comparison)
@@ -1948,20 +2777,26 @@ log_runner_custom = CalibrationRunner(
     model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
     inputs=cal_inputs,
     observed=cal_observed,
-    objective=log_objective,
+    objective=log_nse_objective,
     parameter_bounds=custom_bounds,
     warmup_period=WARMUP_DAYS
 )
 
-log_result_custom = log_runner_custom.run_sceua(
-    n_iterations=5000,
-    ngs=7,
-    kstop=3,
-    pcento=0.01,
-    dbname='quickstart_lognse_custom',
-    dbformat='csv'
+log_result_custom = log_runner_custom.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
 )
 print("\n" + log_result_custom.summary())
+
+# Save calibration report
+log_report_custom = log_runner_custom.create_report(log_result_custom, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+log_report_custom.save('../test_data/reports/410734_lognse_custom')
+print(f"Calibration saved to: test_data/reports/410734_lognse_custom.pkl")
 
 # %%
 # Re-calibrate with InvNSE using custom bounds
@@ -1973,20 +2808,26 @@ inv_runner_custom = CalibrationRunner(
     model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
     inputs=cal_inputs,
     observed=cal_observed,
-    objective=inv_objective,
+    objective=inv_nse_objective,
     parameter_bounds=custom_bounds,
     warmup_period=WARMUP_DAYS
 )
 
-inv_result_custom = inv_runner_custom.run_sceua(
-    n_iterations=5000,
-    ngs=7,
-    kstop=3,
-    pcento=0.01,
-    dbname='quickstart_invnse_custom',
-    dbformat='csv'
+inv_result_custom = inv_runner_custom.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
 )
 print("\n" + inv_result_custom.summary())
+
+# Save calibration report
+inv_report_custom = inv_runner_custom.create_report(inv_result_custom, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+inv_report_custom.save('../test_data/reports/410734_invnse_custom')
+print(f"Calibration saved to: test_data/reports/410734_invnse_custom.pkl")
 
 # %%
 # Re-calibrate with SqrtNSE using custom bounds
@@ -1998,20 +2839,26 @@ sqrt_runner_custom = CalibrationRunner(
     model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
     inputs=cal_inputs,
     observed=cal_observed,
-    objective=sqrt_objective,
+    objective=sqrt_nse_objective,
     parameter_bounds=custom_bounds,
     warmup_period=WARMUP_DAYS
 )
 
-sqrt_result_custom = sqrt_runner_custom.run_sceua(
-    n_iterations=5000,
-    ngs=7,
-    kstop=3,
-    pcento=0.01,
-    dbname='quickstart_sqrtnse_custom',
-    dbformat='csv'
+sqrt_result_custom = sqrt_runner_custom.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
 )
 print("\n" + sqrt_result_custom.summary())
+
+# Save calibration report
+sqrt_report_custom = sqrt_runner_custom.create_report(sqrt_result_custom, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+sqrt_report_custom.save('../test_data/reports/410734_sqrtnse_custom')
+print(f"Calibration saved to: test_data/reports/410734_sqrtnse_custom.pkl")
 
 # %%
 # Re-calibrate with SDEB using custom bounds
@@ -2028,15 +2875,21 @@ sdeb_runner_custom = CalibrationRunner(
     warmup_period=WARMUP_DAYS
 )
 
-sdeb_result_custom = sdeb_runner_custom.run_sceua(
-    n_iterations=5000,
-    ngs=7,
-    kstop=3,
-    pcento=0.01,
-    dbname='quickstart_sdeb_custom',
-    dbformat='csv'
+sdeb_result_custom = sdeb_runner_custom.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100,
+    tolerance=1e-4
 )
 print("\n" + sdeb_result_custom.summary())
+
+# Save calibration report
+sdeb_report_custom = sdeb_runner_custom.create_report(sdeb_result_custom, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+sdeb_report_custom.save('../test_data/reports/410734_sdeb_custom')
+print(f"Calibration saved to: test_data/reports/410734_sdeb_custom.pkl")
 
 # %%
 # Run simulations with new calibrated parameters
@@ -2065,6 +2918,97 @@ log_metrics_custom = calculate_metrics(log_sim_custom, obs_flow)
 inv_metrics_custom = calculate_metrics(inv_sim_custom, obs_flow)
 sqrt_metrics_custom = calculate_metrics(sqrt_sim_custom, obs_flow)
 sdeb_metrics_custom = calculate_metrics(sdeb_sim_custom, obs_flow)
+
+# %%
+# Visual comparison of calibrated parameters with CUSTOM bounds
+# Each parameter shown as position within CUSTOM bounds (0% = lower bound, 100% = upper bound)
+
+param_names_custom = list(log_result_custom.best_parameters.keys())
+
+# Calculate normalized positions (0-100%) for each parameter using CUSTOM bounds
+def normalize_param_custom(value, param_name):
+    low, high = custom_bounds[param_name]
+    return (value - low) / (high - low) * 100
+
+# Prepare data for each method (custom bounds calibrations)
+methods_custom = ['LogNSE (Custom)', 'InvNSE (Custom)', 'SqrtNSE (Custom)', 'SDEB (Custom)']
+results_list_custom = [log_result_custom, inv_result_custom, sqrt_result_custom, sdeb_result_custom]
+method_colors_custom = [colors['log'], colors['inv'], colors['sqrt'], colors['sdeb']]
+
+# Create figure with subplots - one column per method
+fig = make_subplots(
+    rows=1, cols=4,
+    subplot_titles=methods_custom,
+    horizontal_spacing=0.02
+)
+
+for col, (method_result, color) in enumerate(zip(results_list_custom, method_colors_custom), 1):
+    # Get actual values and normalized values for this method
+    actual_values = [method_result.best_parameters[p] for p in param_names_custom]
+    norm_values = [normalize_param_custom(v, p) for v, p in zip(actual_values, param_names_custom)]
+    
+    # Format text to show actual value (smart formatting based on magnitude)
+    def format_value_custom(v):
+        if abs(v) >= 100:
+            return f'{v:.1f}'
+        elif abs(v) >= 10:
+            return f'{v:.2f}'
+        elif abs(v) >= 1:
+            return f'{v:.3f}'
+        else:
+            return f'{v:.4f}'
+    
+    bar_text = [format_value_custom(v) for v in actual_values]
+    
+    # Create hover text with full details (showing CUSTOM bounds)
+    hover_text = [
+        f'{p}<br>Value: {format_value_custom(v)}<br>Position: {n:.1f}%<br>Custom Bounds: [{custom_bounds[p][0]:.3f}, {custom_bounds[p][1]:.3f}]'
+        for p, v, n in zip(param_names_custom, actual_values, norm_values)
+    ]
+    
+    # Create horizontal bar for each parameter
+    fig.add_trace(
+        go.Bar(
+            y=param_names_custom,
+            x=norm_values,
+            orientation='h',
+            marker_color=color,
+            text=bar_text,
+            textposition='inside',
+            textfont=dict(color='white', size=9),
+            showlegend=False,
+            hovertext=hover_text,
+            hoverinfo='text'
+        ),
+        row=1, col=col
+    )
+    
+    # Add vertical line at 50%
+    fig.add_vline(x=50, line_dash="dash", line_color="gray", opacity=0.5, row=1, col=col)
+
+# Update layout
+fig.update_xaxes(range=[0, 100], tickvals=[0, 50, 100], ticktext=['0%', '50%', '100%'])
+fig.update_yaxes(categoryorder='array', categoryarray=param_names_custom[::-1])  # Reverse for top-to-bottom
+
+# Only show y-axis labels on first subplot
+for col in range(2, 5):
+    fig.update_yaxes(showticklabels=False, row=1, col=col)
+
+fig.update_layout(
+    title="<b>Calibrated Parameters with CUSTOM Bounds</b><br>" +
+          "<sup>Bar position = % within CUSTOM bounds | Bar text = actual parameter value | Hover for details</sup>",
+    height=650,
+    width=1000,
+    bargap=0.3
+)
+
+fig.show()
+
+print("\nInterpretation:")
+print("  - Bar length shows position within CUSTOM parameter bounds (0% = lower, 100% = upper)")
+print("  - Numbers on bars show the actual calibrated parameter values")
+print("  - Parameters at extremes (near 0% or 100%) may still need bounds adjustment")
+print("  - Compare with the earlier figure to see if expanding bounds helped")
 
 # %% [markdown]
 # ### Comparing Default vs Custom Bounds Results
@@ -2258,14 +3202,182 @@ fig.show()
 
 # %% [markdown]
 # ---
+# ## Step 10: Working with Saved Calibration Reports
+#
+# All calibrations in this notebook have been automatically saved as `CalibrationReport` objects.
+# These reports contain everything needed for visualization, analysis, and re-simulation.
+#
+# ### Summary of Saved Calibrations
+#
+# **NSE-based Objectives (Default Bounds):**
+#
+# | Report File | Objective | Description |
+# |-------------|-----------|-------------|
+# | `410734_nse.pkl` | NSE | Standard NSE on flows |
+# | `410734_lognse.pkl` | LogNSE | Log-transformed, balanced |
+# | `410734_invnse.pkl` | InvNSE | Inverse-transformed, low flows |
+# | `410734_sqrtnse.pkl` | SqrtNSE | Sqrt-transformed, moderate |
+# | `410734_sdeb.pkl` | SDEB | FDC + timing |
+#
+# **KGE-based Objectives (Default Bounds):**
+#
+# | Report File | Objective | Description |
+# |-------------|-----------|-------------|
+# | `410734_kge.pkl` | KGE | Standard KGE (2012) |
+# | `410734_kge_inv.pkl` | KGE(1/Q) | Inverse-transformed, low flows |
+# | `410734_kge_sqrt.pkl` | KGE(√Q) | Sqrt-transformed, balanced (recommended) |
+# | `410734_kge_log.pkl` | KGE(log) | Log-transformed (use with caution) |
+# | `410734_kge_np.pkl` | KGE_np | Non-parametric, robust |
+#
+# **Custom Bounds Calibrations:**
+#
+# | Report File | Objective | Bounds |
+# |-------------|-----------|--------|
+# | `410734_lognse_custom.pkl` | LogNSE | Custom |
+# | `410734_invnse_custom.pkl` | InvNSE | Custom |
+# | `410734_sqrtnse_custom.pkl` | SqrtNSE | Custom |
+# | `410734_sdeb_custom.pkl` | SDEB | Custom |
+#
+# ### Loading Saved Reports
+#
+# You can load any saved report and generate visualizations:
+
+# %%
+# List all saved reports
+from pathlib import Path
+from pyrrm.calibration import CalibrationReport
+
+report_dir = Path('../test_data/reports')
+report_files = sorted(report_dir.glob('410734_*.pkl'))
+
+print("=" * 70)
+print("SAVED CALIBRATION REPORTS")
+print("=" * 70)
+print(f"\nFound {len(report_files)} saved reports in {report_dir}:\n")
+
+for report_file in report_files:
+    try:
+        rpt = CalibrationReport.load(str(report_file))
+        metrics = rpt.calculate_metrics()
+        print(f"  {report_file.name:30s} | {rpt.result.objective_name:12s} | NSE: {metrics['NSE']:.4f}")
+    except Exception as e:
+        print(f"  {report_file.name:30s} | Error: {e}")
+
+# %%
+# Load a specific report for detailed analysis
+# Using the SDEB with custom bounds as an example (best overall performance)
+loaded_report = CalibrationReport.load('../test_data/reports/410734_sdeb_custom.pkl')
+print(f"Loaded report: {loaded_report}")
+
+# Check that we can still calculate metrics
+metrics = loaded_report.calculate_metrics()
+print(f"\nMetrics from loaded report:")
+for name, value in metrics.items():
+    print(f"  {name}: {value:.4f}")
+
+# %% [markdown]
+# ### Generating Report Cards
+#
+# The CalibrationReport provides methods for generating comprehensive visualizations:
+
+# %%
+# Generate a matplotlib report card (comprehensive figure)
+fig = loaded_report.plot_report_card(figsize=(18, 14))
+fig.savefig('../test_data/reports/410734_sdeb_custom_report_card.png', dpi=150, bbox_inches='tight')
+print("Report card saved to: ../test_data/reports/410734_sdeb_custom_report_card.png")
+plt.show()
+
+# %%
+# Generate an interactive Plotly report card (HTML)
+fig_plotly = loaded_report.plot_report_card_interactive(height=1000)
+fig_plotly.write_html('../test_data/reports/410734_sdeb_custom_report_card.html')
+print("Interactive report saved to: ../test_data/reports/410734_sdeb_custom_report_card.html")
+fig_plotly.show()
+
+# %% [markdown]
+# ### Individual Plots
+#
+# You can also generate individual plots from the report:
+
+# %%
+# Individual plots can be generated with either Matplotlib or Plotly backend
+# Use backend='matplotlib' (default) or backend='plotly'
+
+# Matplotlib versions (static, good for publications)
+print("=== Matplotlib Plots ===")
+fig_hydro = loaded_report.plot_hydrograph(log_scale=False, backend='matplotlib')
+plt.show()
+
+fig_fdc = loaded_report.plot_fdc(log_scale=True, backend='matplotlib')
+plt.show()
+
+fig_scatter = loaded_report.plot_scatter(backend='matplotlib')
+plt.show()
+
+fig_bounds = loaded_report.plot_parameter_bounds(backend='matplotlib')
+plt.show()
+
+# %%
+# Plotly versions (interactive, good for exploration)
+print("=== Plotly Plots (Interactive) ===")
+
+fig_hydro_plotly = loaded_report.plot_hydrograph(log_scale=False, backend='plotly')
+fig_hydro_plotly.show()
+
+fig_fdc_plotly = loaded_report.plot_fdc(log_scale=True, backend='plotly')
+fig_fdc_plotly.show()
+
+fig_scatter_plotly = loaded_report.plot_scatter(backend='plotly')
+fig_scatter_plotly.show()
+
+fig_bounds_plotly = loaded_report.plot_parameter_bounds(backend='plotly')
+fig_bounds_plotly.show()
+
+# %% [markdown]
+# ### Re-running Simulations
+#
+# If you included the input data (default), you can re-run simulations with modified parameters:
+
+# %%
+# Check if re-simulation is possible
+print(f"Can re-run simulation: {loaded_report.can_rerun()}")
+
+# Re-run with best parameters (should match stored simulation)
+sim_rerun = loaded_report.rerun_simulation()
+print(f"Re-run simulation length: {len(sim_rerun)}")
+
+# Verify it matches the stored simulation
+if np.allclose(sim_rerun, loaded_report.simulated, rtol=1e-6):
+    print("Re-run matches stored simulation!")
+else:
+    print("Note: Minor differences due to floating-point precision")
+
+# %%
+# You can also try modified parameters
+modified_params = loaded_report.result.best_parameters.copy()
+modified_params['uztwm'] = modified_params['uztwm'] * 1.5  # Increase upper zone storage
+
+sim_modified = loaded_report.rerun_simulation(modified_params)
+print(f"Modified simulation length: {len(sim_modified)}")
+
+# Compare metrics
+from pyrrm.calibration.objective_functions import calculate_metrics
+original_metrics = calculate_metrics(loaded_report.simulated, loaded_report.observed)
+modified_metrics = calculate_metrics(sim_modified, loaded_report.observed)
+
+print(f"\nOriginal NSE: {original_metrics['NSE']:.4f}")
+print(f"Modified NSE: {modified_metrics['NSE']:.4f}")
+
+# %% [markdown]
+# ---
 # ## Next Steps
 #
 # ### Improve Your Calibration
 #
-# - **More iterations**: Increase `n_iterations` for better convergence
+# - **More evaluations**: Increase `max_evals` for better convergence
 # - **Longer period**: Use more years of data for robust parameters
-# - **Different objective**: Try KGE or composite objectives (see Notebook 03)
-# - **Different algorithm**: Try DREAM for uncertainty estimation (see Notebook 04)
+# - **Different objective**: Try KGE or composite objectives (see Notebook 04)
+# - **Different algorithm**: Try DREAM for uncertainty estimation (see Notebook 05)
 #
 # ### Validate Your Model
 #
@@ -2280,21 +3392,22 @@ fig.show()
 # | Notebook | Topic |
 # |----------|-------|
 # | **01_sacramento_verification** | How pyrrm was verified against reference implementations |
-# | **03_objective_functions** | Different metrics and how they affect calibration |
-# | **04_algorithm_comparison** | Compare DREAM, PyDREAM, SCE-UA, and SciPy DE |
-# | **05_calibration_monitor** | Monitor long-running calibrations in real-time |
+# | **03_routing_quickstart** | Add channel routing to improve downstream predictions |
+# | **04_objective_functions** | Different metrics and how they affect calibration |
+# | **05_algorithm_comparison** | Compare DREAM, PyDREAM, SCE-UA Direct, and SciPy DE |
+# | **06_calibration_monitor** | Monitor long-running calibrations in real-time |
 #
 # ### Troubleshooting
 #
 # **Low NSE?** Try:
 # - Check data quality (missing values, outliers)
-# - Increase calibration iterations
+# - Increase calibration evaluations (`max_evals`)
 # - Try a different objective function
 # - Verify catchment area is correct
 #
 # **Calibration too slow?** Try:
-# - Use fewer iterations (for exploration)
-# - Use SCE-UA instead of DREAM (faster)
+# - Use fewer evaluations (for exploration)
+# - Use SCE-UA Direct instead of DREAM (faster)
 # - Reduce the calibration period for initial exploration
 
 # %%

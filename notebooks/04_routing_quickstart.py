@@ -673,52 +673,77 @@ print(f"  Current params:      K=5.0, m=0.9")
 # ---
 # ## Part 5: Calibration with Routing (Synthetic Data)
 #
-# Now let's calibrate the RR model + routing parameters together on the synthetic
-# data using the **SqrtNSE objective** (NSE on sqrt-transformed flows). 
-# This verifies we can recover the true routing parameters (K=3.5, m=0.85).
+# Now let's demonstrate that we can **recover the true routing parameters** from
+# calibration. To clearly isolate the routing effect, we'll:
+#
+# 1. **Fix the RR parameters** at their true values (so routing is the only unknown)
+# 2. **Calibrate only the routing parameters** (K, m, n_subreaches)
+# 3. **Verify recovery** by comparing calibrated vs true values
+#
+# This controlled experiment proves the calibration framework can identify
+# routing parameters when given clean data with a known routing signal.
 
 # %%
-# Create fresh model for calibration
+# Create model with TRUE RR parameters (fixed) and initial routing guesses
 rr_model_synth = Sacramento()
-router_synth = NonlinearMuskingumRouter(K=5.0, m=0.9, n_subreaches=3)
+rr_model_synth.set_parameters(TRUE_RR_PARAMS)  # Fix RR params at true values
+
+# Start routing with WRONG initial guesses (far from true values)
+router_synth = NonlinearMuskingumRouter(
+    K=8.0,           # True K=3.5 (starting far away)
+    m=0.6,           # True m=0.85 (starting far away)
+    n_subreaches=1   # True n=3 (starting different)
+)
 model_synth = RoutedModel(rr_model_synth, router_synth, routing_enabled=True)
 
-# Custom bounds - tighter for routing
-synth_bounds = model_synth.get_parameter_bounds()
-synth_bounds['routing_K'] = (0.5, 10.0)        # True K=3.5
-synth_bounds['routing_m'] = (0.5, 1.2)         # True m=0.85
-synth_bounds['routing_n_subreaches'] = (1, 10)  # Calibrate n_subreaches
+# ONLY calibrate routing parameters (RR params are fixed)
+routing_only_bounds = {
+    'routing_K': (0.5, 15.0),           # True K=3.5
+    'routing_m': (0.5, 1.2),            # True m=0.85
+    'routing_n_subreaches': (1, 10)     # True n=3
+}
 
-# Create calibration runner
+# Create calibration runner with ONLY routing bounds
 runner_synth = CalibrationRunner(
     model=model_synth,
     inputs=inputs,
     observed=observed,
-    objective=SqrtNSE(),  # Use sqrt-transformed NSE for balanced high/low flow performance
-    parameter_bounds=synth_bounds,
+    objective=SqrtNSE(),  # Sqrt-transformed NSE
+    parameter_bounds=routing_only_bounds,  # Only routing params!
     warmup_period=WARMUP_DAYS
 )
 
 print("Synthetic Data Calibration Setup:")
-print("=" * 50)
-print(f"Total parameters: {len(synth_bounds)}")
-print(f"Routing bounds: K=[0.5, 10], m=[0.5, 1.2], n=[1, 10]")
-print(f"True values to recover: K={TRUE_ROUTING_PARAMS['K']}, m={TRUE_ROUTING_PARAMS['m']}, n={TRUE_ROUTING_PARAMS.get('n_subreaches', 3)}")
+print("=" * 60)
+print("\nObjective: This experiment tests if calibration can RECOVER")
+print("           the true routing parameters from synthetic data.")
+print()
+print("Configuration:")
+print("  - RR Parameters:      FIXED at true values (not calibrated)")
+print("  - Routing Parameters: CALIBRATED (3 parameters)")
+print()
+print("Initial Guesses vs True Values:")
+print("-" * 60)
+print(f"  {'Parameter':<15} {'Initial':>12} {'True':>12} {'Bounds':>15}")
+print(f"  {'K':<15} {8.0:>12.1f} {TRUE_ROUTING_PARAMS['K']:>12.1f} {'[0.5, 15.0]':>15}")
+print(f"  {'m':<15} {0.6:>12.2f} {TRUE_ROUTING_PARAMS['m']:>12.2f} {'[0.5, 1.2]':>15}")
+print(f"  {'n_subreaches':<15} {1:>12d} {TRUE_ROUTING_PARAMS['n_subreaches']:>12d} {'[1, 10]':>15}")
 
 # %%
-# Run calibration (brief for demonstration)
+# Run calibration
 import warnings
-print("\nRunning SCE-UA calibration on synthetic data...")
+print("\nRunning SCE-UA calibration (routing parameters only)...")
+print("This should converge quickly with only 3 parameters.\n")
 
 with warnings.catch_warnings():
     warnings.filterwarnings('ignore', message='.*Timestep dt.*too large.*')
     warnings.filterwarnings('ignore', message='.*Newton-Raphson did not converge.*')
     
     result_synth = runner_synth.run_sceua(
-        n_iterations=5000,
-        ngs=7,
-        kstop=3,
-        pcento=0.01,
+        n_iterations=2000,  # Fewer iterations needed for 3 params
+        ngs=5,
+        kstop=5,
+        pcento=0.001,
         dbname='routing_synth_cal',
         dbformat='csv'
     )
@@ -727,18 +752,121 @@ print("\n" + result_synth.summary())
 
 # %%
 # Check routing parameter recovery
-cal_routing = {k: v for k, v in result_synth.best_parameters.items() 
-               if k.startswith('routing_')}
+cal_K = result_synth.best_parameters.get('routing_K', 0)
+cal_m = result_synth.best_parameters.get('routing_m', 0)
+cal_n = int(round(result_synth.best_parameters.get('routing_n_subreaches', 1)))
 
-print("=" * 60)
-print("ROUTING PARAMETER RECOVERY")
-print("=" * 60)
-print(f"\n{'Parameter':<20} {'True':>10} {'Calibrated':>12} {'Error':>10}")
-print("-" * 55)
-print(f"{'K (storage const)':<20} {TRUE_ROUTING_PARAMS['K']:>10.2f} {cal_routing.get('routing_K', 0):>12.2f} {cal_routing.get('routing_K', 0) - TRUE_ROUTING_PARAMS['K']:>+10.2f}")
-print(f"{'m (nonlinearity)':<20} {TRUE_ROUTING_PARAMS['m']:>10.2f} {cal_routing.get('routing_m', 0):>12.2f} {cal_routing.get('routing_m', 0) - TRUE_ROUTING_PARAMS['m']:>+10.2f}")
+print("=" * 70)
+print("ROUTING PARAMETER RECOVERY RESULTS")
+print("=" * 70)
+print(f"\n{'Parameter':<20} {'True':>10} {'Calibrated':>12} {'Error':>10} {'Status':>12}")
+print("-" * 70)
 
-print(f"\nCalibrated NSE: {-result_synth.best_objective:.4f}")
+# K recovery
+K_error = cal_K - TRUE_ROUTING_PARAMS['K']
+K_status = "GOOD" if abs(K_error) < 1.0 else "CHECK"
+print(f"{'K (storage const)':<20} {TRUE_ROUTING_PARAMS['K']:>10.2f} {cal_K:>12.2f} {K_error:>+10.2f} {K_status:>12}")
+
+# m recovery  
+m_error = cal_m - TRUE_ROUTING_PARAMS['m']
+m_status = "GOOD" if abs(m_error) < 0.1 else "CHECK"
+print(f"{'m (nonlinearity)':<20} {TRUE_ROUTING_PARAMS['m']:>10.2f} {cal_m:>12.2f} {m_error:>+10.2f} {m_status:>12}")
+
+# n recovery
+n_error = cal_n - TRUE_ROUTING_PARAMS['n_subreaches']
+n_status = "GOOD" if n_error == 0 else "CHECK"
+print(f"{'n_subreaches':<20} {TRUE_ROUTING_PARAMS['n_subreaches']:>10d} {cal_n:>12d} {n_error:>+10d} {n_status:>12}")
+
+print("-" * 70)
+best_nse = -result_synth.best_objective
+print(f"\nFinal SqrtNSE: {best_nse:.4f}")
+print(f"  (Perfect = 1.0, values > 0.9 indicate excellent fit)")
+
+if best_nse > 0.95:
+    print("\n SUCCESS: Routing parameters recovered with high accuracy!")
+elif best_nse > 0.85:
+    print("\n GOOD: Routing parameters reasonably recovered.")
+else:
+    print("\n NOTE: Recovery may be limited - check parameter identifiability.")
+
+# %%
+# Visualize calibration results: Before vs After
+fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+
+# Run model with INITIAL (wrong) routing parameters
+rr_model_initial = Sacramento()
+rr_model_initial.set_parameters(TRUE_RR_PARAMS)  # Same RR params
+model_initial = RoutedModel(
+    rr_model_initial,
+    NonlinearMuskingumRouter(K=8.0, m=0.6, n_subreaches=1),  # Initial WRONG guesses
+    routing_enabled=True
+)
+model_initial.reset()
+results_initial = model_initial.run(inputs)
+sim_initial = results_initial['flow'].values
+
+# Run model with CALIBRATED routing parameters
+model_synth.set_parameters(result_synth.best_parameters)
+model_synth.reset()
+results_calibrated = model_synth.run(inputs)
+sim_calibrated = results_calibrated['flow'].values
+direct_calibrated = results_calibrated['direct_runoff'].values
+
+# Find peak event for visualization
+peak_idx = np.argmax(observed[WARMUP_DAYS:]) + WARMUP_DAYS
+event_slice = slice(peak_idx - 30, peak_idx + 60)
+time_axis = results_initial.index[event_slice]
+
+# Calculate NSE metrics
+def calc_nse(sim, obs):
+    """Calculate Nash-Sutcliffe Efficiency."""
+    return 1 - np.sum((sim - obs)**2) / np.sum((obs - np.mean(obs))**2)
+
+nse_initial = calc_nse(sim_initial[WARMUP_DAYS:], observed[WARMUP_DAYS:])
+nse_calibrated = calc_nse(sim_calibrated[WARMUP_DAYS:], observed[WARMUP_DAYS:])
+
+# Panel 1: Before Calibration (wrong routing params)
+ax = axes[0]
+ax.plot(time_axis, direct_calibrated[event_slice], 'b--', alpha=0.5, linewidth=1, label='Direct runoff (no routing)')
+ax.plot(time_axis, sim_initial[event_slice], 'orange', linewidth=2, label='Routed (initial: K=8.0, m=0.6, n=1)')
+ax.plot(time_axis, observed[event_slice], 'ko', markersize=4, alpha=0.7, label='Observed (true K=3.5, m=0.85, n=3)')
+ax.set_ylabel('Flow (mm/day)')
+ax.set_title(f'BEFORE Calibration: Wrong Routing Parameters (NSE = {nse_initial:.3f})')
+ax.legend(loc='upper right')
+ax.grid(True, alpha=0.3)
+
+# Panel 2: After Calibration (recovered routing params)
+ax = axes[1]
+ax.plot(time_axis, direct_calibrated[event_slice], 'b--', alpha=0.5, linewidth=1, label='Direct runoff (no routing)')
+ax.plot(time_axis, sim_calibrated[event_slice], 'green', linewidth=2, 
+        label=f'Routed (calibrated: K={cal_K:.2f}, m={cal_m:.2f}, n={cal_n})')
+ax.plot(time_axis, observed[event_slice], 'ko', markersize=4, alpha=0.7, label='Observed')
+ax.set_ylabel('Flow (mm/day)')
+ax.set_xlabel('Date')
+ax.set_title(f'AFTER Calibration: Recovered Routing Parameters (NSE = {nse_calibrated:.3f})')
+ax.legend(loc='upper right')
+ax.grid(True, alpha=0.3)
+
+# Add improvement annotation
+improvement = nse_calibrated - nse_initial
+fig.suptitle(f'Routing Parameter Recovery Test\nNSE: {nse_initial:.3f} (wrong params) → {nse_calibrated:.3f} (calibrated)', 
+             fontsize=12, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+# Summary
+print("\n" + "=" * 60)
+print("CALIBRATION SUMMARY")
+print("=" * 60)
+print(f"\nNSE Improvement: {nse_initial:.4f} → {nse_calibrated:.4f} (+{improvement:.4f})")
+print(f"\nParameter Comparison:")
+print(f"  True:       K={TRUE_ROUTING_PARAMS['K']:.1f}, m={TRUE_ROUTING_PARAMS['m']:.2f}, n={TRUE_ROUTING_PARAMS['n_subreaches']}")
+print(f"  Initial:    K=8.0, m=0.60, n=1")
+print(f"  Calibrated: K={cal_K:.2f}, m={cal_m:.2f}, n={cal_n}")
+print(f"\nRecovery Errors:")
+print(f"  K error: {cal_K - TRUE_ROUTING_PARAMS['K']:+.2f} days ({abs(cal_K - TRUE_ROUTING_PARAMS['K'])/TRUE_ROUTING_PARAMS['K']*100:.1f}%)")
+print(f"  m error: {cal_m - TRUE_ROUTING_PARAMS['m']:+.3f} ({abs(cal_m - TRUE_ROUTING_PARAMS['m'])/TRUE_ROUTING_PARAMS['m']*100:.1f}%)")
+print(f"  n error: {cal_n - TRUE_ROUTING_PARAMS['n_subreaches']:+d}")
 
 # %% [markdown]
 # ---

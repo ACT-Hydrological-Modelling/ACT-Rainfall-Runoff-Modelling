@@ -34,6 +34,22 @@ from pyrrm.visualization.sensitivity_plots import (
     plot_interaction_heatmap,
 )
 
+# Report visualization functions
+from pyrrm.visualization.report_plots import (
+    # Matplotlib functions
+    plot_report_card_matplotlib,
+    plot_hydrograph_comparison,
+    plot_fdc_comparison,
+    plot_scatter_comparison,
+    plot_parameter_bounds_chart,
+    # Plotly functions
+    plot_report_card_plotly,
+    plot_hydrograph_plotly,
+    plot_fdc_plotly,
+    plot_scatter_plotly,
+    plot_parameter_bounds_plotly,
+)
+
 __all__ = [
     # Model plots
     "plot_hydrograph_with_precipitation",
@@ -58,4 +74,16 @@ __all__ = [
     "plot_sobol_indices",
     "plot_parameter_importance_ranking",
     "plot_interaction_heatmap",
+    # Report plots (Matplotlib)
+    "plot_report_card_matplotlib",
+    "plot_hydrograph_comparison",
+    "plot_fdc_comparison",
+    "plot_scatter_comparison",
+    "plot_parameter_bounds_chart",
+    # Report plots (Plotly)
+    "plot_report_card_plotly",
+    "plot_hydrograph_plotly",
+    "plot_fdc_plotly",
+    "plot_scatter_plotly",
+    "plot_parameter_bounds_plotly",
 ]

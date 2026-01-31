@@ -1102,6 +1102,131 @@ class CalibrationRunner:
         """Convenience method for basin-hopping."""
         return self.run_scipy(method='basinhopping', **kwargs)
     
+    def run_sceua_direct(
+        self,
+        n_complexes: Optional[int] = None,
+        n_points_complex: Optional[int] = None,
+        alpha: float = 1.0,
+        beta: float = 0.5,
+        max_evals: int = 50000,
+        max_iter: int = 1000,
+        max_tolerant_iter: int = 30,
+        tolerance: float = 1e-6,
+        x_tolerance: float = 1e-8,
+        seed: Optional[int] = None,
+        pca_freq: int = 1,
+        pca_tol: float = 1e-3,
+        x0: Optional[Union[np.ndarray, List[Tuple[float, ...]], Dict[str, float]]] = None,
+        max_workers: int = 1,
+        callback: Optional[callable] = None,
+        verbose: bool = False,
+        progress_bar: bool = True,
+    ) -> CalibrationResult:
+        """
+        Run SCE-UA using the direct (vendored) implementation.
+        
+        This is an alternative to run_sceua() which uses SpotPy. Key advantages:
+        - No SpotPy dependency required
+        - More configuration options (PCA recovery, convergence criteria)
+        - Parallel evaluation via ThreadPoolExecutor
+        - Initial parameter sets can be provided via x0
+        - All evaluations tracked automatically
+        
+        The SCE-UA (Shuffled Complex Evolution - University of Arizona) algorithm
+        is a global optimization method developed specifically for calibrating
+        hydrological models.
+        
+        Args:
+            n_complexes: Number of complexes. If None, automatically determined
+                based on dimensionality: min(max(2, log2(n_params) + 5), 15).
+            n_points_complex: Points per complex. If None, calculated as
+                2 * n_complexes + 1.
+            alpha: Reflection coefficient for simplex evolution (default 1.0).
+            beta: Contraction coefficient for simplex evolution (default 0.5).
+            max_evals: Maximum number of function evaluations (default 50000).
+            max_iter: Maximum number of iterations (default 1000).
+            max_tolerant_iter: Stop if no improvement for this many iterations
+                (default 30).
+            tolerance: Minimum improvement in objective to count as progress
+                (default 1e-6).
+            x_tolerance: Stop if parameter ranges shrink below this threshold
+                (default 1e-8).
+            seed: Random seed for reproducibility.
+            pca_freq: Frequency of PCA recovery in iterations (default 1).
+            pca_tol: Tolerance for detecting lost dimensions (default 1e-3).
+            x0: Initial parameter sets. Can be:
+                - np.ndarray of shape (n_sets, n_params)
+                - List of tuples [(p1, p2, ...), ...]
+                - Dict {name: value} for a single starting point
+            max_workers: Number of parallel workers (default 1).
+                Set > 1 to enable parallel evaluation via ThreadPoolExecutor.
+            callback: Optional function called after each iteration with dict
+                containing {'iteration', 'nfev', 'best_fun', 'best_x'}.
+            verbose: If True, print progress every 10 iterations (default False).
+            progress_bar: If True and tqdm is available, show a progress bar
+                (default True).
+            
+        Returns:
+            CalibrationResult with best parameters and optimization history.
+            
+        Example:
+            >>> runner = CalibrationRunner(model, inputs, observed, objective=NSE())
+            >>> result = runner.run_sceua_direct(
+            ...     max_evals=20000,
+            ...     n_complexes=5,
+            ...     seed=42,
+            ...     max_workers=4  # Parallel evaluation
+            ... )
+            >>> print(f"Best NSE: {result.best_objective:.4f}")
+            
+        Notes:
+            This implementation includes enhancements from the literature:
+            - PCA recovery for lost dimensions (Chu et al., 2010)
+            - Adaptive smoothing parameter (Muttil & Jayawardena, 2008)
+            
+        See Also:
+            run_sceua: SpotPy-based SCE-UA implementation
+        """
+        from pyrrm.calibration.sceua_adapter import run_sceua_direct
+        
+        result = run_sceua_direct(
+            model=self.model,
+            inputs=self.inputs,
+            observed=self.observed,
+            objective=self.objective,
+            parameter_bounds=self._param_bounds,
+            warmup_period=self.warmup_period,
+            n_complexes=n_complexes,
+            n_points_complex=n_points_complex,
+            alpha=alpha,
+            beta=beta,
+            max_evals=max_evals,
+            max_iter=max_iter,
+            max_tolerant_iter=max_tolerant_iter,
+            tolerance=tolerance,
+            x_tolerance=x_tolerance,
+            seed=seed,
+            pca_freq=pca_freq,
+            pca_tol=pca_tol,
+            x0=x0,
+            max_workers=max_workers,
+            callback=callback,
+            verbose=verbose,
+            progress_bar=progress_bar,
+        )
+        
+        return CalibrationResult(
+            best_parameters=result['best_parameters'],
+            best_objective=result['best_objective'],
+            all_samples=result['all_samples'],
+            convergence_diagnostics=result['convergence_diagnostics'],
+            runtime_seconds=result['runtime_seconds'],
+            method='SCE-UA (direct)',
+            objective_name=self.objective.name,
+            success=result['convergence_diagnostics']['success'],
+            message=result['convergence_diagnostics']['message'],
+        )
+    
     def evaluate_parameters(
         self, 
         parameters: Dict[str, float]
@@ -1243,3 +1368,113 @@ class CalibrationRunner:
             checkpoint_interval=checkpoint_interval,
             **kwargs
         )
+    
+    def create_report(
+        self,
+        result: CalibrationResult,
+        catchment_info: Optional[Dict[str, Any]] = None,
+        include_inputs: bool = True
+    ) -> 'CalibrationReport':
+        """
+        Create a CalibrationReport from a calibration result.
+        
+        This method packages all the data needed for comprehensive visualization
+        and analysis into a CalibrationReport object that can be saved and loaded.
+        
+        Args:
+            result: CalibrationResult from any calibration method
+            catchment_info: Optional catchment metadata dictionary with keys like:
+                - name: Catchment name
+                - gauge_id: Gauge identifier
+                - area_km2: Catchment area (if different from model)
+            include_inputs: Whether to include full input data for re-simulation
+            
+        Returns:
+            CalibrationReport instance
+            
+        Example:
+            >>> runner = CalibrationRunner(model, inputs, observed, objective)
+            >>> result = runner.run_sceua_direct(max_evals=10000)
+            >>> report = runner.create_report(
+            ...     result,
+            ...     catchment_info={'name': 'Queanbeyan', 'gauge_id': '410734'}
+            ... )
+            >>> report.save('calibrations/queanbeyan_nse.pkl')
+        """
+        from pyrrm.calibration.report import CalibrationReport
+        
+        # Run simulation with best parameters to get simulated flow
+        self.model.set_parameters(result.best_parameters)
+        self.model.reset()
+        output = self.model.run(self.inputs)
+        
+        # Extract runoff column
+        if 'runoff' in output.columns:
+            sim_full = output['runoff'].values
+        elif 'flow' in output.columns:
+            sim_full = output['flow'].values
+        else:
+            sim_full = output.iloc[:, 0].values
+        
+        # Apply warmup
+        sim = sim_full[self.warmup_period:]
+        obs = self.observed[self.warmup_period:]
+        
+        # Get dates (post-warmup)
+        if hasattr(self.inputs, 'index') and isinstance(self.inputs.index, pd.DatetimeIndex):
+            dates = self.inputs.index[self.warmup_period:]
+        elif 'Date' in self.inputs.columns:
+            dates = pd.DatetimeIndex(self.inputs['Date'].values[self.warmup_period:])
+        else:
+            # Create dummy date range
+            dates = pd.date_range(start='2000-01-01', periods=len(obs), freq='D')
+        
+        # Extract precipitation and PET if available
+        precip = None
+        pet = None
+        for col in ['precipitation', 'Precipitation', 'P', 'Rain', 'rain']:
+            if col in self.inputs.columns:
+                precip = self.inputs[col].values[self.warmup_period:]
+                break
+        for col in ['pet', 'PET', 'evapotranspiration', 'ET']:
+            if col in self.inputs.columns:
+                pet = self.inputs[col].values[self.warmup_period:]
+                break
+        
+        # Determine calibration period
+        cal_start = str(dates[0].date()) if hasattr(dates[0], 'date') else str(dates[0])
+        cal_end = str(dates[-1].date()) if hasattr(dates[-1], 'date') else str(dates[-1])
+        
+        # Build model configuration for re-simulation
+        model_config = {
+            'module': self.model.__class__.__module__,
+            'class_name': self.model.__class__.__name__,
+            'init_kwargs': {}
+        }
+        
+        # Try to capture init kwargs (catchment_area_km2 is common)
+        if hasattr(self.model, 'catchment_area_km2') and self.model.catchment_area_km2 is not None:
+            model_config['init_kwargs']['catchment_area_km2'] = self.model.catchment_area_km2
+        
+        # Build catchment info
+        info = catchment_info.copy() if catchment_info else {}
+        if 'area_km2' not in info and hasattr(self.model, 'catchment_area_km2'):
+            info['area_km2'] = self.model.catchment_area_km2
+        
+        # Create report
+        report = CalibrationReport(
+            result=result,
+            observed=obs,
+            simulated=sim,
+            dates=dates,
+            precipitation=precip,
+            pet=pet,
+            inputs=self.inputs.copy() if include_inputs else None,
+            parameter_bounds=self._param_bounds.copy(),
+            catchment_info=info,
+            calibration_period=(cal_start, cal_end),
+            warmup_days=self.warmup_period,
+            model_config=model_config
+        )
+        
+        return report

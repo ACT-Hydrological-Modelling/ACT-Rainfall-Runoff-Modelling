@@ -1,0 +1,34 @@
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.egg-info
+
+# Node
+**/node_modules
+**/dist
+
+# Git
+.git
+.gitignore
+
+# Environment
+**/.env*
+
+# IDE
+.idea
+.vscode
+**/*.swp
+
+# OS
+**/.DS_Store
+**/Thumbs.db
+
+# Data (will be mounted as volumes)
+data/uploads/*
+data/reports/*
+data/checkpoints/*
+
+# Documentation
+*.md
+!README.md

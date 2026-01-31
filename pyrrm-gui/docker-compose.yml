@@ -1,0 +1,78 @@
+services:
+  # Frontend (React + Nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - pyrrm-network
+
+  # Backend (FastAPI)
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ../pyrrm:/app/pyrrm:ro  # Mount pyrrm library read-only
+      - ../data:/app/source_data:ro  # Mount source data for seeding
+    environment:
+      - DATABASE_URL=sqlite:///./data/pyrrm.db
+      - REDIS_URL=redis://redis:6379/0
+      - DEBUG=false
+    depends_on:
+      - redis
+    networks:
+      - pyrrm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Celery Worker
+  celery_worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: celery -A celery_worker worker --loglevel=info --concurrency=2
+    volumes:
+      - ./data:/app/data
+      - ../pyrrm:/app/pyrrm:ro
+      - ../data:/app/source_data:ro  # Mount source data for calibration
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - backend
+    networks:
+      - pyrrm-network
+    restart: unless-stopped
+
+  # Redis (Message Broker)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - pyrrm-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  pyrrm-network:
+    driver: bridge
+
+volumes:
+  redis_data:

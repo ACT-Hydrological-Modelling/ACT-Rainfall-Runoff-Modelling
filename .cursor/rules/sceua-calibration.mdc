@@ -1,0 +1,62 @@
+---
+description: SCE-UA calibration algorithm configuration guidelines
+globs: pyrrm/calibration/**/*.py, notebooks/**/*.py
+alwaysApply: false
+---
+
+# SCE-UA Calibration Configuration
+
+When configuring SpotPy's SCE-UA (Shuffled Complex Evolution) algorithm, follow the recommendations from Duan et al. (1994).
+
+## Key Rule: Number of Complexes (ngs)
+
+**Always set `ngs = 2n + 1`** where `n` is the number of parameters being calibrated.
+
+```python
+# ✅ CORRECT: Compute ngs based on parameter count
+n_params = len(parameter_bounds)
+ngs = 2 * n_params + 1
+
+result = runner.run_sceua(
+    n_iterations=10000,
+    ngs=ngs,
+    kstop=5,
+    pcento=0.01
+)
+
+# ❌ WRONG: Hardcoded ngs that doesn't scale with parameters
+result = runner.run_sceua(
+    n_iterations=5000,
+    ngs=7,  # Too small for >3 parameters!
+    kstop=3,
+    pcento=0.01
+)
+```
+
+## Reference Values by Model
+
+| Model | Parameters (n) | ngs (2n+1) | Recommended iterations |
+|-------|----------------|------------|------------------------|
+| GR4J | 4 | 9 | 5,000 |
+| GR5J | 5 | 11 | 5,000 |
+| GR6J | 6 | 13 | 6,000 |
+| Sacramento | 22 | 45 | 10,000 |
+| Sacramento + routing | 25 | 51 | 15,000 |
+
+## Why This Matters
+
+- **ngs** controls how many "complexes" (sub-populations) explore the parameter space
+- Too few complexes → algorithm gets trapped in local optima
+- With 25 parameters and ngs=7, only 357 points explore a 25-dimensional space
+- With ngs=51, 2,601 points provide much better coverage
+
+## SpotPy Internal Calculations
+
+SpotPy automatically computes (you don't control these):
+- `npg` (points per complex) = 2n + 1
+- `nps` (points per simplex) = n + 1
+- `npt` (total population) = npg × ngs
+
+## Reference
+
+Duan, Q., Sorooshian, S., & Gupta, V. K. (1994). Optimal use of the SCE-UA global optimization method for calibrating watershed models. Journal of Hydrology, 158(3-4), 265-284.

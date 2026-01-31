@@ -275,9 +275,10 @@ class RoutedModel(BaseRainfallRunoffModel):
         # Set routing parameters (with integer handling for n_subreaches)
         if routing_params and self._router is not None:
             if 'routing_n_subreaches' in routing_params:
-                routing_params['routing_n_subreaches'] = int(
+                # Round and clamp to minimum of 1
+                routing_params['routing_n_subreaches'] = max(1, int(
                     round(routing_params['routing_n_subreaches'])
-                )
+                ))
             self._router.set_parameters(routing_params)
     
     def get_parameters(self) -> Dict[str, float]:

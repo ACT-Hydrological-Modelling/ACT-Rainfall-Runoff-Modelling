@@ -651,9 +651,8 @@ class NonlinearMuskingumRouter(BaseRouter):
         
         if 'n_subreaches' in normalized:
             n = int(round(normalized['n_subreaches']))
-            if n < 1:
-                raise ValueError(f"n_subreaches must be >= 1, got {n}")
-            self.n_subreaches = n
+            # Clamp to minimum of 1 (don't raise error - optimizer may sample edge values)
+            self.n_subreaches = max(1, n)
         
         # Update derived parameter
         self.K_sub = self.K / self.n_subreaches

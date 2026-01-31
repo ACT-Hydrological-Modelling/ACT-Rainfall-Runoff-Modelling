@@ -5,8 +5,22 @@ Provides:
 - CalibrationRunner: Unified interface for model calibration
 - SPOTPY adapter: DREAM, SCE-UA, and other MCMC methods via SpotPy
 - PyDREAM adapter: MT-DREAM(ZS) with multi-try sampling and snooker updates
+- Direct SCE-UA: Standalone SCE-UA implementation (no external dependencies)
 - scipy adapter: Optimization methods from scipy.optimize
 - Objective functions: NSE, KGE, RMSE, PBIAS, and custom objectives
+
+SCE-UA Implementation Comparison:
+    SpotPy SCE-UA (run_sceua):
+        - Requires SpotPy dependency
+        - MPI parallelization available
+        - CSV/SQL database storage
+        
+    Direct SCE-UA (run_sceua_direct):
+        - No external dependencies (vendored implementation)
+        - ThreadPoolExecutor parallelization
+        - PCA recovery for lost dimensions
+        - Multiple convergence criteria
+        - Initial parameter sets support
 
 DREAM Implementation Comparison:
     SpotPy DREAM:
@@ -23,6 +37,9 @@ DREAM Implementation Comparison:
 Example:
     >>> from pyrrm.calibration import CalibrationRunner, NSE
     >>> runner = CalibrationRunner(model, inputs, observed, objective=NSE())
+    >>> 
+    >>> # Direct SCE-UA (recommended - no external dependencies)
+    >>> result = runner.run_sceua_direct(max_evals=20000, seed=42)
     >>> 
     >>> # SpotPy DREAM
     >>> result = runner.run_dream(implementation='spotpy', n_iterations=10000)
@@ -121,10 +138,22 @@ except ImportError:
 # Import checkpoint manager
 from pyrrm.calibration.checkpoint import CheckpointManager, CheckpointInfo
 
+# Import CalibrationReport for comprehensive result storage
+from pyrrm.calibration.report import CalibrationReport
+
+# Direct SCE-UA implementation (always available - vendored, no external dependencies)
+from pyrrm.calibration.sceua_adapter import (
+    run_sceua_direct,
+    calibrate_sceua,
+    SCEUAModelWrapper,
+    SCEUACalibrationResult,
+)
+
 __all__ = [
     # Core classes
     "CalibrationRunner",
     "CalibrationResult",
+    "CalibrationReport",
     # Legacy objective functions
     "ObjectiveFunction",
     "NSE",
@@ -171,6 +200,11 @@ __all__ = [
     "run_sceua",
     "run_mcmc",
     "continue_spotpy_dream",
+    # Direct SCE-UA (always available - vendored)
+    "run_sceua_direct",
+    "calibrate_sceua",
+    "SCEUAModelWrapper",
+    "SCEUACalibrationResult",
     # Checkpointing
     "CheckpointManager",
     "CheckpointInfo",

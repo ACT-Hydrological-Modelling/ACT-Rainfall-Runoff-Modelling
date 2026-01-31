@@ -7,6 +7,10 @@ exchange threshold.
 
 This is a pure Python port of the Rust implementation from the hydrogr library.
 
+Key differences from GR4J:
+1. GR5J uses only UH2 (not UH1 + UH2 like GR4J)
+2. Groundwater exchange formula: F = X2 * (R/X3 - X5) instead of F = X2 * (R/X3)^3.5
+
 Reference:
     Le Moine, N. (2008). Le bassin versant de surface vu par le souterrain: 
     une voie d'amélioration des performances et du réalisme des modèles 
@@ -37,6 +41,9 @@ def _gr5j_core(
     """
     Core GR5J model algorithm.
     
+    Note: GR5J uses only UH2 (unlike GR4J which uses both UH1 and UH2).
+    This matches the hydrogr Rust implementation.
+    
     Args:
         x1: Production store capacity [mm]
         x2: Groundwater exchange coefficient [mm/d]
@@ -58,7 +65,7 @@ def _gr5j_core(
     storage_fraction = 0.9
     exp = 2.5
     
-    # Initialize unit hydrograph (only UH2 for GR5J)
+    # Initialize unit hydrograph (only UH2 for GR5J - this is intentional!)
     n_uh2 = max(1, int(np.ceil(2.0 * x4)))
     
     # Compute UH2 ordinates
@@ -88,7 +95,8 @@ def _gr5j_core(
         if rain <= evap:
             # Net evaporation case
             scaled_net_rain = (evap - rain) / x1 if x1 > 0 else 0.0
-            scaled_net_rain = min(scaled_net_rain, 13.0)
+            if scaled_net_rain > 13.0:
+                scaled_net_rain = 13.0
             scaled_net_rain = np.tanh(scaled_net_rain)
             
             # Evaporation from production store
@@ -103,7 +111,8 @@ def _gr5j_core(
             # Net precipitation case
             net_rainfall = rain - evap
             scaled_net_rain = net_rainfall / x1 if x1 > 0 else 0.0
-            scaled_net_rain = min(scaled_net_rain, 13.0)
+            if scaled_net_rain > 13.0:
+                scaled_net_rain = 13.0
             scaled_net_rain = np.tanh(scaled_net_rain)
             
             # Rainfall to production store
@@ -120,19 +129,20 @@ def _gr5j_core(
         if prod_store < 0.0:
             prod_store = 0.0
         
-        # Production store percolation
+        # Production store percolation (note: constant matches Rust: 25.62890625)
         psf_p4 = (prod_store / x1) ** 4.0 if x1 > 0 else 0.0
         percolation = prod_store * (1.0 - 1.0 / (1.0 + psf_p4 / 25.62890625) ** 0.25)
         
         prod_store -= percolation
         rout_input += percolation
         
-        # UH2 convolution (only one UH in GR5J)
+        # UH2 convolution (GR5J uses only UH2 - this is intentional per hydrogr)
         for i in range(n_uh2 - 1):
             uh2[i] = uh2[i + 1] + o_uh2[i] * rout_input
         uh2[n_uh2 - 1] = o_uh2[n_uh2 - 1] * rout_input
         
-        # Groundwater exchange (with threshold X5)
+        # Groundwater exchange - GR5J formula with threshold X5
+        # This is the key difference from GR4J: linear formula instead of power law
         groundwater_exchange = x2 * (rout_store / x3 - x5) if x3 > 0 else 0.0
         rout_store += uh2[0] * storage_fraction + groundwater_exchange
         
@@ -143,7 +153,7 @@ def _gr5j_core(
         rsf_p4 = (rout_store / x3) ** 4.0 if x3 > 0 else 0.0
         rout_flow = rout_store * (1.0 - 1.0 / (1.0 + rsf_p4) ** 0.25)
         
-        # Direct flow
+        # Direct flow (from UH2, same as routing store input)
         direct_flow = uh2[0] * (1.0 - storage_fraction) + groundwater_exchange
         if direct_flow < 0.0:
             direct_flow = 0.0
@@ -160,6 +170,11 @@ class GR5J(BaseRainfallRunoffModel):
     
     A 5-parameter daily lumped conceptual rainfall-runoff model.
     GR5J extends GR4J with an additional groundwater exchange threshold.
+    
+    Key structural differences from GR4J:
+    1. Uses only UH2 (not both UH1 and UH2)
+    2. Linear groundwater exchange: F = X2 * (R/X3 - X5)
+       vs GR4J's power law: F = X2 * (R/X3)^3.5
     
     Parameters:
         X1: Production store capacity [mm] (typical range: 100-1200)

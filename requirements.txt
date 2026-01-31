@@ -21,6 +21,9 @@ SALib>=1.4
 # Visualization enhancements (optional)
 seaborn>=0.11
 
+# Progress bars (optional)
+tqdm>=4.60
+
 # Development dependencies (optional)
 # pytest>=7.0
 # pytest-cov>=3.0

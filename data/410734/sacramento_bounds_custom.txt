@@ -11,26 +11,26 @@
 #
 
 # Storage Parameters (mm)
-uztwm = 5.0, 200.0      # Upper zone tension water max [mm]
-uzfwm = 5.0, 100.0       # Upper zone free water max [mm]
-lztwm = 5.0, 300.0      # Lower zone tension water max [mm]
-lzfpm = 5.0, 600.0      # Lower zone primary free water max [mm]
-lzfsm = 5.0, 300.0      # Lower zone supplemental free water max [mm]
+uztwm = 25.0, 125.0      # Upper zone tension water max [mm]
+uzfwm = 10.0, 75.0       # Upper zone free water max [mm]
+lztwm = 40.0, 300.0      # Lower zone tension water max [mm]
+lzfpm = 40.0, 600.0      # Lower zone primary free water max [mm]
+lzfsm = 15.0, 300.0      # Lower zone supplemental free water max [mm]
 
 # Rate Parameters (1/day)
 uzk = 0.2, 0.5           # Upper zone lateral drainage rate [1/d]
 lzpk = 0.0001, 0.015      # Lower zone primary drainage rate [1/d]
-lzsk = 0.03, 0.2         # Lower zone supplemental drainage rate [1/d]
+lzsk = 0.001, 0.2         # Lower zone supplemental drainage rate [1/d]
 
 # Percolation Parameters
 zperc = 20.0, 300.0      # Percolation demand scale parameter
 rexp = 1.4, 3.5          # Percolation equation exponent
 
 # Fraction Parameters (dimensionless)
-pctim = 0.0, 0.05        # Permanent impervious area fraction
-adimp = 0.0, 0.2         # Additional impervious area fraction
-pfree = 0.0, 0.5         # Fraction of percolation to free water
-rserv = 0.0, 0.4         # Lower zone unavailable for transpiration
+pctim = 0.0, 0.1        # Permanent impervious area fraction
+adimp = 0.0, 0.5         # Additional impervious area fraction
+pfree = 0.0, 0.8         # Fraction of percolation to free water
+rserv = 0.0, 0.5         # Lower zone unavailable for transpiration
 side = 0.0, 0.8          # Side flow ratio
 ssout = 0.0, 0.1         # Subsurface outflow [mm]
 sarva = 0.0, 0.1         # Riparian vegetation area fraction
