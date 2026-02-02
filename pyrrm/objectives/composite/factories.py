@@ -14,6 +14,7 @@ Hydrological Sciences Journal, 62(7), 1149-1166.
 from typing import List, Optional
 
 from pyrrm.objectives.composite.weighted import WeightedObjective
+from pyrrm.objectives.composite.adaptive import apex_adaptive  # Import for re-export
 
 
 def kge_hilo(kge_weight: float = 0.5, 
@@ -239,3 +240,280 @@ def nse_multiscale(nse_weight: float = 0.5,
     ]
     
     return WeightedObjective(objectives, normalize=False)
+
+
+def apex_objective(
+    # Core performance (40%)
+    core_metric_1_weight: float = 0.25,
+    core_metric_2_weight: float = 0.15,
+    
+    # FDC multi-segment (30%)
+    fdc_high_weight: float = 0.10,
+    fdc_mid_weight: float = 0.10,
+    fdc_low_weight: float = 0.10,
+    
+    # Process signatures (20%)
+    baseflow_index_weight: float = 0.10,
+    flashiness_weight: float = 0.10,
+    
+    # Bias/timing (10%)
+    pbias_weight: float = 0.05,
+    timing_correlation_weight: float = 0.05,
+    
+    # Core metric configuration
+    core_metric_type: str = 'kge',
+    core_metric_1_transform: Optional[str] = None,
+    core_metric_2_transform: str = 'sqrt',
+    kge_variant: str = '2012'
+) -> WeightedObjective:
+    """
+    APEX: Adaptive Process-Explicit Objective Function.
+    
+    A state-of-the-art composite objective combining multi-scale metrics,
+    multi-segment FDC evaluation, hydrological signatures, and bias/timing
+    controls for comprehensive rainfall-runoff model calibration.
+    
+    APEX addresses limitations of single-objective calibration by explicitly
+    evaluating multiple aspects of hydrological performance:
+    - Overall fit and flow magnitude distribution (KGE or NSE metrics)
+    - Flow frequency distribution across regimes (FDC segments)
+    - Process-based hydrological realism (signatures)
+    - Systematic bias and timing correlation
+    
+    Parameters
+    ----------
+    core_metric_1_weight : float, default=0.25
+        Weight for first core metric (overall performance, typically high flow emphasis)
+    core_metric_2_weight : float, default=0.15
+        Weight for second core metric (typically with transformation for balance)
+    fdc_high_weight : float, default=0.10
+        Weight for high flow FDC segment (2-20% exceedance)
+    fdc_mid_weight : float, default=0.10
+        Weight for mid flow FDC segment (20-70% exceedance)
+    fdc_low_weight : float, default=0.10
+        Weight for low flow FDC segment (70-95% exceedance, log-transformed)
+    baseflow_index_weight : float, default=0.10
+        Weight for baseflow index signature (groundwater contribution)
+    flashiness_weight : float, default=0.10
+        Weight for flashiness index signature (response dynamics)
+    pbias_weight : float, default=0.05
+        Weight for percent bias (volume error control)
+    timing_correlation_weight : float, default=0.05
+        Weight for temporal correlation (timing accuracy)
+    core_metric_type : str, default='kge'
+        Type of core metric to use: 'kge' or 'nse'
+    core_metric_1_transform : str, optional
+        Flow transformation for first core metric. Options: None, 'sqrt', 'log', 
+        'inverse', 'power', 'boxcox'. Default: None (no transformation)
+    core_metric_2_transform : str, default='sqrt'
+        Flow transformation for second core metric. Options: 'sqrt', 'log', 
+        'inverse', 'power', 'boxcox', None. Default: 'sqrt' (balanced high/low flows)
+    kge_variant : str, default='2012'
+        KGE variant to use when core_metric_type='kge': '2009', '2012', or '2021'
+    
+    Returns
+    -------
+    WeightedObjective
+        APEX composite objective function ready for calibration
+    
+    Notes
+    -----
+    Default weight distribution (sums to 1.0):
+    - 40% core performance metrics (2 metrics, configurable type and transforms)
+    - 30% FDC segment matching (high + mid + low flows)
+    - 20% process signatures (baseflow index + flashiness)
+    - 10% bias/timing control (PBIAS + correlation)
+    
+    **Core Metric Configuration:**
+    
+    The core metrics can use either KGE or NSE with optional transformations:
+    
+    - **Default (KGE + KGE-sqrt)**: Recommended for general use
+      - Untransformed: High flow emphasis
+      - Sqrt-transformed: Balanced high/low flow performance
+    
+    - **NSE-based**: Alternative for traditional calibration
+      - NSE: High flow emphasis (squared errors)
+      - NSE-log: Low flow emphasis
+      - NSE-sqrt: Balanced performance
+      - NSE-inverse: Strong low flow emphasis
+    
+    - **Mixed approaches**: Any combination is valid
+    
+    Transform options: None, 'sqrt', 'log', 'inverse', 'power', 'boxcox'
+    
+    **Advantages over SDEB (Lerat et al., 2013):**
+    - Explicit multi-segment FDC evaluation (vs. single ranked term)
+    - Process-based signatures ensure hydrological realism
+    - Separate timing correlation metric (vs. combined chronological term)
+    - Modular design allows component-level diagnostics
+    - Flexible core metric selection (KGE or NSE with transforms)
+    - Catchment-specific tuning via weighting
+    
+    **FDC segments** target specific flow regimes:
+    - High (2-20%): Flood response and quick runoff
+    - Mid (20-70%): Typical flow conditions
+    - Low (70-95%): Baseflow and drought conditions
+    
+    **Process signatures** provide diagnostic information:
+    - Baseflow index: Groundwater vs. surface runoff partitioning
+    - Flashiness: Catchment response dynamics and hydrograph variability
+    
+    References
+    ----------
+    Gupta, H.V., Kling, H., Yilmaz, K.K., Martinez, G.F. (2009). 
+    Decomposition of the mean squared error and NSE performance criteria.
+    Journal of Hydrology, 377(1-2), 80-91.
+    
+    Yilmaz, K.K., Gupta, H.V., Wagener, T. (2008). A process-based 
+    diagnostic approach to model evaluation. Water Resources Research, 44(9).
+    
+    Westerberg, I.K. et al. (2011). Calibration of hydrological models 
+    using flow-duration curves. HESS, 15, 2205-2227.
+    
+    Pool, S., Vis, M., Seibert, J. (2018). Evaluating model performance: 
+    towards a non-parametric variant of the Kling-Gupta efficiency.
+    Hydrological Sciences Journal, 63(13-14), 1941-1953.
+    
+    Lerat, J., Thyer, M., McInerney, D., Kavetski, D., Kuczera, G. (2013).
+    A robust approach for calibrating continuous hydrological models.
+    Journal of Hydrology, 494, 80-91.
+    
+    Examples
+    --------
+    >>> from pyrrm.objectives import apex_objective
+    >>> from pyrrm.calibration import CalibrationRunner
+    >>> 
+    >>> # Default: KGE + KGE(sqrt)
+    >>> apex = apex_objective()
+    >>> 
+    >>> # NSE-based with log transformation for low flows
+    >>> apex_nse = apex_objective(
+    ...     core_metric_type='nse',
+    ...     core_metric_1_transform=None,      # NSE (high flow emphasis)
+    ...     core_metric_2_transform='log'      # Log-NSE (low flow emphasis)
+    ... )
+    >>> 
+    >>> # KGE with inverse transformation for strong low flow focus
+    >>> apex_lowflow = apex_objective(
+    ...     core_metric_type='kge',
+    ...     core_metric_1_transform=None,      # Standard KGE
+    ...     core_metric_2_transform='inverse', # KGE(1/Q)
+    ...     core_metric_2_weight=0.20,
+    ...     fdc_low_weight=0.15
+    ... )
+    >>> 
+    >>> # NSE balanced approach
+    >>> apex_nse_balanced = apex_objective(
+    ...     core_metric_type='nse',
+    ...     core_metric_1_transform='sqrt',    # NSE(sqrt) - balanced
+    ...     core_metric_2_transform='log',     # NSE(log) - low flows
+    ...     core_metric_1_weight=0.25,
+    ...     core_metric_2_weight=0.15
+    ... )
+    >>> 
+    >>> # Custom weights for flashy catchments (with default KGE)
+    >>> apex_flashy = apex_objective(
+    ...     fdc_high_weight=0.15,
+    ...     flashiness_weight=0.15,
+    ...     baseflow_index_weight=0.05
+    ... )
+    >>> 
+    >>> # Calibrate model
+    >>> runner = CalibrationRunner(model, inputs, observed, objective=apex)
+    >>> result = runner.run_sceua_direct(max_iterations=10000)
+    >>> 
+    >>> # Evaluate components
+    >>> components = apex.evaluate_individual(observed, simulated)
+    >>> print(components['raw_values'])  # Individual metric values
+    
+    See Also
+    --------
+    comprehensive_objective : Alternative multi-metric objective
+    kge_hilo : Simple KGE + KGE(inverse) combination
+    fdc_multisegment : FDC-only multi-segment objective
+    """
+    from pyrrm.objectives.metrics.kge import KGE
+    from pyrrm.objectives.metrics.traditional import NSE
+    from pyrrm.objectives.metrics.traditional import PBIAS
+    from pyrrm.objectives.metrics.correlation import PearsonCorrelation
+    from pyrrm.objectives.fdc.metrics import FDCMetric
+    from pyrrm.objectives.signatures.flow_indices import SignatureMetric
+    from pyrrm.objectives.transformations.flow_transforms import FlowTransformation
+    
+    # Validate core metric type
+    if core_metric_type not in ['kge', 'nse']:
+        raise ValueError(
+            f"core_metric_type must be 'kge' or 'nse', got '{core_metric_type}'"
+        )
+    
+    # Build core metrics with optional transformations
+    objectives = []
+    
+    # === CORE PERFORMANCE (40%) ===
+    if core_metric_type == 'kge':
+        # Core metric 1: KGE (optionally with transformation)
+        objectives.append((
+            KGE(
+                variant=kge_variant,
+                transform=FlowTransformation(core_metric_1_transform) if core_metric_1_transform else None
+            ), 
+            core_metric_1_weight
+        ))
+        
+        # Core metric 2: KGE with transformation for balance
+        objectives.append((
+            KGE(
+                variant=kge_variant,
+                transform=FlowTransformation(core_metric_2_transform) if core_metric_2_transform else None
+            ), 
+            core_metric_2_weight
+        ))
+    else:  # nse
+        # Core metric 1: NSE (optionally with transformation)
+        objectives.append((
+            NSE(
+                transform=FlowTransformation(core_metric_1_transform) if core_metric_1_transform else None
+            ), 
+            core_metric_1_weight
+        ))
+        
+        # Core metric 2: NSE with transformation for balance
+        objectives.append((
+            NSE(
+                transform=FlowTransformation(core_metric_2_transform) if core_metric_2_transform else None
+            ), 
+            core_metric_2_weight
+        ))
+    
+    # === FDC MULTI-SEGMENT (30%) ===
+    # High flows (2-20% exceedance): flood response
+    objectives.append((FDCMetric(segment='high', metric='volume_bias'), fdc_high_weight))
+    
+    # Mid flows (20-70% exceedance): typical conditions
+    objectives.append((FDCMetric(segment='mid', metric='volume_bias'), fdc_mid_weight))
+    
+    # Low flows (70-95% exceedance): baseflow with log transform
+    objectives.append((FDCMetric(segment='low', metric='volume_bias', 
+               log_transform=True), fdc_low_weight))
+    
+    # === PROCESS SIGNATURES (20%) ===
+    # Baseflow index: groundwater contribution
+    objectives.append((SignatureMetric('baseflow_index'), baseflow_index_weight))
+    
+    # Flashiness: response dynamics
+    objectives.append((SignatureMetric('flashiness'), flashiness_weight))
+    
+    # === BIAS & TIMING (10%) ===
+    # Volume bias
+    objectives.append((PBIAS(), pbias_weight))
+    
+    # Timing correlation (independent of magnitude)
+    objectives.append((PearsonCorrelation(), timing_correlation_weight))
+    
+    return WeightedObjective(
+        objectives=objectives,
+        aggregation='weighted_sum',
+        normalize=True,
+        normalize_method='minmax'
+    )

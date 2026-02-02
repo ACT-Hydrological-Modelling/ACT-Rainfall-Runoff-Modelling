@@ -141,6 +141,8 @@ from pyrrm.objectives.composite.factories import (
     fdc_multisegment,
     comprehensive_objective,
     nse_multiscale,
+    apex_objective,
+    apex_adaptive,
 )
 
 # Compatibility layer
@@ -191,6 +193,8 @@ __all__ = [
     'fdc_multisegment',
     'comprehensive_objective',
     'nse_multiscale',
+    'apex_objective',
+    'apex_adaptive',
     # Compatibility
     'LegacyObjectiveAdapter',
     'wrap_legacy_objective',

@@ -10,6 +10,7 @@ from pyrrm.objectives.composite.factories import (
     fdc_multisegment,
     comprehensive_objective,
     nse_multiscale,
+    apex_objective,
 )
 from pyrrm.objectives.metrics.traditional import NSE, RMSE, PBIAS
 from pyrrm.objectives.metrics.kge import KGE
@@ -222,3 +223,87 @@ class TestFactoryFunctions:
         # All should give high values for perfect match
         # (after normalization to maximize)
         assert kge_hi(obs, sim) > 0.9
+    
+    def test_apex_basic(self):
+        """APEX objective should be created and callable."""
+        apex = apex_objective()
+        
+        assert isinstance(apex, WeightedObjective)
+        
+        # Test evaluation
+        obs, sim = generate_test_data(n=500)
+        value = apex(obs, sim)
+        assert not np.isnan(value)
+    
+    def test_apex_weights_sum(self):
+        """APEX weights should normalize correctly."""
+        apex = apex_objective()
+        
+        # Internal weights should sum to 1
+        assert np.isclose(sum(apex._normalized_weights), 1.0)
+    
+    def test_apex_components(self):
+        """APEX should have 9 component objectives."""
+        apex = apex_objective()
+        
+        # APEX should have 9 objectives:
+        # 2 KGE (standard, sqrt), 3 FDC (high, mid, low),
+        # 2 signatures (baseflow, flashiness), 2 bias/timing (PBIAS, correlation)
+        assert len(apex.objectives) == 9
+    
+    def test_apex_perfect_match(self):
+        """APEX should perform well on perfect simulation."""
+        obs, sim = generate_perfect_data(n=500)
+        
+        apex = apex_objective()
+        value = apex(obs, sim)
+        
+        # Perfect match should give high value (close to 1.0 after normalization)
+        assert value > 0.85  # Allow some tolerance for normalization
+    
+    def test_apex_custom_weights(self):
+        """APEX with custom weights should work."""
+        apex_custom = apex_objective(
+            kge_weight=0.30,
+            kge_sqrt_weight=0.20,
+            fdc_low_weight=0.15,
+            baseflow_index_weight=0.15
+        )
+        
+        obs, sim = generate_test_data(n=500)
+        value = apex_custom(obs, sim)
+        assert not np.isnan(value)
+    
+    def test_apex_kge_variant(self):
+        """APEX should support different KGE variants."""
+        apex_2009 = apex_objective(kge_variant='2009')
+        apex_2012 = apex_objective(kge_variant='2012')
+        apex_2021 = apex_objective(kge_variant='2021')
+        
+        obs, sim = generate_test_data(n=500)
+        
+        val_2009 = apex_2009(obs, sim)
+        val_2012 = apex_2012(obs, sim)
+        val_2021 = apex_2021(obs, sim)
+        
+        # All should return valid values
+        assert not np.isnan(val_2009)
+        assert not np.isnan(val_2012)
+        assert not np.isnan(val_2021)
+    
+    def test_apex_evaluate_individual(self):
+        """APEX evaluate_individual should return all components."""
+        apex = apex_objective()
+        obs, sim = generate_test_data(n=500)
+        
+        results = apex.evaluate_individual(obs, sim)
+        
+        assert 'raw_values' in results
+        assert 'normalized_values' in results
+        assert 'weights' in results
+        assert 'aggregated_value' in results
+        
+        # Should have 9 components
+        assert len(results['raw_values']) == 9
+        assert len(results['normalized_values']) == 9
+        assert len(results['weights']) == 9

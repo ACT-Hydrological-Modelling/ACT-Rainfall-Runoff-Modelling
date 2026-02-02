@@ -10,7 +10,9 @@ from pyrrm.objectives.composite.factories import (
     fdc_multisegment,
     comprehensive_objective,
     nse_multiscale,
+    apex_objective,
 )
+from pyrrm.objectives.composite.adaptive import apex_adaptive
 
 __all__ = [
     'WeightedObjective',
@@ -18,4 +20,6 @@ __all__ = [
     'fdc_multisegment',
     'comprehensive_objective',
     'nse_multiscale',
+    'apex_objective',
+    'apex_adaptive',
 ]
