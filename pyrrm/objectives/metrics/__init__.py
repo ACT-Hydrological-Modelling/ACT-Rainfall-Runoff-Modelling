@@ -1,7 +1,8 @@
 """
 Hydrological objective function metrics.
 
-This module provides traditional metrics, KGE variants, and correlation metrics.
+This module provides traditional metrics, KGE variants, correlation metrics,
+and the APEX objective function.
 """
 
 from pyrrm.objectives.metrics.traditional import (
@@ -19,6 +20,7 @@ from pyrrm.objectives.metrics.correlation import (
     PearsonCorrelation,
     SpearmanCorrelation,
 )
+from pyrrm.objectives.metrics.apex import APEX
 
 __all__ = [
     # Traditional metrics
@@ -33,4 +35,6 @@ __all__ = [
     # Correlation
     'PearsonCorrelation',
     'SpearmanCorrelation',
+    # APEX (SDEB-enhanced with dynamics/lag multipliers)
+    'APEX',
 ]

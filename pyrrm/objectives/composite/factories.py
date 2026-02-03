@@ -429,10 +429,29 @@ def apex_objective(
     
     See Also
     --------
+    APEX : New standalone APEX class with dynamics/lag multipliers (recommended)
     comprehensive_objective : Alternative multi-metric objective
     kge_hilo : Simple KGE + KGE(inverse) combination
     fdc_multisegment : FDC-only multi-segment objective
+    
+    .. deprecated::
+        This function is deprecated. Use the new APEX class instead:
+        ``from pyrrm.objectives import APEX``
+        
+        The new APEX class provides:
+        - Simpler interface with fewer parameters
+        - Novel dynamics multiplier (gradient correlation)
+        - Optional lag multiplier (timing offset penalty)
+        - SDEB-based multiplicative structure (no normalization issues)
     """
+    import warnings
+    warnings.warn(
+        "apex_objective() is deprecated and will be removed in a future version. "
+        "Use the new APEX class instead: from pyrrm.objectives import APEX",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    
     from pyrrm.objectives.metrics.kge import KGE
     from pyrrm.objectives.metrics.traditional import NSE
     from pyrrm.objectives.metrics.traditional import PBIAS

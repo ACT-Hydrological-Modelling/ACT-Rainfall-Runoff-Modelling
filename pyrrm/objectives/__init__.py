@@ -115,6 +115,9 @@ from pyrrm.objectives.metrics.traditional import (
     SDEB,
 )
 
+# APEX: SDEB-enhanced with dynamics/lag multipliers
+from pyrrm.objectives.metrics.apex import APEX
+
 # KGE family
 from pyrrm.objectives.metrics.kge import (
     KGE,
@@ -176,6 +179,8 @@ __all__ = [
     'MAE',
     'PBIAS',
     'SDEB',
+    # APEX (SDEB-enhanced with dynamics/lag multipliers)
+    'APEX',
     # KGE family
     'KGE',
     'KGENonParametric',

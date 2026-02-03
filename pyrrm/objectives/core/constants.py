@@ -74,3 +74,52 @@ SDEB_DEFAULT_LAMBDA: float = 0.5  # Square root transform
 # Default thresholds for flow frequency signatures
 HIGH_FLOW_THRESHOLD_MULTIPLIER: float = 3.0   # Q > 3 * median
 LOW_FLOW_THRESHOLD_MULTIPLIER: float = 0.2    # Q < 0.2 * mean
+
+# =============================================================================
+# APEX v2 Defaults
+# =============================================================================
+
+# APEX extends SDEB with novel dynamics and lag penalty multipliers.
+# Reference: Built upon Lerat et al. (2013) with novel contributions.
+
+# Core SDEB parameters (inherited)
+APEX_DEFAULT_ALPHA: float = 0.1              # Weight for chronological term
+APEX_DEFAULT_TRANSFORM_PARAM: float = 0.5    # Power transform exponent (sqrt)
+
+# Bias multiplier parameters
+APEX_DEFAULT_BIAS_STRENGTH: float = 1.0      # Bias penalty strength (β)
+APEX_DEFAULT_BIAS_POWER: float = 1.0         # Bias penalty exponent (γ)
+
+# Novel: Dynamics multiplier parameters
+APEX_DEFAULT_DYNAMICS_STRENGTH: float = 0.5  # Gradient correlation penalty (κ)
+
+# Novel: Lag multiplier parameters
+APEX_DEFAULT_LAG_STRENGTH: float = 0.3       # Timing offset penalty (λ)
+APEX_DEFAULT_LAG_REFERENCE: int = 5          # Reference lag in timesteps (τ)
+
+# =============================================================================
+# APEX Regime Emphasis Functions
+# =============================================================================
+
+# Functions for weighting errors in the ranked term by exceedance probability.
+# p = exceedance probability (0 = highest flow, 1 = lowest flow)
+# These provide continuous weighting without segment discontinuities.
+
+from typing import Callable
+
+REGIME_EMPHASIS_FUNCTIONS: Dict[str, Callable[[float], float]] = {
+    # Uniform: Equal weight across all flows (original SDEB behavior)
+    'uniform': lambda p: 1.0,
+    
+    # Low flow emphasis: Higher weight at high exceedance (low flows)
+    'low_flow': lambda p: p,
+    
+    # High flow emphasis: Higher weight at low exceedance (high flows)
+    'high_flow': lambda p: 1.0 - p,
+    
+    # Balanced: Emphasize mid-range flows (parabolic, peaks at p=0.5)
+    'balanced': lambda p: 4.0 * p * (1.0 - p),
+    
+    # Extremes: Emphasize both tails (inverse parabolic)
+    'extremes': lambda p: 1.0 - 4.0 * p * (1.0 - p),
+}
