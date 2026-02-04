@@ -192,47 +192,219 @@ print("Calibration Monitor loaded successfully!")
 # ## Configuration
 #
 # Set the path to the calibration CSV output file you want to monitor.
-# Update this section based on which calibration method you're running.
+# This notebook supports both SpotPy and PyDREAM calibrations.
+#
+# ### Current Target: PyDREAM from Notebook 05
+#
+# Notebook 05 (Algorithm Comparison) runs PyDREAM calibrations for 13 objective 
+# functions. The progress files are saved to:
+# ```
+# test_data/reports/pydream/progress_{objective}.csv
+# ```
+#
+# Available objective functions to monitor:
+# - `nse`, `lognse`, `invnse`, `sqrtnse`
+# - `sdeb`
+# - `kge`, `kge_inv`, `kge_sqrt`, `kge_log`
+# - `kge_np`, `kge_np_inv`, `kge_np_sqrt`, `kge_np_log`
 
 # %%
 # =============================================================================
 # CONFIGURATION - EDIT THIS SECTION
 # =============================================================================
 
-# Path to calibration CSV output file
-# Choose the file based on which calibration method you're running:
+# ------------------------------------------------------------------------------
+# QUICK CONFIG: Choose what to monitor
+# ------------------------------------------------------------------------------
+# Options:
+#   'pydream_synthetic'   - Synthetic hydrograph test from Notebook 05
+#   'pydream_realdata'    - Real data calibrations from Notebook 05 (13 objectives)
+#   'spotpy'              - SpotPy DREAM or SCE-UA calibration
+#   'custom'              - Custom path (edit CSV_FILE below)
 
-# SpotPy DREAM calibration
-CSV_FILE = Path('spotpy_dream_calib.csv')
+CALIBRATION_SOURCE = 'pydream_synthetic'  # <-- CHANGE THIS
 
-# PyDREAM calibration (requires dbname='pydream_calib' in run_pydream)
-# CSV_FILE = Path('pydream_calib.csv')
+# For real data PyDREAM calibrations, specify the objective function
+# Options: 'nse', 'lognse', 'invnse', 'sqrtnse', 'sdeb',
+#          'kge', 'kge_inv', 'kge_sqrt', 'kge_log',
+#          'kge_np', 'kge_np_inv', 'kge_np_sqrt', 'kge_np_log'
+PYDREAM_OBJECTIVE = 'nse'
 
-# SpotPy SCE-UA calibration
-# CSV_FILE = Path('sceua_calib.csv')
+# ------------------------------------------------------------------------------
+# Path Configuration (automatic based on CALIBRATION_SOURCE)
+# ------------------------------------------------------------------------------
+PYDREAM_DIR = Path('../test_data/reports/pydream')  # For real data calibrations
 
-# Algorithm comparison outputs from Notebook 04:
-# CSV_FILE = Path('algo_spotpy_dream.csv')
-# CSV_FILE = Path('algo_pydream.csv')
-# CSV_FILE = Path('algo_sceua.csv')
+if CALIBRATION_SOURCE == 'pydream_synthetic':
+    # Synthetic hydrograph test from Notebook 05 (currently running!)
+    CSV_FILE = Path('../notebooks/figures/pydream_synthetic_progress.csv')
+    
+elif CALIBRATION_SOURCE == 'pydream_realdata':
+    # Real data calibrations from Notebook 05 (13 objective functions)
+    CSV_FILE = PYDREAM_DIR / f'progress_{PYDREAM_OBJECTIVE.lower()}.csv'
+    
+elif CALIBRATION_SOURCE == 'spotpy':
+    # SpotPy DREAM or SCE-UA calibration
+    CSV_FILE = Path('spotpy_dream_calib.csv')
+    
+elif CALIBRATION_SOURCE == 'custom':
+    # Custom path - edit directly
+    CSV_FILE = Path('your_calibration_file.csv')
+else:
+    raise ValueError(f"Unknown CALIBRATION_SOURCE: {CALIBRATION_SOURCE}")
 
-# Display configuration
+# ------------------------------------------------------------------------------
+# Display Options
+# ------------------------------------------------------------------------------
 MAX_PARAMS_TO_SHOW = 18  # Maximum parameters to display in plots
 DOTTY_SAMPLE_SIZE = 5000  # Downsample for dotty plots if >this many samples
 DARK_THEME = True  # Use dark theme for plots
 
 # Burn-in fraction for posterior distributions (0.0 to 0.9)
-# Start with 0 to see all samples, increase as calibration progresses
-DEFAULT_BURNIN = 0.0
+# Start with 0.0 to see all samples, increase to 0.3-0.5 as calibration progresses
+DEFAULT_BURNIN = 0.3
 
-print(f"Monitoring file: {CSV_FILE.absolute()}")
+# Auto-refresh interval (seconds) for monitoring running calibrations
+AUTO_REFRESH_INTERVAL = 30
+
+# ------------------------------------------------------------------------------
+# Show Available PyDREAM Progress Files
+# ------------------------------------------------------------------------------
+print("=" * 70)
+print("CALIBRATION MONITOR CONFIGURATION")
+print("=" * 70)
+
+if CALIBRATION_SOURCE == 'pydream_synthetic':
+    print(f"\nSource: SYNTHETIC HYDROGRAPH TEST (Notebook 05)")
+    print(f"This monitors the PyDREAM validation run on synthetic data")
+    
+elif CALIBRATION_SOURCE == 'pydream_realdata':
+    print(f"\nSource: REAL DATA PyDREAM (Notebook 05)")
+    print(f"Objective: {PYDREAM_OBJECTIVE.upper()}")
+    
+    # List available progress files
+    if PYDREAM_DIR.exists():
+        progress_files = sorted(PYDREAM_DIR.glob('progress_*.csv'))
+        if progress_files:
+            print(f"\nAvailable PyDREAM progress files:")
+            for f in progress_files:
+                size_kb = f.stat().st_size / 1024
+                mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                n_lines = sum(1 for _ in open(f)) - 1  # Subtract header
+                obj_name = f.stem.replace('progress_', '').upper()
+                status = "✓ CURRENT" if f.name == CSV_FILE.name else ""
+                print(f"  {obj_name:<12}: {n_lines:>8,} samples, {size_kb:>8.1f} KB, "
+                      f"updated {mtime.strftime('%H:%M:%S')} {status}")
+        else:
+            print(f"\n⚠ No progress files found in {PYDREAM_DIR}")
+            print("  Run Notebook 05 to start PyDREAM calibrations")
+    else:
+        print(f"\n⚠ PyDREAM directory not found: {PYDREAM_DIR}")
+
+print(f"\n{'-'*70}")
+print(f"Monitoring file: {CSV_FILE}")
 print(f"File exists: {CSV_FILE.exists()}")
 
-if not CSV_FILE.exists():
+if CSV_FILE.exists():
+    file_size = CSV_FILE.stat().st_size / 1024
+    file_mtime = datetime.fromtimestamp(CSV_FILE.stat().st_mtime)
+    print(f"File size: {file_size:.1f} KB")
+    print(f"Last modified: {file_mtime.strftime('%Y-%m-%d %H:%M:%S')}")
+else:
     print("\n⚠ File not found. Make sure:")
     print("  1. Calibration is running or has completed")
-    print("  2. CSV_FILE path is correct")
-    print("  3. dbname parameter was set when running calibration")
+    print("  2. PYDREAM_OBJECTIVE matches an active calibration")
+    print("  3. Run Notebook 05 to start calibrations")
+
+# %% [markdown]
+# ---
+# ## Helper: Switch Calibration Target
+#
+# Use this function to easily switch to monitoring a different PyDREAM calibration.
+
+# %%
+def monitor_pydream(objective: str) -> None:
+    """
+    Switch to monitoring a different PyDREAM calibration from Notebook 05.
+    
+    Args:
+        objective: Name of the objective function to monitor.
+                   Options: 'nse', 'lognse', 'invnse', 'sqrtnse', 'sdeb',
+                           'kge', 'kge_inv', 'kge_sqrt', 'kge_log',
+                           'kge_np', 'kge_np_inv', 'kge_np_sqrt', 'kge_np_log'
+    
+    Example:
+        >>> monitor_pydream('kge')  # Switch to monitoring KGE calibration
+        >>> refresh_and_plot()      # Update plots with new data
+    """
+    global CSV_FILE, PYDREAM_OBJECTIVE
+    
+    PYDREAM_OBJECTIVE = objective.lower()
+    CSV_FILE = PYDREAM_DIR / f'progress_{PYDREAM_OBJECTIVE}.csv'
+    
+    print(f"\n{'='*60}")
+    print(f"SWITCHED TO: {objective.upper()} CALIBRATION")
+    print(f"{'='*60}")
+    
+    if CSV_FILE.exists():
+        file_size = CSV_FILE.stat().st_size / 1024
+        file_mtime = datetime.fromtimestamp(CSV_FILE.stat().st_mtime)
+        n_lines = sum(1 for _ in open(CSV_FILE)) - 1
+        print(f"File: {CSV_FILE.name}")
+        print(f"Samples: {n_lines:,}")
+        print(f"Size: {file_size:.1f} KB")
+        print(f"Last modified: {file_mtime.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"\nRun refresh_and_plot() to load data and generate plots")
+    else:
+        print(f"⚠ File not found: {CSV_FILE}")
+        print("  This calibration may not have started yet")
+
+
+def list_available_calibrations() -> None:
+    """List all available PyDREAM progress files from Notebook 05."""
+    print(f"\n{'='*60}")
+    print("AVAILABLE PYDREAM CALIBRATIONS (Notebook 05)")
+    print(f"{'='*60}\n")
+    
+    if not PYDREAM_DIR.exists():
+        print(f"⚠ Directory not found: {PYDREAM_DIR}")
+        return
+    
+    progress_files = sorted(PYDREAM_DIR.glob('progress_*.csv'))
+    
+    if not progress_files:
+        print("No progress files found. Run Notebook 05 to start calibrations.")
+        return
+    
+    print(f"{'Objective':<15} {'Samples':>10} {'Size (KB)':>10} {'Last Update':>12} {'Status':<10}")
+    print("-" * 60)
+    
+    for f in progress_files:
+        obj_name = f.stem.replace('progress_', '').upper()
+        size_kb = f.stat().st_size / 1024
+        mtime = datetime.fromtimestamp(f.stat().st_mtime)
+        n_lines = sum(1 for _ in open(f)) - 1
+        
+        # Check if file is being actively written (modified in last 2 minutes)
+        age_seconds = (datetime.now() - mtime).total_seconds()
+        if age_seconds < 120:
+            status = "🔄 Active"
+        elif age_seconds < 3600:
+            status = "⏸ Paused?"
+        else:
+            status = "✓ Complete"
+        
+        current = " ← CURRENT" if f.name == CSV_FILE.name else ""
+        print(f"{obj_name:<15} {n_lines:>10,} {size_kb:>10.1f} {mtime.strftime('%H:%M:%S'):>12} {status}{current}")
+    
+    print(f"\n{'='*60}")
+    print("To switch calibration: monitor_pydream('objective_name')")
+    print("Example: monitor_pydream('kge')")
+
+
+# Show available calibrations on startup
+if CALIBRATION_SOURCE == 'pydream_realdata' and PYDREAM_DIR.exists():
+    list_available_calibrations()
 
 # %% [markdown]
 # ---
@@ -354,6 +526,8 @@ def get_calibration_stats(df: pd.DataFrame, param_names: list) -> dict:
 # %% [markdown]
 # ---
 # ## Load Current Data
+#
+# Automatically load the calibration data from the configured source.
 
 # %%
 # Load the calibration data
@@ -362,10 +536,34 @@ try:
     param_names, obj_col, calib_df = extract_parameters(raw_df)
     stats = get_calibration_stats(calib_df, param_names)
     
+    # Check file activity status
+    file_mtime = datetime.fromtimestamp(CSV_FILE.stat().st_mtime)
+    age_seconds = (datetime.now() - file_mtime).total_seconds()
+    if age_seconds < 120:
+        status_msg = "🔄 ACTIVELY RUNNING"
+    elif age_seconds < 3600:
+        status_msg = "⏸ POSSIBLY PAUSED"
+    else:
+        status_msg = "✓ LIKELY COMPLETE"
+    
     print(f"\n{'='*60}")
     print("CALIBRATION PROGRESS SUMMARY")
     print(f"{'='*60}")
-    print(f"Total samples:      {stats['n_samples']:,}")
+    
+    if CALIBRATION_SOURCE == 'pydream_synthetic':
+        print(f"Source: PyDREAM SYNTHETIC TEST (Notebook 05)")
+    elif CALIBRATION_SOURCE == 'pydream_realdata':
+        print(f"Source: PyDREAM REAL DATA (Notebook 05)")
+        print(f"Objective: {PYDREAM_OBJECTIVE.upper()}")
+    
+    print(f"Status: {status_msg}")
+    print(f"\nTotal samples:      {stats['n_samples']:,}")
+    
+    # Count valid samples (not -inf)
+    valid_mask = calib_df['likelihood'] > -np.inf
+    valid_count = valid_mask.sum()
+    print(f"Valid samples:      {valid_count:,} ({100*valid_count/len(calib_df):.1f}%)")
+    
     print(f"Best likelihood:    {stats['best_likelihood']:.6f}")
     print(f"Mean likelihood:    {stats['mean_likelihood']:.6f}")
     print(f"Std likelihood:     {stats['std_likelihood']:.6f}")
@@ -380,7 +578,26 @@ try:
     
 except FileNotFoundError as e:
     print(f"ERROR: {e}")
-    print("\nPlease update CSV_FILE in the Configuration section above.")
+    print("\n" + "="*60)
+    print("FILE NOT FOUND - Possible reasons:")
+    print("="*60)
+    if CALIBRATION_SOURCE == 'pydream_synthetic':
+        print("\n1. The synthetic hydrograph calibration hasn't started yet")
+        print("   → Run the PyDREAM synthetic test in Notebook 05")
+        print("\n2. The calibration completed and the file was moved/deleted")
+        print(f"   → Check if file exists: {CSV_FILE}")
+    elif CALIBRATION_SOURCE == 'pydream_realdata':
+        print(f"\n1. The '{PYDREAM_OBJECTIVE.upper()}' calibration hasn't started yet")
+        print("   → Run Notebook 05 and wait for calibration to begin")
+        print(f"\n2. The objective name is incorrect")
+        print("   → Run list_available_calibrations() to see available files")
+        print(f"\n3. The PyDREAM directory doesn't exist")
+        print(f"   → Check that {PYDREAM_DIR} exists")
+    else:
+        print("\n1. Check that the calibration has started")
+        print("2. Verify the CSV_FILE path is correct")
+        print("3. Ensure dbname parameter was set when running calibration")
+    
     raw_df = None
     calib_df = None
 
@@ -849,15 +1066,99 @@ if calib_df is not None:
 # ## 7. Refresh Data
 #
 # Reload the CSV file and update all plots.
+#
+# ### Functions Available:
+# - `refresh_and_plot()` - Full refresh with all plots
+# - `quick_status()` - Quick status check without plots
+# - `auto_monitor(interval=30)` - Continuous monitoring with auto-refresh
+# - `monitor_pydream('objective')` - Switch to different PyDREAM calibration
 
 # %%
-def refresh_and_plot():
-    """Reload data and regenerate all plots."""
+def quick_status() -> dict:
+    """
+    Quick status check of the current calibration without generating plots.
+    
+    Returns:
+        dict: Summary statistics
+    """
+    print(f"\n{'='*60}")
+    print(f"QUICK STATUS - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"{'='*60}")
+    
+    if not CSV_FILE.exists():
+        print(f"⚠ File not found: {CSV_FILE}")
+        return {}
+    
+    # File info
+    file_size = CSV_FILE.stat().st_size / 1024
+    file_mtime = datetime.fromtimestamp(CSV_FILE.stat().st_mtime)
+    age_seconds = (datetime.now() - file_mtime).total_seconds()
+    
+    # Load data
+    try:
+        df = load_calibration_data(CSV_FILE, verbose=False)
+        param_names_local, obj_col, calib_df_local = extract_parameters(df)
+        stats_local = get_calibration_stats(calib_df_local, param_names_local)
+    except Exception as e:
+        print(f"⚠ Error loading data: {e}")
+        return {}
+    
+    # Status display
+    if CALIBRATION_SOURCE == 'pydream_synthetic':
+        print(f"Source: SYNTHETIC HYDROGRAPH TEST")
+    elif CALIBRATION_SOURCE == 'pydream_realdata':
+        print(f"Objective: {PYDREAM_OBJECTIVE.upper()}")
+    print(f"File: {CSV_FILE.name}")
+    print(f"Size: {file_size:.1f} KB")
+    print(f"Last modified: {file_mtime.strftime('%Y-%m-%d %H:%M:%S')} ({age_seconds:.0f}s ago)")
+    
+    if age_seconds < 120:
+        print(f"Status: 🔄 ACTIVELY RUNNING")
+    elif age_seconds < 3600:
+        print(f"Status: ⏸ POSSIBLY PAUSED")
+    else:
+        print(f"Status: ✓ LIKELY COMPLETE")
+    
+    print(f"\n{'-'*60}")
+    print(f"Samples: {stats_local['n_samples']:,}")
+    print(f"Best likelihood: {stats_local['best_likelihood']:.6f}")
+    print(f"Mean likelihood: {stats_local['mean_likelihood']:.6f}")
+    print(f"Parameters: {len(param_names_local)}")
+    
+    # Check for valid samples (not -inf)
+    valid_samples = calib_df_local[calib_df_local['likelihood'] > -np.inf]
+    print(f"Valid samples (not -inf): {len(valid_samples):,} ({100*len(valid_samples)/len(calib_df_local):.1f}%)")
+    
+    # Show best parameters
+    print(f"\n{'-'*60}")
+    print("Best Parameters:")
+    for param, value in list(stats_local['best_params'].items())[:10]:
+        print(f"  {param:15s}: {value:.6f}")
+    if len(stats_local['best_params']) > 10:
+        print(f"  ... and {len(stats_local['best_params']) - 10} more")
+    
+    return stats_local
+
+
+def refresh_and_plot(show_all: bool = True):
+    """
+    Reload data and regenerate plots.
+    
+    Args:
+        show_all: If True, show all diagnostic plots. If False, show only key plots.
+    """
     global raw_df, calib_df, param_names, stats
     
-    print(f"\n{'='*60}")
+    print(f"\n{'='*70}")
     print(f"REFRESHING DATA - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'='*60}\n")
+    print(f"{'='*70}")
+    
+    if CALIBRATION_SOURCE == 'pydream_synthetic':
+        print(f"Source: PyDREAM SYNTHETIC HYDROGRAPH TEST (Notebook 05)")
+    elif CALIBRATION_SOURCE == 'pydream_realdata':
+        print(f"Source: PyDREAM REAL DATA | Objective: {PYDREAM_OBJECTIVE.upper()}")
+    
+    print(f"File: {CSV_FILE}\n")
     
     try:
         raw_df = load_calibration_data(CSV_FILE)
@@ -865,23 +1166,56 @@ def refresh_and_plot():
         param_names = param_names_new
         stats = get_calibration_stats(calib_df, param_names)
         
-        print(f"\nProgress: {stats['n_samples']:,} samples | Best: {stats['best_likelihood']:.6f}")
+        # Check file activity
+        file_mtime = datetime.fromtimestamp(CSV_FILE.stat().st_mtime)
+        age_seconds = (datetime.now() - file_mtime).total_seconds()
+        if age_seconds < 120:
+            status_msg = "🔄 ACTIVELY RUNNING"
+        elif age_seconds < 3600:
+            status_msg = "⏸ POSSIBLY PAUSED"
+        else:
+            status_msg = "✓ LIKELY COMPLETE"
         
-        print("\n1. Objective Progress")
+        print(f"Status: {status_msg}")
+        print(f"Progress: {stats['n_samples']:,} samples | Best: {stats['best_likelihood']:.6f}")
+        
+        # Count valid samples
+        valid_samples = calib_df[calib_df['likelihood'] > -np.inf]
+        print(f"Valid samples: {len(valid_samples):,} ({100*len(valid_samples)/len(calib_df):.1f}%)")
+        
+        print("\n" + "="*70)
+        print("1. OBJECTIVE PROGRESS")
+        print("="*70)
         plot_objective_progress(calib_df)
         
-        print("\n2. Dotty Plots")
-        plot_dotty_plots(calib_df)
+        if show_all:
+            print("\n" + "="*70)
+            print("2. DOTTY PLOTS (Parameter Sensitivity)")
+            print("="*70)
+            plot_dotty_plots(calib_df)
         
-        print("\n3. Parameter Traces (first 8)")
+        print("\n" + "="*70)
+        print("3. PARAMETER TRACES")
+        print("="*70)
         params_to_show = param_names[:8] if len(param_names) > 8 else param_names
         plot_parameter_traces(calib_df, params=params_to_show)
         
-        print("\n4. Posterior Distributions")
-        plot_posterior_distributions(calib_df, burnin=0.3)
+        print("\n" + "="*70)
+        print("4. POSTERIOR DISTRIBUTIONS")
+        print("="*70)
+        plot_posterior_distributions(calib_df, burnin=DEFAULT_BURNIN)
         
-        print("\n5. Convergence Diagnostics")
+        print("\n" + "="*70)
+        print("5. CONVERGENCE DIAGNOSTICS")
+        print("="*70)
         print_convergence_diagnostics(calib_df, param_names, n_chains=5)
+        
+        # Show best parameters
+        print(f"\n{'='*70}")
+        print("BEST PARAMETERS FOUND")
+        print(f"{'='*70}")
+        for param, value in stats['best_params'].items():
+            print(f"  {param:15s}: {value:.6f}")
         
     except Exception as e:
         print(f"ERROR: {e}")
@@ -889,8 +1223,60 @@ def refresh_and_plot():
         traceback.print_exc()
 
 
-# Uncomment to refresh:
-# refresh_and_plot()
+def auto_monitor(interval: int = None, max_iterations: int = 100):
+    """
+    Continuously monitor the calibration with auto-refresh.
+    
+    Args:
+        interval: Refresh interval in seconds. Defaults to AUTO_REFRESH_INTERVAL.
+        max_iterations: Maximum number of refresh cycles.
+    
+    Note:
+        Press Ctrl+C (interrupt kernel) to stop monitoring.
+    """
+    if interval is None:
+        interval = AUTO_REFRESH_INTERVAL
+    
+    print(f"\n{'='*70}")
+    print("AUTO-MONITOR MODE")
+    print(f"{'='*70}")
+    print(f"Refresh interval: {interval} seconds")
+    print(f"Press Ctrl+C (interrupt kernel) to stop")
+    print(f"{'='*70}\n")
+    
+    try:
+        for i in range(max_iterations):
+            if WIDGETS_AVAILABLE:
+                clear_output(wait=True)
+            
+            print(f"Iteration {i+1}/{max_iterations}")
+            quick_status()
+            
+            # Only show key plot (objective progress)
+            try:
+                raw_df_local = load_calibration_data(CSV_FILE, verbose=False)
+                _, _, calib_df_local = extract_parameters(raw_df_local)
+                plot_objective_progress(calib_df_local)
+            except Exception as e:
+                print(f"Plot error: {e}")
+            
+            print(f"\nNext refresh in {interval} seconds...")
+            time.sleep(interval)
+            
+    except KeyboardInterrupt:
+        print("\n\nMonitoring stopped by user.")
+        print("Run refresh_and_plot() for full analysis.")
+
+
+# Quick status check on load
+print("\n" + "-"*70)
+print("Quick functions available:")
+print("  quick_status()          - Quick status check")
+print("  refresh_and_plot()      - Full refresh with all plots")
+print("  auto_monitor(interval)  - Continuous monitoring")
+print("  monitor_pydream('obj')  - Switch to different calibration")
+print("  list_available_calibrations()  - Show all available PyDREAM files")
+print("-"*70)
 
 # %% [markdown]
 # ---
@@ -970,29 +1356,60 @@ if calib_df is not None:
 # ---
 # ## Summary
 #
-# This notebook provides real-time monitoring of MCMC calibrations.
+# This notebook provides real-time monitoring of MCMC calibrations, including
+# PyDREAM calibrations from Notebook 05 (Algorithm Comparison).
 #
-# **Key functions:**
-# - `load_calibration_data(csv_path)` - Load calibration CSV output
+# ### Key Functions
+#
+# **Monitoring:**
+# - `quick_status()` - Quick status check without plots
+# - `refresh_and_plot()` - Full refresh with all diagnostic plots
+# - `auto_monitor(interval)` - Continuous monitoring with auto-refresh
+#
+# **Switching Calibrations:**
+# - `monitor_pydream('objective')` - Switch to different PyDREAM calibration
+# - `list_available_calibrations()` - Show all available PyDREAM files
+#
+# **Visualization:**
 # - `plot_objective_progress(df)` - Objective function evolution
 # - `plot_dotty_plots(df)` - Parameter sensitivity
 # - `plot_parameter_traces(df)` - MCMC chain evolution
 # - `plot_posterior_distributions(df, burnin)` - Parameter distributions
-# - `print_convergence_diagnostics(df, params, n_chains)` - Gelman-Rubin R-hat
-# - `refresh_and_plot()` - Reload data and update all plots
+# - `print_convergence_diagnostics(df)` - Gelman-Rubin R-hat
+#
+# **Export:**
 # - `export_best_parameters()` - Export optimal parameter values
 #
-# **Tips:**
+# ### Tips
+#
 # - Start with `burnin=0.0` early in calibration, increase to `0.3-0.5` later
 # - R-hat < 1.1 indicates convergence, < 1.05 is ideal
 # - Wide posteriors suggest poorly identified parameters
 # - Multiple peaks in posteriors indicate equifinality
+# - Use `auto_monitor(30)` for hands-free progress tracking
 
 # %%
 print("=" * 70)
 print("CALIBRATION MONITOR READY")
 print("=" * 70)
 print(f"\nTimestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-print("\nTo monitor an ongoing calibration:")
-print("  1. Update CSV_FILE to point to your calibration output")
-print("  2. Run refresh_and_plot() periodically to update plots")
+
+if CALIBRATION_SOURCE == 'pydream_synthetic':
+    print(f"\nCurrently monitoring: PyDREAM SYNTHETIC HYDROGRAPH TEST")
+    print(f"File: {CSV_FILE.name}")
+elif CALIBRATION_SOURCE == 'pydream_realdata':
+    print(f"\nCurrently monitoring: PyDREAM {PYDREAM_OBJECTIVE.upper()} calibration (real data)")
+    print(f"File: {CSV_FILE.name}")
+
+print("""
+Quick Start Commands:
+  quick_status()               - Check progress without plots
+  refresh_and_plot()           - Full analysis with all plots
+  auto_monitor(30)             - Auto-refresh every 30 seconds
+  
+Switch Calibrations (PyDREAM from Notebook 05):
+  list_available_calibrations()    - Show all real-data calibration files
+  monitor_pydream('kge')           - Switch to KGE real-data calibration
+  monitor_pydream('nse')           - Switch to NSE calibration
+  monitor_pydream('sdeb')          - Switch to SDEB calibration
+""")

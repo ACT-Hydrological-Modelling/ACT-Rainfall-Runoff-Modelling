@@ -289,13 +289,14 @@ class CalibrationReport:
     
     def calculate_comprehensive_metrics(self) -> Dict[str, float]:
         """
-        Calculate comprehensive performance metrics including transformed NSE.
+        Calculate comprehensive performance metrics including all NSE and KGE variants.
         
         Returns:
             Dictionary with extended metrics including:
-            - Standard: NSE, KGE, RMSE, MAE, PBIAS
-            - Transformed: NSE(log), NSE(inv), NSE(sqrt)
-            - KGE variants: KGE components (r, alpha, beta)
+            - NSE variants: NSE, LogNSE, SqrtNSE, InvNSE
+            - KGE variants: KGE, KGE_log, KGE_sqrt, KGE_inv
+            - KGE components: r, alpha, beta
+            - Error metrics: RMSE, MAE, PBIAS, R²
             
         Example:
             >>> metrics = report.calculate_comprehensive_metrics()
@@ -303,7 +304,7 @@ class CalibrationReport:
             ...     print(f"{name}: {value:.4f}")
         """
         from pyrrm.calibration.objective_functions import (
-            NSE, KGE, RMSE, MAE, PBIAS, LogNSE, InverseNSE, SqrtNSE
+            NSE, KGE, RMSE, MAE, PBIAS, LogNSE
         )
         
         obs = self.observed
@@ -316,37 +317,100 @@ class CalibrationReport:
         
         metrics = {}
         
-        # Standard metrics
+        # ==========================================================================
+        # NSE and variants
+        # ==========================================================================
         metrics['NSE'] = NSE().calculate(sim_valid, obs_valid)
-        metrics['KGE'] = KGE().calculate(sim_valid, obs_valid)
-        metrics['RMSE'] = RMSE().calculate(sim_valid, obs_valid)
-        metrics['MAE'] = MAE().calculate(sim_valid, obs_valid)
-        metrics['PBIAS'] = PBIAS().calculate(sim_valid, obs_valid)
         
-        # Transformed NSE
         try:
-            metrics['NSE (log Q)'] = LogNSE().calculate(sim_valid, obs_valid)
+            metrics['LogNSE'] = LogNSE().calculate(sim_valid, obs_valid)
         except Exception:
-            metrics['NSE (log Q)'] = np.nan
-            
+            metrics['LogNSE'] = np.nan
+        
+        # SqrtNSE (calculated directly)
         try:
-            metrics['NSE (1/Q)'] = InverseNSE().calculate(sim_valid, obs_valid)
+            sqrt_obs = np.sqrt(np.maximum(obs_valid, 0))
+            sqrt_sim = np.sqrt(np.maximum(sim_valid, 0))
+            ss_res_sqrt = np.sum((sqrt_obs - sqrt_sim) ** 2)
+            ss_tot_sqrt = np.sum((sqrt_obs - np.mean(sqrt_obs)) ** 2)
+            metrics['SqrtNSE'] = 1 - ss_res_sqrt / ss_tot_sqrt if ss_tot_sqrt > 0 else np.nan
         except Exception:
-            metrics['NSE (1/Q)'] = np.nan
-            
+            metrics['SqrtNSE'] = np.nan
+        
+        # InvNSE (calculated directly)
         try:
-            metrics['NSE (√Q)'] = SqrtNSE().calculate(sim_valid, obs_valid)
+            obs_pos_inv = obs_valid[obs_valid > 0.01]
+            sim_pos_inv = sim_valid[obs_valid > 0.01]
+            if len(obs_pos_inv) > 0:
+                inv_obs = 1.0 / obs_pos_inv
+                inv_sim = 1.0 / np.maximum(sim_pos_inv, 0.01)
+                ss_res_inv = np.sum((inv_obs - inv_sim) ** 2)
+                ss_tot_inv = np.sum((inv_obs - np.mean(inv_obs)) ** 2)
+                metrics['InvNSE'] = 1 - ss_res_inv / ss_tot_inv if ss_tot_inv > 0 else np.nan
+            else:
+                metrics['InvNSE'] = np.nan
         except Exception:
-            metrics['NSE (√Q)'] = np.nan
+            metrics['InvNSE'] = np.nan
+        
+        # ==========================================================================
+        # KGE (standard) and components
+        # ==========================================================================
+        metrics['KGE'] = KGE().calculate(sim_valid, obs_valid)
         
         # KGE components
-        r = np.corrcoef(obs_valid, sim_valid)[0, 1]
-        alpha = np.std(sim_valid) / np.std(obs_valid)
-        beta = np.mean(sim_valid) / np.mean(obs_valid)
+        r = np.corrcoef(obs_valid, sim_valid)[0, 1] if len(obs_valid) > 1 else np.nan
+        alpha = np.std(sim_valid) / np.std(obs_valid) if np.std(obs_valid) > 0 else np.nan
+        beta = np.mean(sim_valid) / np.mean(obs_valid) if np.mean(obs_valid) != 0 else np.nan
         
         metrics['KGE_r'] = r
         metrics['KGE_alpha'] = alpha
         metrics['KGE_beta'] = beta
+        
+        # ==========================================================================
+        # KGE with transformations
+        # ==========================================================================
+        # KGE(log Q)
+        obs_pos_mask = obs_valid > 0
+        obs_pos = obs_valid[obs_pos_mask]
+        sim_pos = sim_valid[obs_pos_mask]
+        if len(obs_pos) > 0:
+            log_obs = np.log(obs_pos + 1)
+            log_sim = np.log(np.maximum(sim_pos, 0) + 1)
+            r_log = np.corrcoef(log_obs, log_sim)[0, 1] if len(log_obs) > 1 else np.nan
+            alpha_log = np.std(log_sim) / np.std(log_obs) if np.std(log_obs) > 0 else np.nan
+            beta_log = np.mean(log_sim) / np.mean(log_obs) if np.mean(log_obs) != 0 else np.nan
+            metrics['KGE_log'] = 1 - np.sqrt((r_log - 1)**2 + (alpha_log - 1)**2 + (beta_log - 1)**2) if not np.isnan(r_log) else np.nan
+        else:
+            metrics['KGE_log'] = np.nan
+        
+        # KGE(sqrt Q)
+        sqrt_obs = np.sqrt(np.maximum(obs_valid, 0))
+        sqrt_sim = np.sqrt(np.maximum(sim_valid, 0))
+        r_sqrt = np.corrcoef(sqrt_obs, sqrt_sim)[0, 1] if len(sqrt_obs) > 1 else np.nan
+        alpha_sqrt = np.std(sqrt_sim) / np.std(sqrt_obs) if np.std(sqrt_obs) > 0 else np.nan
+        beta_sqrt = np.mean(sqrt_sim) / np.mean(sqrt_obs) if np.mean(sqrt_obs) != 0 else np.nan
+        metrics['KGE_sqrt'] = 1 - np.sqrt((r_sqrt - 1)**2 + (alpha_sqrt - 1)**2 + (beta_sqrt - 1)**2) if not np.isnan(r_sqrt) else np.nan
+        
+        # KGE(1/Q)
+        obs_pos_inv = obs_valid[obs_valid > 0.01]
+        sim_pos_inv = sim_valid[obs_valid > 0.01]
+        if len(obs_pos_inv) > 0:
+            inv_obs = 1.0 / obs_pos_inv
+            inv_sim = 1.0 / np.maximum(sim_pos_inv, 0.01)
+            r_inv = np.corrcoef(inv_obs, inv_sim)[0, 1] if len(inv_obs) > 1 else np.nan
+            alpha_inv = np.std(inv_sim) / np.std(inv_obs) if np.std(inv_obs) > 0 else np.nan
+            beta_inv = np.mean(inv_sim) / np.mean(inv_obs) if np.mean(inv_obs) != 0 else np.nan
+            metrics['KGE_inv'] = 1 - np.sqrt((r_inv - 1)**2 + (alpha_inv - 1)**2 + (beta_inv - 1)**2) if not np.isnan(r_inv) else np.nan
+        else:
+            metrics['KGE_inv'] = np.nan
+        
+        # ==========================================================================
+        # Other metrics
+        # ==========================================================================
+        metrics['RMSE'] = RMSE().calculate(sim_valid, obs_valid)
+        metrics['MAE'] = MAE().calculate(sim_valid, obs_valid)
+        metrics['PBIAS'] = PBIAS().calculate(sim_valid, obs_valid)
+        metrics['R2'] = r ** 2 if not np.isnan(r) else np.nan
         
         return metrics
     

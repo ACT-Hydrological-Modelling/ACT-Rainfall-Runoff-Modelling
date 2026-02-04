@@ -823,6 +823,7 @@ class CalibrationRunner:
         dbformat: str = 'csv',
         write_interval: int = 1,
         verbose: bool = True,
+        nverbose: int = 100,
         checkpoint_dir: Optional[str] = None,
         checkpoint_interval: int = 5000,
         **kwargs
@@ -883,6 +884,9 @@ class CalibrationRunner:
             dbformat: Output format ('csv' only, for SpotPy compatibility)
             write_interval: Write every N evaluations (1=all, 10=every 10th)
             verbose: Whether to print progress
+            nverbose: Print progress every N iterations (default: 100).
+                     Note: Progress from worker processes may not display in
+                     Jupyter notebooks. Use `dbname` for reliable tracking.
             checkpoint_dir: Directory for automatic checkpoints (None to disable)
             checkpoint_interval: Save checkpoint every N iterations
             **kwargs: Additional PyDREAM parameters
@@ -920,6 +924,7 @@ class CalibrationRunner:
             dbformat=dbformat,
             write_interval=write_interval,
             verbose=verbose,
+            nverbose=nverbose,
             **kwargs
         )
         

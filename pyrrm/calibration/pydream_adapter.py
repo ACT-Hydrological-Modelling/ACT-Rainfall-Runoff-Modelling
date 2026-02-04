@@ -286,12 +286,17 @@ class PyDREAMLikelihood:
         # Recreate inputs DataFrame
         inputs = pd.DataFrame(self.inputs_dict)
         
-        # Convert array to parameter dictionary
-        params = dict(zip(self.parameter_names, param_array.flatten()))
+        # Convert array to parameter dictionary (only calibration params)
+        calib_params = dict(zip(self.parameter_names, param_array.flatten()))
+        
+        # IMPORTANT: First set ALL parameters from stored model_params (includes fixed params)
+        # Then update with the calibration parameters being sampled
+        all_params = self.model_params.copy()
+        all_params.update(calib_params)
         
         # Set parameters
         model.reset()
-        model.set_parameters(params)
+        model.set_parameters(all_params)
         
         try:
             # Run model
@@ -309,8 +314,18 @@ class PyDREAMLikelihood:
             sim = simulated[self.warmup_period:]
             obs = self.observed[self.warmup_period:]
             
+            # Check for valid arrays
+            if len(sim) == 0 or len(obs) == 0:
+                self._write_progress(-np.inf, param_array)
+                return -np.inf
+            
             # Calculate objective value
-            obj_value = objective.calculate(sim, obs)
+            # Use callable syntax to support both old (calculate method) and new (__call__) interfaces
+            if hasattr(objective, 'calculate'):
+                obj_value = objective.calculate(sim, obs)
+            else:
+                # New-style objective function uses __call__ directly
+                obj_value = objective(obs, sim)  # Note: new interface takes (obs, sim) not (sim, obs)
             
             if np.isnan(obj_value):
                 log_likelihood = -np.inf
@@ -327,6 +342,9 @@ class PyDREAMLikelihood:
             return log_likelihood
             
         except Exception as e:
+            # Log the actual error for debugging
+            import sys
+            print(f"PyDREAM likelihood error: {type(e).__name__}: {e}", file=sys.stderr)
             # Write failed evaluation
             self._write_progress(-np.inf, param_array)
             return -np.inf
@@ -464,6 +482,7 @@ def run_pydream(
     parallel: bool = False,
     mp_context: Optional[str] = None,
     verbose: bool = True,
+    nverbose: int = 100,
     hardboundaries: bool = True,
     convergence_check: bool = True,
     **kwargs
@@ -542,6 +561,10 @@ def run_pydream(
                     If None, uses system default. 'spawn' is safest but slower.
                     'fork' is faster on Unix but may have issues with some libraries.
         verbose: Whether to print progress
+        nverbose: Print progress every N iterations (default: 100).
+                  Note: Progress from worker processes may not display in
+                  Jupyter notebooks due to multiprocessing buffering.
+                  Use `dbname` for reliable progress tracking.
         hardboundaries: Whether to enforce hard parameter boundaries
         convergence_check: Whether to check Gelman-Rubin convergence
         **kwargs: Additional arguments passed to PyDREAM
@@ -639,6 +662,7 @@ def run_pydream(
             parallel=parallel,
             mp_context=mp_context,
             verbose=verbose,
+            nverbose=nverbose,
             hardboundaries=hardboundaries,
             **kwargs
         )

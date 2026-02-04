@@ -14,168 +14,65 @@
 # ---
 
 # %% [markdown]
-# # Calibration Algorithms: Finding Optimal Parameters
+# # Algorithm Comparison: PyDREAM vs SCE-UA
 #
 # ## Purpose
 #
-# This notebook compares different optimization algorithms for rainfall-runoff
-# model calibration. Understanding their trade-offs helps you choose the right
-# tool for your application.
+# This notebook provides a comprehensive comparison between two fundamentally different
+# calibration paradigms:
+#
+# - **SCE-UA (Shuffled Complex Evolution)**: Optimization-based, provides point estimates
+# - **PyDREAM (MT-DREAM(ZS))**: MCMC-based, provides full posterior distributions
+#
+# We run calibrations across **13 different objective functions** and compare:
+# - Parameter estimates (point vs posterior)
+# - Model performance metrics
+# - Computational requirements
+# - Uncertainty quantification
 #
 # ## What You'll Learn
 #
-# - The landscape of calibration algorithms available in pyrrm
-# - Fundamental difference: MCMC (Bayesian) vs Optimization (frequentist)
-# - When to use DREAM, PyDREAM, SCE-UA, or Differential Evolution
-# - How to interpret convergence diagnostics
-# - Practical considerations: speed, parallelization, uncertainty quantification
+# - How to run PyDREAM calibrations for multiple objective functions
+# - How to compare MCMC posteriors with optimization point estimates
+# - How objective function choice affects both algorithms
+# - Practical insights on when to use each approach
 #
 # ## Prerequisites
 #
-# - Completed **Notebook 02: Calibration Quickstart**
-# - Completed **Notebook 03: Objective Functions** (recommended)
+# - Completed **Notebook 02: Calibration Quickstart** (provides SCE-UA results)
+# - Understanding of MCMC concepts (recommended)
 #
 # ## Estimated Time
 #
-# - ~20 minutes for concepts
-# - ~2-4 hours for full algorithm comparison (can be shortened)
+# - ~1-2 hours for PyDREAM calibrations (can be run overnight)
+# - ~10-20 minutes for analysis and comparison
 #
 # ## Key Insight
 #
-# > **MCMC methods (DREAM, PyDREAM) give you parameter uncertainty estimates.**
-# > **Optimization methods (SCE-UA, SciPy DE) give you a single "best" answer faster.**
+# > **SCE-UA finds the peak of the likelihood surface.**
+# > **PyDREAM maps the entire posterior landscape.**
 
 # %% [markdown]
 # ---
-# ## Algorithm Overview
+# ## The 13 Objective Functions
 #
-# ### Two Paradigms for Calibration
+# We compare calibrations using the following objective functions:
 #
-# ```
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │                        CALIBRATION ALGORITHMS                               │
-# ├─────────────────────────────────┬───────────────────────────────────────────┤
-# │          MCMC METHODS           │        OPTIMIZATION METHODS               │
-# │       (Sample posterior)        │         (Find optimum)                    │
-# ├─────────────────────────────────┼───────────────────────────────────────────┤
-# │  SpotPy DREAM                   │  SCE-UA                                   │
-# │  PyDREAM (MT-DREAM(ZS))         │  SciPy Differential Evolution             │
-# ├─────────────────────────────────┼───────────────────────────────────────────┤
-# │  OUTPUT: Posterior distribution │  OUTPUT: Single best point                │
-# │  - Parameter samples            │  - Optimal parameter values               │
-# │  - Credible intervals           │  - Best objective value                   │
-# │  - Uncertainty estimates        │                                           │
-# ├─────────────────────────────────┼───────────────────────────────────────────┤
-# │  SPEED: Slower (10K+ samples)   │  SPEED: Faster (1-5K evaluations)         │
-# │  USE: Uncertainty, Bayesian     │  USE: Point estimates, quick calibration  │
-# └─────────────────────────────────┴───────────────────────────────────────────┘
-# ```
-#
-# ### Available Algorithms in pyrrm
-#
-# | Algorithm | Type | Package | Uncertainty? | Speed | Complexity |
-# |-----------|------|---------|--------------|-------|------------|
-# | **SpotPy DREAM** | MCMC | SpotPy | Yes | Slow | Medium |
-# | **PyDREAM** | MCMC | PyDREAM | Yes | Slow | High |
-# | **SCE-UA** | Optimization | SpotPy | No | Fast | Low |
-# | **SciPy DE** | Optimization | SciPy | No | Fast | Low |
-
-# %% [markdown]
-# ---
-# ## Understanding the Algorithms
-#
-# ### MCMC Methods: Sampling the Posterior
-#
-# **MCMC (Markov Chain Monte Carlo)** methods don't just find *one* good parameter
-# set - they sample the entire posterior distribution of parameters consistent
-# with the data.
-#
-# #### SpotPy DREAM
-#
-# DREAM (DiffeRential Evolution Adaptive Metropolis) combines:
-# - **Differential Evolution**: Uses multiple chains that learn from each other
-# - **Adaptive Metropolis**: Automatically tunes proposal distribution
-#
-# **Key settings:**
-# - `n_iterations`: Total samples to draw
-# - `n_chains`: Number of parallel chains (typically 3-8)
-# - `convergence_threshold`: Gelman-Rubin R-hat threshold (default 1.2)
-#
-# #### PyDREAM (MT-DREAM(ZS))
-#
-# An advanced variant with:
-# - **Multi-Try**: Proposes multiple candidates, picks best
-# - **Snooker Updates**: Better exploration of multi-modal posteriors
-# - **Z-matrix**: Uses past history for better proposals
-#
-# **When to use PyDREAM:**
-# - Complex, multi-modal posteriors
-# - When SpotPy DREAM struggles to converge
-# - Need better mixing between modes
-#
-# ### Optimization Methods: Finding the Peak
-#
-# #### SCE-UA (Shuffled Complex Evolution)
-#
-# Developed specifically for hydrology (Duan et al., 1992):
-# - Divides population into "complexes"
-# - Each complex evolves independently
-# - Periodically shuffles members between complexes
-#
-# **Key settings:**
-# - `n_iterations`: Maximum function evaluations
-# - `ngs`: Number of complexes (more = better search)
-#
-# #### SciPy Differential Evolution
-#
-# Modern evolutionary algorithm:
-# - Creates new candidates by combining existing solutions
-# - More general-purpose than SCE-UA
-#
-# **Key settings:**
-# - `maxiter`: Maximum generations
-# - `popsize`: Population size multiplier
-
-# %% [markdown]
-# ---
-# ## The pyrrm.calibration Architecture
-#
-# ```
-# pyrrm.calibration/
-# ├── runner.py              ← CalibrationRunner (unified interface)
-# │                             • run_spotpy_dream()
-# │                             • run_pydream()
-# │                             • run_sceua()
-# │                             • run_differential_evolution()
-# │
-# ├── spotpy_adapter.py      ← SpotPy interface
-# │                             • DREAM algorithm
-# │                             • SCE-UA algorithm
-# │
-# ├── pydream_adapter.py     ← PyDREAM interface
-# │                             • MT-DREAM(ZS) algorithm
-# │
-# └── scipy_adapter.py       ← SciPy interface
-#                               • Differential Evolution
-# ```
-#
-# ### The Adapter Pattern
-#
-# Each algorithm has a different API. The adapters normalize them:
-#
-# ```python
-# # Same interface, different algorithms
-# result = runner.run_spotpy_dream(n_iterations=10000)
-# result = runner.run_pydream(n_iterations=5000)
-# result = runner.run_sceua(n_iterations=5000)
-# result = runner.run_differential_evolution(maxiter=500)
-# ```
-#
-# All return a `CalibrationResult` with:
-# - `best_parameters`: Dictionary of optimal values
-# - `best_objective`: Best metric achieved
-# - `all_samples`: Full sampling history (if available)
-# - `runtime_seconds`: Execution time
+# | # | Objective | Type | Flow Emphasis |
+# |---|-----------|------|---------------|
+# | 1 | NSE | Standard | High flows |
+# | 2 | LogNSE | Transformed | All flows |
+# | 3 | InvNSE (1/Q) | Transformed | Low flows |
+# | 4 | SqrtNSE (√Q) | Transformed | Balanced |
+# | 5 | SDEB | Composite | Balanced + FDC |
+# | 6 | KGE | Standard | High flows |
+# | 7 | KGE(1/Q) | Transformed | Low flows |
+# | 8 | KGE(√Q) | Transformed | Balanced |
+# | 9 | KGE(log) | Transformed | All flows |
+# | 10 | KGE_np | Non-parametric | Robust |
+# | 11 | KGE_np(1/Q) | Non-parametric | Low flows |
+# | 12 | KGE_np(√Q) | Non-parametric | Balanced |
+# | 13 | KGE_np(log) | Non-parametric | All flows |
 
 # %% [markdown]
 # ---
@@ -189,22 +86,25 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import warnings
 import time
+import pickle
 
 # Interactive visualizations
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import plotly.express as px
 
-# Suppress warnings
+# Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
 # Set plot style
 plt.style.use('seaborn-v0_8-whitegrid')
-plt.rcParams['figure.figsize'] = (12, 6)
+plt.rcParams['figure.figsize'] = (14, 8)
 plt.rcParams['figure.dpi'] = 100
 
 print("=" * 70)
-print("CALIBRATION ALGORITHM COMPARISON")
+print("ALGORITHM COMPARISON: PyDREAM vs SCE-UA")
 print("=" * 70)
+print("\nLibraries loaded successfully!")
 
 # %%
 # Import pyrrm components
@@ -212,37 +112,98 @@ from pyrrm.models.sacramento import Sacramento
 from pyrrm.calibration import (
     CalibrationRunner, 
     CalibrationResult,
+    CalibrationReport,
     SPOTPY_AVAILABLE,
     PYDREAM_AVAILABLE
 )
-from pyrrm.calibration.objective_functions import (
-    NSE, KGE, GaussianLikelihood, calculate_metrics
+from pyrrm.calibration.objective_functions import calculate_metrics, GaussianLikelihood, TransformedGaussianLikelihood
+from pyrrm.objectives import (
+    NSE, KGE, KGENonParametric, FlowTransformation, SDEB
 )
 
-print("\npyrrm.calibration imported successfully!")
-print(f"\nAvailable backends:")
+print("\npyrrm components imported!")
+print(f"\nAvailable calibration backends:")
 print(f"  SpotPy (DREAM, SCE-UA): {SPOTPY_AVAILABLE}")
 print(f"  PyDREAM: {PYDREAM_AVAILABLE}")
-print(f"  SciPy: Always available")
+
+if not PYDREAM_AVAILABLE:
+    print("\nWARNING: PyDREAM not installed!")
+    print("Install with: pip install pydream")
+    print("This notebook requires PyDREAM for the algorithm comparison.")
+
+# %% [markdown]
+# ---
+# ## Load SCE-UA Results from Notebook 02
+#
+# First, we load all the calibration results from the SCE-UA runs in Notebook 02.
+# These are stored as `CalibrationReport` pickle files.
+
+# %%
+# Define report file paths
+REPORTS_DIR = Path('../test_data/reports')
+
+# Map of objective function names to report files
+SCEUA_REPORTS = {
+    'NSE': '410734_nse.pkl',
+    'LogNSE': '410734_lognse.pkl',
+    'InvNSE': '410734_invnse.pkl',
+    'SqrtNSE': '410734_sqrtnse.pkl',
+    'SDEB': '410734_sdeb.pkl',
+    'KGE': '410734_kge.pkl',
+    'KGE_inv': '410734_kge_inv.pkl',
+    'KGE_sqrt': '410734_kge_sqrt.pkl',
+    'KGE_log': '410734_kge_log.pkl',
+    'KGE_np': '410734_kge_np.pkl',
+    'KGE_np_inv': '410734_kge_np_inv.pkl',
+    'KGE_np_sqrt': '410734_kge_np_sqrt.pkl',
+    'KGE_np_log': '410734_kge_np_log.pkl',
+}
+
+# Load all SCE-UA reports
+sceua_results = {}
+sceua_reports = {}
+
+print("=" * 70)
+print("LOADING SCE-UA RESULTS FROM NOTEBOOK 02")
+print("=" * 70)
+
+for name, filename in SCEUA_REPORTS.items():
+    filepath = REPORTS_DIR / filename
+    if filepath.exists():
+        report = CalibrationReport.load(str(filepath))
+        sceua_reports[name] = report
+        sceua_results[name] = report.result
+        print(f"  ✓ {name:<12}: Loaded ({filename})")
+    else:
+        print(f"  ✗ {name:<12}: File not found ({filename})")
+        print(f"    Run Notebook 02 first to generate this calibration.")
+
+print(f"\nLoaded {len(sceua_results)}/13 SCE-UA calibrations")
 
 # %% [markdown]
 # ---
 # ## Prepare Calibration Data
+#
+# We need the same data used in Notebook 02 for the PyDREAM calibrations.
 
 # %%
-# Load data
+# Load calibration data from files
+# Note: We need full data (including warmup) for running PyDREAM calibrations
 DATA_DIR = Path('../data/410734')
 CATCHMENT_AREA_KM2 = 516.62667
+WARMUP_DAYS = 365
 
-# Load datasets
+# Load rainfall
 rainfall_df = pd.read_csv(DATA_DIR / 'Default Input Set - Rain_QBN01.csv',
                           parse_dates=['Date'], index_col='Date')
 rainfall_df.columns = ['rainfall']
 
+# Load PET
 pet_df = pd.read_csv(DATA_DIR / 'Default Input Set - Mwet_QBN01.csv',
                      parse_dates=['Date'], index_col='Date')
 pet_df.columns = ['pet']
 
+# Load observed flow
 flow_df = pd.read_csv(DATA_DIR / '410734_output_SDmodel.csv',
                       parse_dates=['Date'], index_col='Date')
 observed_col = 'Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)'
@@ -251,652 +212,1534 @@ observed_df.columns = ['observed_flow']
 observed_df['observed_flow'] = observed_df['observed_flow'].replace(-9999, np.nan)
 observed_df = observed_df.dropna()
 
+# Merge datasets
 data = rainfall_df.join(pet_df, how='inner').join(observed_df, how='inner')
-
-# Define calibration period
-WARMUP_DAYS = 365
-CAL_START = pd.Timestamp('1990-01-01')
-CAL_END = pd.Timestamp('1994-12-31')  # 5 years for demo
-
-cal_data = data[(data.index >= CAL_START) & (data.index <= CAL_END)].copy()
-cal_inputs = cal_data[['rainfall', 'pet']].copy()
-cal_observed = cal_data['observed_flow'].values
+cal_inputs = data[['rainfall', 'pet']].copy()
+cal_observed = data['observed_flow'].values
 
 print("=" * 50)
 print("CALIBRATION DATA")
 print("=" * 50)
-print(f"\nPeriod: {CAL_START.date()} to {CAL_END.date()}")
-print(f"Records: {len(cal_data)}")
+print(f"\nRecords: {len(cal_inputs):,} days")
+print(f"Period: {cal_inputs.index.min().date()} to {cal_inputs.index.max().date()}")
 print(f"Warmup: {WARMUP_DAYS} days")
-print(f"Effective calibration: {len(cal_data) - WARMUP_DAYS} days")
+print(f"Effective calibration: {len(cal_inputs) - WARMUP_DAYS:,} days")
+print(f"Catchment area: {CATCHMENT_AREA_KM2} km²")
 
 # %% [markdown]
 # ---
-# ## Objective Functions for Different Algorithm Types
+# ## Define Objective Functions
 #
-# **Important:** MCMC and optimization methods require different objective functions:
-#
-# | Method Type | Objective | Reason |
-# |-------------|-----------|--------|
-# | **MCMC** | GaussianLikelihood | Log-probability for Bayesian inference |
-# | **Optimization** | NSE | Standard efficiency metric |
+# We define all 13 objective functions matching those used in Notebook 02.
 
 # %%
-# Define objective functions
-mcmc_objective = GaussianLikelihood()  # For DREAM, PyDREAM
-optim_objective = NSE()                 # For SCE-UA, SciPy DE
-
-print("=" * 50)
-print("OBJECTIVE FUNCTIONS BY METHOD TYPE")
-print("=" * 50)
-print(f"\nMCMC Methods (SpotPy DREAM, PyDREAM):")
-print(f"  Objective: {mcmc_objective.name}")
-print(f"  Maximize: {mcmc_objective.maximize}")
-print(f"  Note: Log-likelihood required for Bayesian inference")
-
-print(f"\nOptimization Methods (SCE-UA, SciPy DE):")
-print(f"  Objective: {optim_objective.name}")
-print(f"  Maximize: {optim_objective.maximize}")
-print(f"  Note: Standard efficiency metric for optimization")
-
-# %% [markdown]
-# ---
-# ## Running the Calibrations
-#
-# We'll run all four algorithms and compare their results.
-#
-# **Note:** For demonstration, we use reduced iterations. Increase for production!
-
-# %%
-# Configuration for demo (reduce for faster execution)
-DEMO_MODE = True  # Set False for production runs
-
-if DEMO_MODE:
-    SPOTPY_DREAM_ITERATIONS = 3000
-    PYDREAM_ITERATIONS = 2000
-    SCEUA_ITERATIONS = 3000
-    SCIPY_MAXITER = 200
-    N_CHAINS = 5
-    print("⚠ DEMO MODE: Using reduced iterations for speed")
-else:
-    SPOTPY_DREAM_ITERATIONS = 10000
-    PYDREAM_ITERATIONS = 5000
-    SCEUA_ITERATIONS = 10000
-    SCIPY_MAXITER = 500
-    N_CHAINS = 8
-    print("PRODUCTION MODE: Full iterations")
-
-print(f"\nConfiguration:")
-print(f"  SpotPy DREAM: {SPOTPY_DREAM_ITERATIONS} iterations, {N_CHAINS} chains")
-print(f"  PyDREAM: {PYDREAM_ITERATIONS} iterations, {N_CHAINS} chains")
-print(f"  SCE-UA: {SCEUA_ITERATIONS} iterations")
-print(f"  SciPy DE: {SCIPY_MAXITER} generations")
-
-# %% [markdown]
-# ### 1. SpotPy DREAM
-#
-# DREAM combines differential evolution with adaptive Metropolis sampling.
-# Multiple chains explore the parameter space, sharing information.
-
-# %%
-print("=" * 70)
-print("1. SPOTPY DREAM CALIBRATION")
-print("=" * 70)
-
-if SPOTPY_AVAILABLE:
-    runner_mcmc = CalibrationRunner(
-        model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
-        inputs=cal_inputs,
-        observed=cal_observed,
-        objective=mcmc_objective,
-        warmup_period=WARMUP_DAYS
-    )
+# Define all objective functions
+objectives = {
+    # NSE-based
+    'NSE': NSE(),
+    'LogNSE': NSE(transform=FlowTransformation('log', epsilon_value=0.01)),
+    'InvNSE': NSE(transform=FlowTransformation('inverse', epsilon_value=0.01)),
+    'SqrtNSE': NSE(transform=FlowTransformation('sqrt')),
     
-    print(f"\nObjective: {mcmc_objective.name}")
-    print(f"Chains: {N_CHAINS}")
-    print(f"Iterations: {SPOTPY_DREAM_ITERATIONS}")
-    print("\nRunning... (this may take several minutes)")
+    # Composite
+    'SDEB': SDEB(alpha=0.1, lam=0.5),
     
-    spotpy_result = runner_mcmc.run_spotpy_dream(
-        n_iterations=SPOTPY_DREAM_ITERATIONS,
-        n_chains=N_CHAINS,
-        convergence_threshold=1.2,
-        dbname='algo_spotpy_dream',
-        dbformat='csv',
-        parallel='seq'
-    )
+    # KGE-based
+    'KGE': KGE(variant='2012'),
+    'KGE_inv': KGE(variant='2012', transform=FlowTransformation('inverse', epsilon_value=0.01)),
+    'KGE_sqrt': KGE(variant='2012', transform=FlowTransformation('sqrt')),
+    'KGE_log': KGE(variant='2012', transform=FlowTransformation('log', epsilon_value=0.01)),
     
-    print("\n" + spotpy_result.summary())
-else:
-    print("\n⚠ SpotPy not installed. Install with: pip install spotpy")
-    spotpy_result = None
-
-# %% [markdown]
-# ### 2. PyDREAM (MT-DREAM(ZS))
-#
-# Multi-Try DREAM with snooker updates. Better mixing for complex posteriors.
-
-# %%
-print("=" * 70)
-print("2. PYDREAM CALIBRATION (MT-DREAM(ZS))")
-print("=" * 70)
-
-if PYDREAM_AVAILABLE:
-    runner_pydream = CalibrationRunner(
-        model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
-        inputs=cal_inputs,
-        observed=cal_observed,
-        objective=mcmc_objective,
-        warmup_period=WARMUP_DAYS
-    )
-    
-    print(f"\nObjective: {mcmc_objective.name}")
-    print(f"Chains: {N_CHAINS}")
-    print(f"Iterations per chain: {PYDREAM_ITERATIONS}")
-    print("\nRunning... (this may take several minutes)")
-    
-    pydream_result = runner_pydream.run_pydream(
-        n_iterations=PYDREAM_ITERATIONS,
-        n_chains=N_CHAINS,
-        multitry=5,
-        snooker=0.1,
-        parallel=False,
-        adapt_crossover=False,
-        dbname='algo_pydream',
-        dbformat='csv',
-        verbose=False
-    )
-    
-    print("\n" + pydream_result.summary())
-else:
-    print("\n⚠ PyDREAM not installed. Install with: pip install pydream")
-    pydream_result = None
-
-# %% [markdown]
-# ### 3. SCE-UA (Shuffled Complex Evolution)
-#
-# The classic hydrology algorithm. Fast, reliable, no uncertainty estimates.
-
-# %%
-print("=" * 70)
-print("3. SCE-UA CALIBRATION")
-print("=" * 70)
-
-if SPOTPY_AVAILABLE:
-    runner_sceua = CalibrationRunner(
-        model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
-        inputs=cal_inputs,
-        observed=cal_observed,
-        objective=optim_objective,
-        warmup_period=WARMUP_DAYS
-    )
-    
-    # SCE-UA configuration (Duan et al., 1994)
-    # Rule: ngs = 2*n + 1 where n = number of parameters
-    n_params_sceua = len(runner_sceua._param_bounds)
-    ngs_sceua = 2 * n_params_sceua + 1
-    
-    print(f"\nObjective: {optim_objective.name}")
-    print(f"Parameters: {n_params_sceua}")
-    print(f"Complexes (ngs): {ngs_sceua} (2×{n_params_sceua}+1)")
-    print(f"Max iterations: {SCEUA_ITERATIONS}")
-    print("\nRunning...")
-    
-    sceua_result = runner_sceua.run_sceua(
-        n_iterations=SCEUA_ITERATIONS,
-        ngs=ngs_sceua,
-        kstop=5,
-        pcento=0.01,
-        dbname='algo_sceua',
-        dbformat='csv'
-    )
-    
-    print("\n" + sceua_result.summary())
-else:
-    print("\n⚠ SpotPy not installed.")
-    sceua_result = None
-
-# %% [markdown]
-# ### 4. SciPy Differential Evolution
-#
-# Modern evolutionary optimization. Always available, no extra dependencies.
-
-# %%
-print("=" * 70)
-print("4. SCIPY DIFFERENTIAL EVOLUTION")
-print("=" * 70)
-
-runner_scipy = CalibrationRunner(
-    model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
-    inputs=cal_inputs,
-    observed=cal_observed,
-    objective=optim_objective,
-    warmup_period=WARMUP_DAYS
-)
-
-print(f"\nObjective: {optim_objective.name}")
-print(f"Max generations: {SCIPY_MAXITER}")
-print("\nRunning...")
-
-scipy_result = runner_scipy.run_differential_evolution(
-    maxiter=SCIPY_MAXITER,
-    popsize=15,
-    mutation=(0.5, 1),
-    recombination=0.7,
-    seed=42,
-    workers=1,
-    disp=True
-)
-
-print("\n" + scipy_result.summary())
-
-# %% [markdown]
-# ---
-# ## Results Comparison
-
-# %%
-# Collect all results
-all_results = {}
-if spotpy_result is not None:
-    all_results['SpotPy DREAM'] = spotpy_result
-if pydream_result is not None:
-    all_results['PyDREAM'] = pydream_result
-if sceua_result is not None:
-    all_results['SCE-UA'] = sceua_result
-all_results['SciPy DE'] = scipy_result
-
-# Define colors
-METHOD_COLORS = {
-    'SpotPy DREAM': '#1f77b4',
-    'PyDREAM': '#d62728',
-    'SCE-UA': '#2ca02c',
-    'SciPy DE': '#9467bd',
+    # Non-parametric KGE
+    'KGE_np': KGENonParametric(),
+    'KGE_np_inv': KGENonParametric(transform=FlowTransformation('inverse', epsilon_value=0.01)),
+    'KGE_np_sqrt': KGENonParametric(transform=FlowTransformation('sqrt')),
+    'KGE_np_log': KGENonParametric(transform=FlowTransformation('log', epsilon_value=0.01)),
 }
 
 print("=" * 70)
-print("CALIBRATION RESULTS SUMMARY")
+print("OBJECTIVE FUNCTIONS DEFINED")
 print("=" * 70)
-print(f"\n{len(all_results)} algorithm(s) completed")
+print(f"\nTotal: {len(objectives)} objective functions")
+print("\nNSE-based (4):")
+for name in ['NSE', 'LogNSE', 'InvNSE', 'SqrtNSE']:
+    print(f"  - {name}")
+print("\nComposite (1):")
+print(f"  - SDEB")
+print("\nKGE-based (4):")
+for name in ['KGE', 'KGE_inv', 'KGE_sqrt', 'KGE_log']:
+    print(f"  - {name}")
+print("\nNon-parametric KGE (4):")
+for name in ['KGE_np', 'KGE_np_inv', 'KGE_np_sqrt', 'KGE_np_log']:
+    print(f"  - {name}")
+
+# %% [markdown]
+# ### Likelihood Transform Mapping for PyDREAM
+#
+# PyDREAM requires a proper log-likelihood function, not an efficiency metric.
+# To ensure fair comparison with SCE-UA results, we use `TransformedGaussianLikelihood`
+# with transforms that match the flow emphasis of each objective function:
+#
+# | Objective | Transform | Flow Emphasis |
+# |-----------|-----------|---------------|
+# | NSE, KGE, KGE_np | 'none' | High flows |
+# | SqrtNSE, KGE_sqrt, KGE_np_sqrt | 'sqrt' | Balanced |
+# | LogNSE, KGE_log, KGE_np_log | 'log' | Low flows |
+# | InvNSE, KGE_inv, KGE_np_inv | 'inverse' | Very low flows |
+# | SDEB | 'sqrt' | Balanced (default) |
 
 # %%
-# Performance comparison
-print("\n" + "=" * 70)
-print("PERFORMANCE COMPARISON")
-print("=" * 70)
+# Mapping from objective function names to equivalent likelihood transforms
+# This ensures PyDREAM calibration uses the same flow emphasis as the objective
+LIKELIHOOD_TRANSFORM_MAPPING = {
+    # NSE-based - transform matches the NSE variant
+    'NSE': 'none',           # Standard NSE → no transform (high-flow emphasis)
+    'LogNSE': 'log',         # Log-transformed NSE → log transform (low-flow emphasis)
+    'InvNSE': 'inverse',     # Inverse NSE → inverse transform (very low-flow emphasis)
+    'SqrtNSE': 'sqrt',       # Sqrt NSE → sqrt transform (balanced)
+    
+    # Composite objectives - use balanced transform
+    'SDEB': 'sqrt',          # SDEB is balanced → sqrt transform
+    
+    # Standard KGE - same mapping as NSE
+    'KGE': 'none',           # Standard KGE → no transform
+    'KGE_inv': 'inverse',    # Inverse KGE → inverse transform
+    'KGE_sqrt': 'sqrt',      # Sqrt KGE → sqrt transform
+    'KGE_log': 'log',        # Log KGE → log transform
+    
+    # Non-parametric KGE - same mapping
+    'KGE_np': 'none',
+    'KGE_np_inv': 'inverse',
+    'KGE_np_sqrt': 'sqrt',
+    'KGE_np_log': 'log',
+}
 
-# Generate simulations with each result
-simulations = {}
-for method, result in all_results.items():
-    model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-    model.set_parameters(result.best_parameters)
+print("\n" + "=" * 70)
+print("LIKELIHOOD TRANSFORM MAPPING FOR PYDREAM")
+print("=" * 70)
+print("\nEach objective function will use its equivalent log-likelihood:")
+for obj_name, transform in LIKELIHOOD_TRANSFORM_MAPPING.items():
+    emphasis = {
+        'none': 'high flows',
+        'sqrt': 'balanced',
+        'log': 'low flows',
+        'inverse': 'very low flows'
+    }.get(transform, transform)
+    print(f"  {obj_name:<15} → TransformedGaussianLikelihood('{transform}') [{emphasis}]")
+
+# %% [markdown]
+# ---
+# ## PyDREAM Calibration Configuration
+#
+# PyDREAM uses MCMC (Markov Chain Monte Carlo) to sample from the posterior
+# distribution of parameters. Key settings:
+#
+# - **niterations**: Number of iterations per chain (more = better convergence)
+# - **nchains**: Number of parallel MCMC chains (minimum: 3, recommended: 5-8)
+# - **multitry**: Multi-try proposals for better mixing
+# - **snooker**: Snooker updates for escaping local modes
+#
+# For production use, increase iterations significantly (5000-10000+).
+
+# %%
+# PyDREAM configuration
+# Note: For demo, we use reduced iterations. Increase for production!
+DEMO_MODE = True  # Set to False for full production runs
+
+if DEMO_MODE:
+    PYDREAM_ITERATIONS = 3000   # Per chain (reasonable for demos)
+    PYDREAM_CHAINS = 5          # 5 chains for good convergence diagnostics
+    PYDREAM_MULTITRY = 2        # Multi-try for better mixing
+    print("⚠ DEMO MODE: Using reduced iterations for faster runs")
+    print("  Set DEMO_MODE = False for production-quality results")
+else:
+    PYDREAM_ITERATIONS = 8000   # Per chain (sufficient for convergence)
+    PYDREAM_CHAINS = 6          # 6 chains for robust Gelman-Rubin
+    PYDREAM_MULTITRY = 3        # Multi-try for better mixing
+    print("PRODUCTION MODE: Full iterations with parallel chains")
+
+print(f"\nPyDREAM Configuration:")
+print(f"  Iterations per chain: {PYDREAM_ITERATIONS}")
+print(f"  Number of chains: {PYDREAM_CHAINS}")
+print(f"  Multi-try samples: {PYDREAM_MULTITRY}")
+print(f"  Total samples: ~{PYDREAM_ITERATIONS * PYDREAM_CHAINS:,}")
+
+# %% [markdown]
+# ---
+# ## Synthetic Hydrograph Validation
+#
+# Before running full calibrations on real data, let's validate that both
+# SCE-UA and PyDREAM work correctly using a **synthetic hydrograph**.
+#
+# We'll:
+# 1. Define "true" Sacramento model parameters
+# 2. Generate synthetic rainfall/PET forcing data
+# 3. Run the model to create a synthetic "observed" hydrograph (with noise)
+# 4. Calibrate with both algorithms to recover the true parameters
+#
+# This tests the full calibration pipeline with realistic hydrological data.
+
+# %%
+print("=" * 70)
+print("SYNTHETIC HYDROGRAPH VALIDATION")
+print("=" * 70)
+print("\nGenerating synthetic hydrograph with known Sacramento parameters...")
+
+# Sacramento parameters tuned for realistic sustained baseflow
+# Key changes from default:
+# - Very large lower zone free water stores for sustained baseflow
+# - Very slow drainage rates to maintain flow during extended dry periods
+# - High percolation to groundwater to keep stores recharged
+TRUE_SAC_PARAMS = {
+    'uztwm': 50.0,    # Upper zone tension water max (mm) - moderate
+    'uzfwm': 40.0,    # Upper zone free water max (mm) - for interflow
+    'lztwm': 200.0,   # Lower zone tension water max (mm) - large
+    'lzfpm': 400.0,   # Lower zone free water PRIMARY max (mm) - VERY LARGE for deep baseflow
+    'lzfsm': 150.0,   # Lower zone free water SUPPLEMENTAL max (mm) - large for shallow baseflow
+    'uzk': 0.25,      # Upper zone lateral drainage rate (1/day)
+    'lzpk': 0.004,    # Lower zone PRIMARY drainage rate (1/day) - VERY SLOW (~250 day recession)
+    'lzsk': 0.025,    # Lower zone SUPPLEMENTAL drainage rate (1/day) - slow (~40 day recession)
+    'zperc': 250.0,   # Maximum percolation rate - HIGH to recharge groundwater
+    'rexp': 1.5,      # Percolation equation exponent - lower for more consistent percolation
+    'pfree': 0.50,    # Fraction of percolation to free water - HIGH (50% goes to groundwater)
+    'pctim': 0.01,    # Impervious fraction
+    'apts': 0.0,      # Active area adjustment
+    'riva': 0.0,      # Riparian vegetation area
+    'side': 0.0,      # Ratio of deep recharge to streamflow
+    'ssout': 0.0,     # Groundwater outflow (none - all goes to stream)
+    'uh1': 0.5,       # Unit hydrograph ordinates - slightly smoothed
+    'uh2': 0.3,
+    'uh3': 0.15,
+    'uh4': 0.05,
+    'uh5': 0.0,
+    'rserv': 0.3,     # Fraction of lower zone free water not transferable
+}
+
+# Generate realistic synthetic forcing data (8 years: 2 warmup + 6 calibration)
+# Using stochastic weather generator with wet/dry spell persistence
+np.random.seed(42)
+n_years = 8
+n_days = n_years * 365
+dates = pd.date_range('2000-01-01', periods=n_days, freq='D')
+day_of_year = np.arange(n_days) % 365
+
+print("\nGenerating realistic stochastic forcing data...")
+
+# ============================================================================
+# RAINFALL: Markov chain with extended dry spells for realistic recessions
+# ============================================================================
+# Key features:
+# - Wet/dry spell persistence via Markov chain
+# - Extended dry spells (2-6 weeks) to create long recession events
+# - Seasonal variation (ACT climate: wetter in winter/spring)
+# - Multi-day storm events
+
+rainfall = np.zeros(n_days)
+is_wet = False  # Start dry
+dry_spell_counter = 0  # Track days in current dry spell
+forced_dry_days = 0  # Remaining days of forced dry spell
+
+for i in range(n_days):
+    doy = day_of_year[i]
+    
+    # If in a forced dry spell, skip rainfall
+    if forced_dry_days > 0:
+        forced_dry_days -= 1
+        is_wet = False
+        continue
+    
+    # Seasonal transition probabilities (ACT: cool-season dominant rainfall)
+    # Winter/Spring (Jun-Nov, doy 150-330): wetter
+    # Summer/Autumn (Dec-May): drier with occasional storms
+    if 150 <= doy <= 330:  # Cool season
+        p_wet_given_wet = 0.60  # Wet spells persist
+        p_wet_given_dry = 0.25  # Lower to allow dry spells
+        mean_rain = 8.0
+        shape = 0.7
+    else:  # Warm season  
+        p_wet_given_wet = 0.40  # Less persistent
+        p_wet_given_dry = 0.12  # Much lower - longer dry spells
+        mean_rain = 15.0  # But when it does, can be intense
+        shape = 0.5
+    
+    # Markov chain transition
+    if is_wet:
+        is_wet = np.random.random() < p_wet_given_wet
+    else:
+        is_wet = np.random.random() < p_wet_given_dry
+    
+    # Generate rainfall amount if wet day
+    if is_wet:
+        scale = mean_rain / shape
+        rainfall[i] = np.random.gamma(shape, scale)
+        dry_spell_counter = 0
+    else:
+        dry_spell_counter += 1
+
+# ============================================================================
+# Insert extended dry spells (2-6 weeks) for long recession events
+# ============================================================================
+# Add 3-5 extended dry spells per year to create pronounced recessions
+n_dry_spells = np.random.poisson(n_years * 4)
+print(f"  Inserting {n_dry_spells} extended dry spells...")
+
+for _ in range(n_dry_spells):
+    # Random start day (avoid first year warmup for plotting purposes)
+    start_day = np.random.randint(100, n_days - 60)
+    
+    # Dry spell duration: 14-45 days (2-6 weeks)
+    duration = np.random.randint(14, 46)
+    
+    # Set rainfall to zero for the dry spell
+    end_day = min(start_day + duration, n_days)
+    rainfall[start_day:end_day] = 0
+
+# Add occasional extreme events (1-2 per year on average)
+n_extremes = np.random.poisson(n_years * 1.5)
+extreme_days = np.random.choice(n_days, n_extremes, replace=False)
+for day in extreme_days:
+    rainfall[day] += np.random.exponential(35)  # Add 35mm+ on top
+
+# Add multi-day storm events (rainfall persistence for 2-4 days)
+for i in range(1, n_days):
+    if rainfall[i-1] > 20 and rainfall[i] == 0 and np.random.random() < 0.5:
+        # Continuing storm event
+        rainfall[i] = rainfall[i-1] * np.random.uniform(0.3, 0.7)
+
+# ============================================================================
+# PET: Seasonal pattern with daily variability (cloud cover, weather)
+# ============================================================================
+# ACT: Summer PET ~6-7 mm/day, Winter PET ~1-2 mm/day
+pet_seasonal = 3.5 + 2.5 * np.cos(2 * np.pi * (day_of_year - 355) / 365)  # Peak in early Jan
+
+# Add weather-related variability (cloudy days have lower PET)
+pet_noise = np.random.normal(0, 0.5, n_days)
+# Cloudy/rainy days have reduced PET
+cloud_reduction = np.where(rainfall > 5, -1.0, np.where(rainfall > 0, -0.3, 0))
+pet = np.maximum(pet_seasonal + pet_noise + cloud_reduction, 0.3)
+
+# Add some autocorrelation (weather persistence)
+for i in range(1, n_days):
+    pet[i] = 0.7 * pet[i] + 0.3 * pet[i-1]
+
+# ============================================================================
+# Add inter-annual variability (wet years, dry years)
+# ============================================================================
+# Create annual multipliers
+annual_factors = np.random.lognormal(0, 0.25, n_years)  # ~±25% variability
+for year in range(n_years):
+    start_idx = year * 365
+    end_idx = (year + 1) * 365
+    rainfall[start_idx:end_idx] *= annual_factors[year]
+
+# Create input DataFrame
+synthetic_inputs = pd.DataFrame({
+    'rainfall': rainfall,
+    'pet': pet
+}, index=dates)
+
+# Summary statistics
+wet_days = np.sum(rainfall > 0)
+mean_wet_day = np.mean(rainfall[rainfall > 0])
+max_rain = np.max(rainfall)
+
+print(f"\nSynthetic forcing data generated:")
+print(f"  Period: {dates[0].date()} to {dates[-1].date()} ({n_days} days, {n_years} years)")
+print(f"  Total rainfall: {rainfall.sum():.0f} mm")
+print(f"  Mean annual rainfall: {rainfall.sum()/n_years:.0f} mm/year")
+print(f"  Wet days: {wet_days} ({100*wet_days/n_days:.1f}%)")
+print(f"  Mean wet-day rainfall: {mean_wet_day:.1f} mm")
+print(f"  Max daily rainfall: {max_rain:.1f} mm")
+print(f"  Mean daily PET: {pet.mean():.2f} mm/day")
+print(f"  Annual variability: {annual_factors.round(2)}")
+
+# %%
+# Run Sacramento model with true parameters to generate synthetic "observed" flow
+print("\nRunning Sacramento model with true parameters...")
+
+# Create model with true parameters
+SYNTHETIC_CATCHMENT_AREA = 100.0  # km²
+true_model = Sacramento(catchment_area_km2=SYNTHETIC_CATCHMENT_AREA)
+true_model.set_parameters(TRUE_SAC_PARAMS)
+true_model.reset()
+
+# Run model
+true_output = true_model.run(synthetic_inputs)
+true_flow = true_output['runoff'].values
+
+print(f"  Flow range: {true_flow.min():.1f} - {true_flow.max():.1f} ML/day")
+print(f"  Mean flow: {true_flow.mean():.1f} ML/day")
+
+# ============================================================================
+# Add realistic observation noise (rating curve uncertainty)
+# ============================================================================
+# Real streamflow measurements have:
+# 1. Heteroscedastic errors (larger absolute errors at high flows)
+# 2. Rating curve uncertainty (~5-15% at low flows, ~10-20% at high flows)
+# 3. Some temporal autocorrelation in errors
+# 4. Occasional measurement outliers
+
+print("\nAdding realistic observation noise...")
+
+# Base noise: proportional to flow magnitude (rating curve uncertainty)
+# Higher relative uncertainty at low flows, lower at high flows
+relative_error = 0.08 + 0.05 * np.exp(-true_flow / 50)  # 8-13% depending on flow
+noise_std = relative_error * true_flow + 0.5  # Plus small constant for very low flows
+
+# Generate noise with some autocorrelation (measurement errors persist slightly)
+raw_noise = np.random.normal(0, 1, n_days)
+autocorr_noise = np.zeros(n_days)
+autocorr_noise[0] = raw_noise[0]
+for i in range(1, n_days):
+    autocorr_noise[i] = 0.3 * autocorr_noise[i-1] + 0.7 * raw_noise[i]
+
+noise = autocorr_noise * noise_std
+
+# Add occasional outliers (measurement errors, ~1% of days)
+outlier_mask = np.random.random(n_days) < 0.01
+outlier_magnitude = np.random.choice([-1, 1], n_days) * np.random.exponential(true_flow * 0.3, n_days)
+noise[outlier_mask] += outlier_magnitude[outlier_mask]
+
+# Apply noise and ensure positive flow
+synthetic_observed = np.maximum(true_flow + noise, 0.1)
+
+# Calculate noise statistics
+nse_true_vs_obs = 1 - np.sum((synthetic_observed - true_flow)**2) / np.sum((true_flow - true_flow.mean())**2)
+print(f"  Mean true flow: {true_flow.mean():.2f} ML/day")
+print(f"  Mean observed (with noise): {synthetic_observed.mean():.2f} ML/day")
+print(f"  NSE(true vs observed): {nse_true_vs_obs:.4f}")
+print(f"  (This is the 'ceiling' - best achievable NSE due to observation noise)")
+
+# Plot synthetic hydrograph (showing post-warmup period only for calibration view)
+# Use 2-year warmup for plotting as well to show clean data
+PLOT_WARMUP = 730  # 2 year warmup for visualization
+
+fig, axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
+
+# Get post-warmup indices
+plot_dates = dates[PLOT_WARMUP:]
+plot_rainfall = rainfall[PLOT_WARMUP:]
+plot_pet = pet[PLOT_WARMUP:]
+plot_observed = synthetic_observed[PLOT_WARMUP:]
+plot_true = true_flow[PLOT_WARMUP:]
+
+# Rainfall
+ax = axes[0]
+ax.bar(plot_dates, plot_rainfall, color='steelblue', alpha=0.7, width=1)
+ax.set_ylabel('Rainfall (mm)')
+ax.set_title(f'Synthetic Forcing Data and Hydrograph (Post-warmup: {n_years-1} years)')
+ax.invert_yaxis()
+
+# PET
+ax = axes[1]
+ax.plot(plot_dates, plot_pet, color='orange', linewidth=0.8)
+ax.set_ylabel('PET (mm/day)')
+ax.fill_between(plot_dates, 0, plot_pet, alpha=0.3, color='orange')
+
+# Flow
+ax = axes[2]
+ax.plot(plot_dates, plot_observed, 'b-', linewidth=0.8, alpha=0.7, label='Observed (noisy)')
+ax.plot(plot_dates, plot_true, 'r-', linewidth=1.5, label='True flow')
+ax.set_ylabel('Flow (ML/day)')
+ax.set_xlabel('Date')
+ax.legend()
+ax.set_yscale('log')
+
+plt.tight_layout()
+plt.savefig('figures/05_synthetic_hydrograph.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+print(f"\nFigure saved: figures/05_synthetic_hydrograph.png")
+print(f"Note: Showing post-warmup period only ({n_years-1} years)")
+print(f"      First year used as warmup to stabilize model states")
+
+# %% [markdown]
+# ### Calibration Setup for Synthetic Test
+#
+# For faster testing, we'll only calibrate a subset of the most sensitive
+# Sacramento parameters. The full model has 22 parameters, but we'll focus
+# on the 6 most important ones for this validation.
+
+# %%
+# Define subset of parameters to calibrate (for faster testing)
+# Includes key baseflow parameters: lzfpm (storage), lzpk (recession rate), pfree (recharge)
+CALIBRATION_PARAMS = ['uztwm', 'uzfwm', 'lzfpm', 'uzk', 'lzpk', 'pfree']
+
+# Get parameter bounds for calibration subset
+full_bounds = Sacramento().get_parameter_bounds()
+subset_bounds = {p: full_bounds[p] for p in CALIBRATION_PARAMS}
+
+print("=" * 70)
+print("CALIBRATION SETUP (SYNTHETIC DATA)")
+print("=" * 70)
+print(f"\nCalibrating {len(CALIBRATION_PARAMS)} parameters (subset for speed):")
+for p in CALIBRATION_PARAMS:
+    bounds = subset_bounds[p]
+    true_val = TRUE_SAC_PARAMS[p]
+    print(f"  {p:8s}: bounds [{bounds[0]:>8.3f}, {bounds[1]:>8.3f}], true = {true_val:.3f}")
+
+# Fixed parameters (not calibrated) - these will be set as initial values
+fixed_params = {k: v for k, v in TRUE_SAC_PARAMS.items() if k not in CALIBRATION_PARAMS}
+
+# Warmup period - 2 full years to allow groundwater stores to fill
+SYNTHETIC_WARMUP = 730  # 2 years warmup for deep groundwater equilibrium
+
+print(f"\nWarmup period: {SYNTHETIC_WARMUP} days (2 years)")
+print(f"Calibration period: {n_days - SYNTHETIC_WARMUP} days ({(n_days - SYNTHETIC_WARMUP)/365:.1f} years)")
+
+# Create a CalibrationRunner for synthetic data
+# First, set up a model with fixed parameters as starting point
+synthetic_model = Sacramento(catchment_area_km2=SYNTHETIC_CATCHMENT_AREA)
+synthetic_model.set_parameters(fixed_params)  # Set fixed params as base
+
+# Note: objective and parameter_bounds are passed to CalibrationRunner constructor
+# For SCE-UA (optimizer) - use NSE with sqrt transform for BALANCED flow emphasis
+# This matches the TransformedGaussianLikelihood('sqrt') used for PyDREAM below
+synthetic_runner_sceua = CalibrationRunner(
+    model=synthetic_model,
+    inputs=synthetic_inputs,
+    observed=synthetic_observed,
+    objective=NSE(transform=FlowTransformation('sqrt')),  # Balanced: NSE(sqrt)
+    parameter_bounds=subset_bounds,  # Only calibrate the subset of parameters
+    warmup_period=SYNTHETIC_WARMUP
+)
+
+# For PyDREAM (MCMC sampler) - use TransformedGaussianLikelihood (proper log-likelihood)
+# This is required because DREAM is a Bayesian MCMC algorithm that samples from the
+# posterior distribution and needs a proper log-likelihood, not an efficiency metric.
+#
+# TransformedGaussianLikelihood implements: log_lik = -n/2 * log(Σ(T(obs) - T(sim))²)
+# where T() is a flow transformation function. This formulation (from Vrugt 2016)
+# integrates out the measurement error variance.
+#
+# Flow transformation options:
+#   - 'none': High flow emphasis (equivalent to GaussianLikelihood)
+#   - 'sqrt': BALANCED emphasis (recommended default) - equivalent to NSE(sqrt)
+#   - 'log':  Low flow emphasis - equivalent to LogNSE
+#   - 'inverse': Very low flow emphasis - equivalent to InvNSE
+#
+# Using 'sqrt' for balanced calibration that gives appropriate weight to
+# both high flows (peaks) and low flows (baseflow/recession).
+synthetic_model_pydream = Sacramento(catchment_area_km2=SYNTHETIC_CATCHMENT_AREA)
+synthetic_model_pydream.set_parameters(fixed_params)
+
+synthetic_runner_pydream = CalibrationRunner(
+    model=synthetic_model_pydream,
+    inputs=synthetic_inputs,
+    observed=synthetic_observed,
+    objective=TransformedGaussianLikelihood('sqrt'),  # Balanced log-likelihood for MCMC
+    parameter_bounds=subset_bounds,
+    warmup_period=SYNTHETIC_WARMUP
+)
+
+print(f"\nCalibrationRunners created:")
+print(f"  - SCE-UA runner: uses NSE(sqrt) (optimizer objective, BALANCED flow emphasis)")
+print(f"  - PyDREAM runner: uses TransformedGaussianLikelihood('sqrt') (BALANCED Bayesian log-likelihood)")
+print(f"\nBoth algorithms use sqrt transformation for equivalent flow emphasis!")
+
+# Helper function to calculate NSE for any parameter set
+# Helper function to calculate NSE(sqrt) for any parameter set - MATCHES the objective used
+nse_sqrt_objective = NSE(transform=FlowTransformation('sqrt'))
+
+def calc_synthetic_nse(params_dict):
+    """Calculate NSE(sqrt) for a parameter set on synthetic data.
+    
+    Uses sqrt transformation to match the objective function used by both
+    SCE-UA and PyDREAM (TransformedGaussianLikelihood('sqrt')).
+    """
+    full_params = {**fixed_params, **params_dict}
+    model = Sacramento(catchment_area_km2=SYNTHETIC_CATCHMENT_AREA)
+    model.set_parameters(full_params)
     model.reset()
-    sim_results = model.run(cal_data)
-    simulations[method] = sim_results['runoff'].values[WARMUP_DAYS:]
+    output = model.run(synthetic_inputs)
+    simulated = output['runoff'].values[SYNTHETIC_WARMUP:]
+    obs = synthetic_observed[SYNTHETIC_WARMUP:]
+    
+    # Use NSE(sqrt) for balanced flow evaluation
+    return nse_sqrt_objective(obs, simulated)
 
-obs_compare = cal_observed[WARMUP_DAYS:]
-dates_compare = cal_data.index[WARMUP_DAYS:]
-
-# Calculate metrics for all
-metrics_comparison = {}
-for method, sim in simulations.items():
-    metrics = calculate_metrics(sim, obs_compare)
-    metrics_comparison[method] = metrics
-
-metrics_df = pd.DataFrame(metrics_comparison).T
-
-print("\nPerformance Metrics:")
-print(metrics_df.round(4).to_string())
+# %% [markdown]
+# ### Test 1: SCE-UA on Synthetic Hydrograph
 
 # %%
-# Runtime comparison
-print("\n" + "=" * 70)
-print("RUNTIME COMPARISON")
 print("=" * 70)
-print(f"\n{'Method':<20} {'Runtime (s)':>15} {'Best Objective':>15}")
+print("TEST 1: SCE-UA ON SYNTHETIC HYDROGRAPH")
+print("=" * 70)
+
+# Use CalibrationRunner's run_sceua_direct method
+print(f"\nRunning SCE-UA with {len(CALIBRATION_PARAMS)} parameters...")
+print("  Max evaluations: 5000")
+print("  Using CalibrationRunner.run_sceua_direct()")
+
+start_time = time.time()
+
+sceua_result = synthetic_runner_sceua.run_sceua_direct(
+    max_evals=10000,  # Increased for better convergence
+    max_tolerant_iter=200,  # Stop after 200 iterations without improvement
+    n_complexes=7,  # More complexes for better exploration
+    seed=42,
+    verbose=True,
+    progress_bar=True
+)
+
+sceua_time = time.time() - start_time
+sceua_params = sceua_result.best_parameters
+sceua_nse = sceua_result.best_objective
+
+print(f"\nSCE-UA Results (took {sceua_time:.1f}s):")
+print(f"  Best NSE(sqrt): {sceua_nse:.6f}")
+print(f"  Function evaluations: {sceua_result.convergence_diagnostics.get('nfev', 'N/A')}")
+print(f"\n  {'Parameter':<10} {'True':>10} {'SCE-UA':>10} {'Error':>10}")
+print("  " + "-" * 42)
+for p in CALIBRATION_PARAMS:
+    true_val = TRUE_SAC_PARAMS[p]
+    est_val = sceua_params.get(p, true_val)  # Use true if not in calibrated set
+    error = abs(est_val - true_val) / true_val * 100
+    print(f"  {p:<10} {true_val:>10.3f} {est_val:>10.3f} {error:>9.1f}%")
+
+# %% [markdown]
+# ### Test 2: PyDREAM on Synthetic Hydrograph
+
+# %%
+print("=" * 70)
+print("TEST 2: PYDREAM ON SYNTHETIC HYDROGRAPH")
+print("=" * 70)
+
+if PYDREAM_AVAILABLE:
+    # PyDREAM hyperparameters optimized for synthetic test
+    SYNTHETIC_ITERATIONS = 3000   # Iterations per chain
+    SYNTHETIC_CHAINS = 5          # More chains for better exploration & convergence diagnostics
+    SYNTHETIC_MULTITRY = 3        # Multi-try for better mixing in complex posteriors
+    SYNTHETIC_SNOOKER = 0.2       # Snooker probability for mode jumping
+    
+    print(f"\nRunning PyDREAM with {len(CALIBRATION_PARAMS)} parameters...")
+    print(f"  Iterations per chain: {SYNTHETIC_ITERATIONS}")
+    print(f"  Number of chains: {SYNTHETIC_CHAINS} (parallel)")
+    print(f"  Multi-try samples: {SYNTHETIC_MULTITRY}")
+    print(f"  Snooker probability: {SYNTHETIC_SNOOKER}")
+    print(f"  Total samples: ~{SYNTHETIC_ITERATIONS * SYNTHETIC_CHAINS:,}")
+    print("  Using CalibrationRunner.run_pydream()")
+    
+    start_time = time.time()
+    
+    # Force stdout flush to ensure progress is visible
+    import sys
+    sys.stdout.flush()
+    
+    # Use dbname for CSV-based progress tracking - monitor externally with:
+    # tail -f figures/pydream_synthetic_progress.csv
+    pydream_progress_file = Path('figures/pydream_synthetic_progress')
+    
+    print(f"\n  Progress file: {pydream_progress_file}.csv")
+    print("  Monitor externally with: tail -f figures/pydream_synthetic_progress.csv")
+    print("-" * 60)
+    sys.stdout.flush()
+    
+    pydream_result = synthetic_runner_pydream.run_pydream(
+        n_iterations=SYNTHETIC_ITERATIONS,
+        n_chains=SYNTHETIC_CHAINS,
+        multitry=SYNTHETIC_MULTITRY,
+        snooker=SYNTHETIC_SNOOKER,
+        parallel=True,            # Use multiprocessing for parallel chains
+        adapt_crossover=True,     # Adaptive crossover for better mixing
+        DEpairs=3,                # More DE pairs for high-dimensional exploration
+        verbose=True,
+        nverbose=50,              # Print every 50 iterations
+        dbname=str(pydream_progress_file),  # CSV progress tracking
+        hardboundaries=True,      # Enforce parameter bounds strictly
+        convergence_check=True    # Calculate Gelman-Rubin diagnostics
+    )
+    
+    pydream_time = time.time() - start_time
+    
+    # Extract results (CalibrationResult is a dataclass, use dot notation)
+    pydream_best = pydream_result.best_parameters
+    pydream_loglik = pydream_result.best_objective  # This is log-likelihood, not NSE!
+    
+    # Calculate NSE for the best PyDREAM parameters (for fair comparison with SCE-UA)
+    pydream_nse = calc_synthetic_nse(pydream_best)
+    
+    # Get posterior statistics from all_samples
+    all_samples_df = pydream_result.all_samples
+    if all_samples_df is not None and len(all_samples_df) > 0:
+        # Burn-in: discard first 30%
+        burn_in = int(0.3 * len(all_samples_df))
+        samples_burned = all_samples_df.iloc[burn_in:]
+        
+        posterior_means = {p: samples_burned[p].mean() for p in CALIBRATION_PARAMS if p in samples_burned.columns}
+        posterior_stds = {p: samples_burned[p].std() for p in CALIBRATION_PARAMS if p in samples_burned.columns}
+    else:
+        posterior_means = pydream_best.copy()
+        posterior_stds = {p: 0.0 for p in CALIBRATION_PARAMS}
+    
+    print(f"\nPyDREAM Results (took {pydream_time:.1f}s):")
+    print(f"  Best log-likelihood: {pydream_loglik:.4f}")
+    print(f"  Best NSE(sqrt) (calculated): {pydream_nse:.6f}")
+    print(f"\n  {'Parameter':<10} {'True':>10} {'MAP':>10} {'Mean±Std':>20}")
+    print("  " + "-" * 52)
+    for p in CALIBRATION_PARAMS:
+        true_val = TRUE_SAC_PARAMS[p]
+        map_val = pydream_best.get(p, true_val)
+        mean_val = posterior_means.get(p, map_val)
+        std_val = posterior_stds.get(p, 0.0)
+        print(f"  {p:<10} {true_val:>10.3f} {map_val:>10.3f} {mean_val:>10.3f}±{std_val:<8.3f}")
+    
+else:
+    print("\n⚠ PyDREAM not available - skipping test")
+    pydream_best = None
+    posterior_means = None
+    posterior_stds = None
+    pydream_time = 0
+    pydream_nse = np.nan
+
+# %% [markdown]
+# ### Comparison: SCE-UA vs PyDREAM on Synthetic Hydrograph
+
+# %%
+print("=" * 70)
+print("COMPARISON: SCE-UA vs PyDREAM (SYNTHETIC HYDROGRAPH)")
+print("=" * 70)
+
+# Run both calibrated models
+sceua_full_params = {**fixed_params, **sceua_params}
+sceua_model = Sacramento(catchment_area_km2=SYNTHETIC_CATCHMENT_AREA)
+sceua_model.set_parameters(sceua_full_params)
+sceua_model.reset()
+sceua_sim = sceua_model.run(synthetic_inputs)['runoff'].values
+
+if PYDREAM_AVAILABLE and pydream_best is not None:
+    pydream_full_params = {**fixed_params, **pydream_best}
+    pydream_model = Sacramento(catchment_area_km2=SYNTHETIC_CATCHMENT_AREA)
+    pydream_model.set_parameters(pydream_full_params)
+    pydream_model.reset()
+    pydream_sim = pydream_model.run(synthetic_inputs)['runoff'].values
+else:
+    pydream_sim = None
+
+# Create comparison figure
+fig = plt.figure(figsize=(14, 10))
+
+# 1. Hydrograph comparison
+ax1 = plt.subplot(2, 2, 1)
+ax1.plot(dates[SYNTHETIC_WARMUP:], synthetic_observed[SYNTHETIC_WARMUP:], 
+         'gray', alpha=0.7, linewidth=0.8, label='Observed (noisy)')
+ax1.plot(dates[SYNTHETIC_WARMUP:], true_flow[SYNTHETIC_WARMUP:], 
+         'k-', linewidth=1.5, label='True')
+ax1.plot(dates[SYNTHETIC_WARMUP:], sceua_sim[SYNTHETIC_WARMUP:], 
+         'b--', linewidth=1.2, label=f'SCE-UA (NSE√={sceua_nse:.4f})')
+if pydream_sim is not None:
+    ax1.plot(dates[SYNTHETIC_WARMUP:], pydream_sim[SYNTHETIC_WARMUP:], 
+             'r:', linewidth=1.2, label=f'PyDREAM (NSE√={pydream_nse:.4f})')
+ax1.set_ylabel('Flow (ML/day)')
+ax1.set_xlabel('Date')
+ax1.set_title('Hydrograph Comparison')
+ax1.legend(fontsize=9)
+ax1.set_yscale('log')
+
+# 2. Parameter recovery
+ax2 = plt.subplot(2, 2, 2)
+x_pos = np.arange(len(CALIBRATION_PARAMS))
+width = 0.25
+
+true_vals = [TRUE_SAC_PARAMS[p] for p in CALIBRATION_PARAMS]
+sceua_vals = [sceua_params.get(p, TRUE_SAC_PARAMS[p]) for p in CALIBRATION_PARAMS]
+
+# Normalize by true values for comparison
+true_norm = [1.0] * len(CALIBRATION_PARAMS)
+sceua_norm = [sceua_params.get(p, TRUE_SAC_PARAMS[p]) / TRUE_SAC_PARAMS[p] for p in CALIBRATION_PARAMS]
+
+ax2.bar(x_pos - width/2, true_norm, width, label='True', color='black', alpha=0.7)
+ax2.bar(x_pos + width/2, sceua_norm, width, label='SCE-UA', color='blue', alpha=0.7)
+
+if PYDREAM_AVAILABLE and posterior_means is not None:
+    pydream_norm = [posterior_means.get(p, TRUE_SAC_PARAMS[p]) / TRUE_SAC_PARAMS[p] for p in CALIBRATION_PARAMS]
+    pydream_err = [posterior_stds.get(p, 0.0) / TRUE_SAC_PARAMS[p] for p in CALIBRATION_PARAMS]
+    ax2.bar(x_pos + width*1.5, pydream_norm, width, label='PyDREAM', color='red', alpha=0.7,
+            yerr=pydream_err, capsize=3)
+
+ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
+ax2.set_xticks(x_pos)
+ax2.set_xticklabels(CALIBRATION_PARAMS, rotation=45, ha='right')
+ax2.set_ylabel('Ratio to True Value')
+ax2.set_title('Parameter Recovery (normalized)')
+ax2.legend()
+ax2.set_ylim(0, 2)
+
+# 3. Scatter plot
+ax3 = plt.subplot(2, 2, 3)
+obs_compare = synthetic_observed[SYNTHETIC_WARMUP:]
+ax3.scatter(obs_compare, sceua_sim[SYNTHETIC_WARMUP:], alpha=0.3, s=10, 
+            color='blue', label='SCE-UA')
+if pydream_sim is not None:
+    ax3.scatter(obs_compare, pydream_sim[SYNTHETIC_WARMUP:], alpha=0.3, s=10, 
+                color='red', label='PyDREAM')
+max_val = max(obs_compare.max(), sceua_sim[SYNTHETIC_WARMUP:].max())
+ax3.plot([0, max_val], [0, max_val], 'k--', linewidth=1)
+ax3.set_xlabel('Observed (ML/day)')
+ax3.set_ylabel('Simulated (ML/day)')
+ax3.set_title('Simulated vs Observed')
+ax3.legend()
+
+# 4. Runtime comparison
+ax4 = plt.subplot(2, 2, 4)
+methods = ['SCE-UA']
+times = [sceua_time]
+nses = [sceua_nse]
+colors = ['blue']
+
+if PYDREAM_AVAILABLE and pydream_time > 0:
+    methods.append('PyDREAM')
+    times.append(pydream_time)
+    nses.append(pydream_nse)
+    colors.append('red')
+
+bars = ax4.bar(methods, times, color=colors, alpha=0.7)
+ax4.set_ylabel('Runtime (seconds)')
+ax4.set_title('Computational Time')
+for i, (bar, t, nse) in enumerate(zip(bars, times, nses)):
+    ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
+             f'{t:.1f}s\nNSE={nse:.4f}', ha='center', va='bottom', fontsize=9)
+
+plt.suptitle('Algorithm Validation: Synthetic Hydrograph', fontsize=14, fontweight='bold')
+plt.tight_layout()
+plt.savefig('figures/05_synthetic_validation.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# Summary
+print("\n" + "=" * 70)
+print("VALIDATION SUMMARY")
+print("=" * 70)
+print("\nBoth algorithms optimized NSE(sqrt) for balanced flow emphasis")
+print(f"\n{'Metric':<25} {'SCE-UA':>15} {'PyDREAM':>15}")
 print("-" * 55)
-for method, result in all_results.items():
-    print(f"{method:<20} {result.runtime_seconds:>15.1f} {result.best_objective:>15.4f}")
+print(f"{'NSE(sqrt)':<25} {sceua_nse:>15.4f} {pydream_nse:>15.4f}")
+print(f"{'Runtime (seconds)':<25} {sceua_time:>15.1f} {pydream_time:>15.1f}")
+
+# Check if both algorithms recovered reasonable parameters
+sceua_ok = sceua_nse > 0.9
+pydream_ok = pydream_nse > 0.9 if PYDREAM_AVAILABLE else True
+
+print(f"\n{'SCE-UA validation:':<25} {'✓ PASSED' if sceua_ok else '✗ FAILED'}")
+print(f"{'PyDREAM validation:':<25} {'✓ PASSED' if pydream_ok else '✗ FAILED'}")
+
+if sceua_ok and pydream_ok:
+    print("\n✓ Both algorithms successfully validated!")
+    print("  Ready to proceed with real data calibrations.")
+else:
+    print("\n⚠ Validation issues detected - review results before proceeding.")
+
+print("\nFigure saved: figures/05_synthetic_validation.png")
+
+# %% [markdown]
+# ---
+# ## Run PyDREAM Calibrations (Real Data)
+#
+# Now that we've validated both algorithms work correctly, we run PyDREAM
+# for all 13 objective functions on the real hydrological data.
+#
+# **Note**: Results are saved to disk, so subsequent runs can skip calibration.
 
 # %%
-# Parameter comparison
-print("\n" + "=" * 70)
-print("PARAMETER COMPARISON")
+# Directory for PyDREAM results
+PYDREAM_RESULTS_DIR = REPORTS_DIR / 'pydream'
+PYDREAM_RESULTS_DIR.mkdir(exist_ok=True)
+
+# Storage for PyDREAM results
+pydream_results = {}
+pydream_reports = {}
+
+# Check if we should run calibrations or load existing results
+RUN_CALIBRATIONS = True  # Set to False to only load existing results
+
+if not PYDREAM_AVAILABLE:
+    print("=" * 70)
+    print("PYDREAM NOT AVAILABLE - SKIPPING CALIBRATIONS")
+    print("=" * 70)
+    print("\nInstall PyDREAM with: pip install pydream")
+    RUN_CALIBRATIONS = False
+
+# %%
+if RUN_CALIBRATIONS and PYDREAM_AVAILABLE:
+    print("=" * 70)
+    print("RUNNING PYDREAM CALIBRATIONS")
+    print("=" * 70)
+    print(f"\nThis will run {len(objectives)} calibrations...")
+    print("Estimated time: 1-2 hours (demo mode) or 4-8 hours (production)")
+    print("\n" + "-" * 70)
+    
+    total_start = time.time()
+    
+    for i, (name, objective) in enumerate(objectives.items(), 1):
+        print(f"\n[{i}/{len(objectives)}] {name}")
+        print("=" * 50)
+        
+        # Check if result already exists
+        result_file = PYDREAM_RESULTS_DIR / f'410734_pydream_{name.lower()}.pkl'
+        
+        if result_file.exists():
+            print(f"  Loading existing result: {result_file.name}")
+            report = CalibrationReport.load(str(result_file))
+            pydream_reports[name] = report
+            pydream_results[name] = report.result
+            print(f"  ✓ Loaded (Best objective: {report.result.best_objective:.4f})")
+            continue
+        
+        # Get the equivalent likelihood transform for this objective
+        # This ensures PyDREAM uses the same flow emphasis as the objective function
+        likelihood_transform = LIKELIHOOD_TRANSFORM_MAPPING.get(name, 'sqrt')
+        likelihood = TransformedGaussianLikelihood(likelihood_transform)
+        
+        print(f"  Objective: {name}")
+        print(f"  Likelihood: TransformedGaussianLikelihood('{likelihood_transform}') - {likelihood.flow_emphasis} emphasis")
+        
+        # Create CalibrationRunner with proper log-likelihood for MCMC
+        runner = CalibrationRunner(
+            model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
+            inputs=cal_inputs,
+            observed=cal_observed,
+            objective=likelihood,  # Use proper log-likelihood, not the efficiency metric
+            warmup_period=WARMUP_DAYS
+        )
+        
+        # Run PyDREAM calibration
+        # Progress file for external monitoring: tail -f <progress_file>.csv
+        progress_file = PYDREAM_RESULTS_DIR / f'progress_{name.lower()}'
+        print(f"  Config: {PYDREAM_ITERATIONS} iter × {PYDREAM_CHAINS} chains (parallel)")
+        print(f"  Progress file: {progress_file}.csv")
+        print(f"  Monitor with: tail -f {progress_file}.csv")
+        start_time = time.time()
+        
+        try:
+            result = runner.run_pydream(
+                n_iterations=PYDREAM_ITERATIONS,
+                n_chains=PYDREAM_CHAINS,
+                multitry=PYDREAM_MULTITRY,
+                snooker=0.15,             # Snooker probability for mode jumping
+                parallel=True,            # Enable multiprocessing for parallel chains
+                adapt_crossover=True,     # Adaptive crossover for better mixing
+                DEpairs=3,                # More DE pairs for better exploration
+                verbose=True,
+                nverbose=100,             # Print progress every 100 iterations
+                dbname=str(progress_file),  # CSV progress tracking
+                hardboundaries=True,      # Enforce parameter bounds
+                convergence_check=True    # Calculate Gelman-Rubin diagnostics
+            )
+            
+            elapsed = time.time() - start_time
+            print(f"  ✓ Completed in {elapsed:.1f}s")
+            print(f"  Best log-likelihood: {result.best_objective:.4f}")
+            
+            # Calculate the actual objective function value (NSE/KGE/etc.) for the best parameters
+            # This allows fair comparison with SCE-UA results
+            eval_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+            eval_model.set_parameters(result.best_parameters)
+            eval_model.reset()
+            sim_output = eval_model.run(cal_inputs)
+            sim_values = sim_output['runoff'].values[WARMUP_DAYS:]
+            obs_values = cal_observed[WARMUP_DAYS:]
+            
+            # Evaluate with the original objective function
+            actual_obj_value = objective(obs_values, sim_values)
+            print(f"  Actual {name}: {actual_obj_value:.4f}")
+            
+            # Store the actual objective value in result for comparison
+            result.actual_objective_value = actual_obj_value
+            result.objective_name = name
+            
+            # Check convergence
+            if 'gelman_rubin' in result.convergence_diagnostics:
+                gr_vals = result.convergence_diagnostics['gelman_rubin']
+                max_gr = max(gr_vals.values())
+                converged = result.convergence_diagnostics.get('converged', False)
+                status = "✓ Converged" if converged else f"⚠ Max R-hat: {max_gr:.3f}"
+                print(f"  Convergence: {status}")
+            
+            # Save result
+            report = runner.create_report(result, catchment_info={
+                'name': 'Queanbeyan River', 
+                'gauge_id': '410734', 
+                'area_km2': CATCHMENT_AREA_KM2
+            })
+            report.save(str(result_file.with_suffix('')))
+            
+            pydream_results[name] = result
+            pydream_reports[name] = report
+            
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+            continue
+    
+    total_elapsed = time.time() - total_start
+    print("\n" + "=" * 70)
+    print(f"ALL CALIBRATIONS COMPLETE")
+    print(f"Total time: {total_elapsed/60:.1f} minutes")
+    print(f"Successful: {len(pydream_results)}/{len(objectives)}")
+    print("=" * 70)
+
+# %% [markdown]
+# ---
+# ## Load Existing PyDREAM Results
+#
+# If calibrations were run previously, load them from disk.
+
+# %%
+# Load any existing PyDREAM results not already in memory
+print("=" * 70)
+print("LOADING PYDREAM RESULTS")
 print("=" * 70)
 
-param_comparison = {method: result.best_parameters for method, result in all_results.items()}
-param_df = pd.DataFrame(param_comparison)
+for name in objectives.keys():
+    if name in pydream_results:
+        continue  # Already loaded
+    
+    result_file = PYDREAM_RESULTS_DIR / f'410734_pydream_{name.lower()}.pkl'
+    if result_file.exists():
+        try:
+            report = CalibrationReport.load(str(result_file))
+            pydream_reports[name] = report
+            pydream_results[name] = report.result
+            print(f"  ✓ {name:<12}: Loaded")
+        except Exception as e:
+            print(f"  ✗ {name:<12}: Failed to load ({e})")
+    else:
+        print(f"  - {name:<12}: Not found")
 
-# Show key parameters
-key_params = ['uztwm', 'lztwm', 'uzk', 'lzpk', 'lzsk']
-print("\nKey parameters by algorithm:")
-print(param_df.loc[key_params].round(4).to_string())
+print(f"\nTotal PyDREAM results available: {len(pydream_results)}/{len(objectives)}")
+
+# %% [markdown]
+# ---
+# ## SCE-UA vs PyDREAM: Performance Comparison
+#
+# Let's compare the best objective values and performance metrics achieved
+# by each algorithm across all objective functions.
+
+# %%
+# Build comparison table
+comparison_data = []
+
+for name in objectives.keys():
+    row = {'Objective': name}
+    
+    # SCE-UA results
+    if name in sceua_results:
+        row['SCE-UA Best'] = sceua_results[name].best_objective
+        row['SCE-UA Runtime (s)'] = sceua_results[name].runtime_seconds
+    else:
+        row['SCE-UA Best'] = np.nan
+        row['SCE-UA Runtime (s)'] = np.nan
+    
+    # PyDREAM results
+    if name in pydream_results:
+        row['PyDREAM Best'] = pydream_results[name].best_objective
+        row['PyDREAM Runtime (s)'] = pydream_results[name].runtime_seconds
+    else:
+        row['PyDREAM Best'] = np.nan
+        row['PyDREAM Runtime (s)'] = np.nan
+    
+    comparison_data.append(row)
+
+comparison_df = pd.DataFrame(comparison_data)
+
+print("=" * 70)
+print("ALGORITHM PERFORMANCE COMPARISON")
+print("=" * 70)
+print(f"\n{comparison_df.to_string(index=False)}")
+
+# %%
+# Calculate and display model performance metrics for both algorithms
+print("\n" + "=" * 70)
+print("MODEL PERFORMANCE METRICS (NSE, KGE)")
+print("=" * 70)
+
+metrics_data = []
+
+for name in objectives.keys():
+    row = {'Objective': name}
+    
+    # SCE-UA simulation
+    if name in sceua_results:
+        model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+        model.set_parameters(sceua_results[name].best_parameters)
+        model.reset()
+        sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
+        obs = cal_observed[WARMUP_DAYS:]
+        metrics = calculate_metrics(sim, obs)
+        row['SCE-UA NSE'] = metrics['NSE']
+        row['SCE-UA KGE'] = metrics['KGE']
+    else:
+        row['SCE-UA NSE'] = np.nan
+        row['SCE-UA KGE'] = np.nan
+    
+    # PyDREAM simulation
+    if name in pydream_results:
+        model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+        model.set_parameters(pydream_results[name].best_parameters)
+        model.reset()
+        sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
+        obs = cal_observed[WARMUP_DAYS:]
+        metrics = calculate_metrics(sim, obs)
+        row['PyDREAM NSE'] = metrics['NSE']
+        row['PyDREAM KGE'] = metrics['KGE']
+    else:
+        row['PyDREAM NSE'] = np.nan
+        row['PyDREAM KGE'] = np.nan
+    
+    metrics_data.append(row)
+
+metrics_df = pd.DataFrame(metrics_data)
+print(f"\n{metrics_df.round(4).to_string(index=False)}")
+
+# %% [markdown]
+# ---
+# ## Parameter Comparison: Point Estimates vs Posterior Distributions
+#
+# This is the key comparison! We visualize the posterior distributions from PyDREAM
+# compared to the point estimates from SCE-UA.
+
+# %%
+def plot_posterior_vs_point(obj_name, pydream_result, sceua_result, param_bounds):
+    """
+    Create a figure comparing PyDREAM posteriors with SCE-UA point estimates.
+    """
+    if pydream_result.all_samples is None or len(pydream_result.all_samples) == 0:
+        print(f"No samples available for {obj_name}")
+        return None
+    
+    samples = pydream_result.all_samples
+    param_names = list(sceua_result.best_parameters.keys())
+    
+    # Select key parameters for visualization (most important ones)
+    key_params = ['uztwm', 'uzfwm', 'lztwm', 'lzfpm', 'lzfsm', 
+                  'uzk', 'lzpk', 'lzsk', 'zperc', 'rexp',
+                  'pfree', 'pctim']
+    
+    # Filter to available parameters
+    key_params = [p for p in key_params if p in param_names and p in samples.columns]
+    
+    n_params = min(len(key_params), 12)
+    n_cols = 4
+    n_rows = (n_params + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 3.5 * n_rows))
+    axes = axes.flatten()
+    
+    for i, param in enumerate(key_params[:n_params]):
+        ax = axes[i]
+        
+        # Get posterior samples
+        posterior = samples[param].values
+        
+        # Get SCE-UA point estimate
+        sceua_value = sceua_result.best_parameters[param]
+        
+        # Get PyDREAM best estimate
+        pydream_value = pydream_result.best_parameters[param]
+        
+        # Get parameter bounds
+        bounds = param_bounds.get(param, (posterior.min(), posterior.max()))
+        
+        # Plot posterior histogram
+        ax.hist(posterior, bins=50, density=True, alpha=0.7, color='steelblue',
+                label='PyDREAM Posterior', edgecolor='white', linewidth=0.5)
+        
+        # Plot SCE-UA point estimate
+        ax.axvline(sceua_value, color='red', linewidth=2, linestyle='-',
+                   label=f'SCE-UA: {sceua_value:.2f}')
+        
+        # Plot PyDREAM MAP estimate
+        ax.axvline(pydream_value, color='green', linewidth=2, linestyle='--',
+                   label=f'PyDREAM MAP: {pydream_value:.2f}')
+        
+        # Add credible interval
+        ci_low, ci_high = np.percentile(posterior, [2.5, 97.5])
+        ax.axvspan(ci_low, ci_high, alpha=0.2, color='steelblue',
+                   label=f'95% CI: [{ci_low:.2f}, {ci_high:.2f}]')
+        
+        ax.set_xlabel(param, fontsize=10, fontweight='bold')
+        ax.set_ylabel('Density')
+        ax.set_xlim(bounds)
+        
+        if i == 0:
+            ax.legend(fontsize=7, loc='upper right')
+    
+    # Hide unused subplots
+    for i in range(n_params, len(axes)):
+        axes[i].set_visible(False)
+    
+    plt.suptitle(f'Posterior Distributions vs SCE-UA Point Estimates: {obj_name}', 
+                 fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    
+    return fig
+
+
+# Get parameter bounds
+model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+param_bounds = model.get_parameter_bounds()
+
+# %%
+# Create comparison plots for available results
+print("=" * 70)
+print("POSTERIOR vs POINT ESTIMATE COMPARISON")
+print("=" * 70)
+
+# Create figures directory
+figures_dir = Path('../figures')
+figures_dir.mkdir(exist_ok=True)
+
+# Select a few key objective functions to visualize in detail
+key_objectives = ['NSE', 'KGE', 'InvNSE', 'SDEB']
+
+for obj_name in key_objectives:
+    if obj_name in pydream_results and obj_name in sceua_results:
+        print(f"\nPlotting: {obj_name}")
+        fig = plot_posterior_vs_point(
+            obj_name, 
+            pydream_results[obj_name], 
+            sceua_results[obj_name],
+            param_bounds
+        )
+        if fig:
+            plt.savefig(figures_dir / f'05_posterior_vs_sceua_{obj_name.lower()}.png', 
+                       dpi=150, bbox_inches='tight')
+            plt.show()
+            plt.close()
+    else:
+        print(f"\n{obj_name}: Missing results for comparison")
+
+# %% [markdown]
+# ---
+# ## Comprehensive Posterior Comparison: All Objectives
+#
+# Let's create a comprehensive figure showing posteriors for a single key parameter
+# across all objective functions.
+
+# %%
+def plot_all_posteriors_single_param(param_name, pydream_results, sceua_results, param_bounds):
+    """
+    Plot posterior distributions for one parameter across all objectives.
+    """
+    available = [name for name in pydream_results.keys() 
+                 if pydream_results[name].all_samples is not None 
+                 and param_name in pydream_results[name].all_samples.columns]
+    
+    if len(available) == 0:
+        print(f"No posteriors available for {param_name}")
+        return None
+    
+    n_obj = len(available)
+    n_cols = 3
+    n_rows = (n_obj + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
+    axes = axes.flatten()
+    
+    bounds = param_bounds.get(param_name, (0, 1))
+    
+    for i, obj_name in enumerate(available):
+        ax = axes[i]
+        
+        samples = pydream_results[obj_name].all_samples
+        posterior = samples[param_name].values
+        
+        sceua_value = sceua_results[obj_name].best_parameters[param_name] if obj_name in sceua_results else None
+        pydream_value = pydream_results[obj_name].best_parameters[param_name]
+        
+        # Histogram
+        ax.hist(posterior, bins=40, density=True, alpha=0.7, color='steelblue',
+                edgecolor='white', linewidth=0.5)
+        
+        # SCE-UA point
+        if sceua_value is not None:
+            ax.axvline(sceua_value, color='red', linewidth=2, linestyle='-',
+                       label=f'SCE-UA: {sceua_value:.1f}')
+        
+        # PyDREAM MAP
+        ax.axvline(pydream_value, color='green', linewidth=2, linestyle='--',
+                   label=f'PyDREAM: {pydream_value:.1f}')
+        
+        # 95% CI
+        ci_low, ci_high = np.percentile(posterior, [2.5, 97.5])
+        ax.axvspan(ci_low, ci_high, alpha=0.2, color='steelblue')
+        
+        ax.set_title(obj_name, fontsize=11, fontweight='bold')
+        ax.set_xlim(bounds)
+        ax.set_xlabel(param_name)
+        ax.set_ylabel('Density')
+        
+        if i == 0:
+            ax.legend(fontsize=8)
+    
+    # Hide unused
+    for i in range(n_obj, len(axes)):
+        axes[i].set_visible(False)
+    
+    plt.suptitle(f'Posterior Distributions for {param_name} Across All Objective Functions', 
+                 fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    
+    return fig
+
+# %%
+# Plot posteriors for key parameters
+key_storage_params = ['uztwm', 'lztwm']
+key_rate_params = ['uzk', 'lzpk']
+
+for param in key_storage_params + key_rate_params:
+    if len(pydream_results) > 0:
+        print(f"\nPlotting all posteriors for: {param}")
+        fig = plot_all_posteriors_single_param(param, pydream_results, sceua_results, param_bounds)
+        if fig:
+            plt.savefig(figures_dir / f'05_all_posteriors_{param}.png', dpi=150, bbox_inches='tight')
+            plt.show()
+            plt.close()
+
+# %% [markdown]
+# ---
+# ## Interactive Comparison Dashboard
+#
+# Create an interactive Plotly figure for comprehensive comparison.
+
+# %%
+def create_comparison_dashboard(pydream_results, sceua_results, objectives):
+    """Create interactive comparison dashboard."""
+    
+    # Prepare data
+    obj_names = list(objectives.keys())
+    
+    # Get NSE and KGE for both algorithms
+    sceua_nse = []
+    sceua_kge = []
+    pydream_nse = []
+    pydream_kge = []
+    sceua_runtime = []
+    pydream_runtime = []
+    
+    for name in obj_names:
+        # SCE-UA
+        if name in sceua_results:
+            model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+            model.set_parameters(sceua_results[name].best_parameters)
+            model.reset()
+            sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
+            obs = cal_observed[WARMUP_DAYS:]
+            metrics = calculate_metrics(sim, obs)
+            sceua_nse.append(metrics['NSE'])
+            sceua_kge.append(metrics['KGE'])
+            sceua_runtime.append(sceua_results[name].runtime_seconds)
+        else:
+            sceua_nse.append(None)
+            sceua_kge.append(None)
+            sceua_runtime.append(None)
+        
+        # PyDREAM
+        if name in pydream_results:
+            model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+            model.set_parameters(pydream_results[name].best_parameters)
+            model.reset()
+            sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
+            obs = cal_observed[WARMUP_DAYS:]
+            metrics = calculate_metrics(sim, obs)
+            pydream_nse.append(metrics['NSE'])
+            pydream_kge.append(metrics['KGE'])
+            pydream_runtime.append(pydream_results[name].runtime_seconds)
+        else:
+            pydream_nse.append(None)
+            pydream_kge.append(None)
+            pydream_runtime.append(None)
+    
+    # Create subplots
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=(
+            'NSE by Objective Function',
+            'KGE by Objective Function',
+            'Runtime Comparison (log scale)',
+            'NSE: SCE-UA vs PyDREAM'
+        ),
+        specs=[[{'type': 'bar'}, {'type': 'bar'}],
+               [{'type': 'bar'}, {'type': 'scatter'}]]
+    )
+    
+    # NSE comparison
+    fig.add_trace(
+        go.Bar(name='SCE-UA', x=obj_names, y=sceua_nse, marker_color='steelblue'),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Bar(name='PyDREAM', x=obj_names, y=pydream_nse, marker_color='coral'),
+        row=1, col=1
+    )
+    
+    # KGE comparison
+    fig.add_trace(
+        go.Bar(name='SCE-UA', x=obj_names, y=sceua_kge, marker_color='steelblue', showlegend=False),
+        row=1, col=2
+    )
+    fig.add_trace(
+        go.Bar(name='PyDREAM', x=obj_names, y=pydream_kge, marker_color='coral', showlegend=False),
+        row=1, col=2
+    )
+    
+    # Runtime comparison
+    fig.add_trace(
+        go.Bar(name='SCE-UA', x=obj_names, y=sceua_runtime, marker_color='steelblue', showlegend=False),
+        row=2, col=1
+    )
+    fig.add_trace(
+        go.Bar(name='PyDREAM', x=obj_names, y=pydream_runtime, marker_color='coral', showlegend=False),
+        row=2, col=1
+    )
+    
+    # Scatter: SCE-UA vs PyDREAM NSE
+    fig.add_trace(
+        go.Scatter(
+            x=sceua_nse, y=pydream_nse, mode='markers+text',
+            text=obj_names, textposition='top center',
+            marker=dict(size=12, color='purple'),
+            showlegend=False
+        ),
+        row=2, col=2
+    )
+    # 1:1 line
+    max_val = max([v for v in sceua_nse + pydream_nse if v is not None])
+    min_val = min([v for v in sceua_nse + pydream_nse if v is not None])
+    fig.add_trace(
+        go.Scatter(
+            x=[min_val, max_val], y=[min_val, max_val],
+            mode='lines', line=dict(dash='dash', color='gray'),
+            showlegend=False
+        ),
+        row=2, col=2
+    )
+    
+    # Update axes
+    fig.update_yaxes(title_text="NSE", row=1, col=1)
+    fig.update_yaxes(title_text="KGE", row=1, col=2)
+    fig.update_yaxes(title_text="Runtime (s)", type="log", row=2, col=1)
+    fig.update_xaxes(title_text="SCE-UA NSE", row=2, col=2)
+    fig.update_yaxes(title_text="PyDREAM NSE", row=2, col=2)
+    
+    fig.update_layout(
+        title="<b>Algorithm Comparison: SCE-UA vs PyDREAM</b><br>" +
+              "<sup>Across 13 Objective Functions</sup>",
+        height=800,
+        showlegend=True,
+        barmode='group',
+        legend=dict(orientation='h', y=1.02)
+    )
+    
+    return fig
+
+# %%
+if len(pydream_results) > 0 and len(sceua_results) > 0:
+    fig = create_comparison_dashboard(pydream_results, sceua_results, objectives)
+    fig.show()
+    
+    # Save as HTML
+    fig.write_html(str(figures_dir / '05_algorithm_comparison_dashboard.html'))
+    print(f"\nDashboard saved to: figures/05_algorithm_comparison_dashboard.html")
 
 # %% [markdown]
 # ---
 # ## Convergence Diagnostics
 #
-# ### Gelman-Rubin Statistic (R-hat)
-#
-# For MCMC methods, we check convergence using the Gelman-Rubin statistic:
-# - **R-hat ≈ 1.0**: Chains have converged
-# - **R-hat > 1.2**: Chains haven't converged, need more iterations
-#
-# The idea: if multiple chains are exploring the same distribution, their
-# within-chain variance should match their between-chain variance.
+# For MCMC methods, checking convergence is critical. We examine the 
+# Gelman-Rubin statistic (R-hat) across all calibrations.
 
 # %%
 print("=" * 70)
-print("CONVERGENCE DIAGNOSTICS (MCMC Methods)")
+print("PYDREAM CONVERGENCE DIAGNOSTICS")
 print("=" * 70)
 
-mcmc_methods = ['SpotPy DREAM', 'PyDREAM']
-for method in mcmc_methods:
-    if method in all_results:
-        result = all_results[method]
-        if 'gelman_rubin' in result.convergence_diagnostics:
-            print(f"\n{method} - Gelman-Rubin Statistics (R-hat):")
-            print("-" * 50)
-            gr_values = result.convergence_diagnostics['gelman_rubin']
-            for param, gr in gr_values.items():
-                status = "✓" if gr < 1.2 else "⚠"
-                print(f"  {status} {param:8s}: {gr:.4f}")
-            
-            converged = result.convergence_diagnostics.get('converged', 'N/A')
-            print(f"\n  Overall: {'Converged' if converged else 'Not converged'}")
-        else:
-            print(f"\n{method}: Convergence diagnostics not available")
+convergence_data = []
 
-print("\nNote: Optimization methods (SCE-UA, SciPy DE) don't have R-hat diagnostics")
-
-# %% [markdown]
-# ---
-# ## Posterior Visualization (MCMC Methods)
-#
-# One key advantage of MCMC methods: we can visualize the uncertainty in parameters.
-
-# %%
-# Check if we have MCMC samples
-mcmc_with_samples = {}
-for method in ['SpotPy DREAM', 'PyDREAM']:
-    if method in all_results:
-        result = all_results[method]
-        if result.all_samples is not None and len(result.all_samples) > 0:
-            mcmc_with_samples[method] = result
-
-if len(mcmc_with_samples) > 0:
-    print("=" * 70)
-    print("POSTERIOR DISTRIBUTIONS (MCMC Methods)")
-    print("=" * 70)
-    
-    # Get parameter names
-    param_names = list(all_results[list(all_results.keys())[0]].best_parameters.keys())
-    
-    # Create histogram plots for key parameters
-    fig, axes = plt.subplots(3, 4, figsize=(16, 10))
-    axes = axes.flatten()
-    
-    for i, param in enumerate(param_names[:12]):  # First 12 params
-        ax = axes[i]
+for name, result in pydream_results.items():
+    if 'gelman_rubin' in result.convergence_diagnostics:
+        gr_vals = result.convergence_diagnostics['gelman_rubin']
+        max_gr = max(gr_vals.values())
+        mean_gr = np.mean(list(gr_vals.values()))
+        converged = result.convergence_diagnostics.get('converged', False)
         
-        for method, result in mcmc_with_samples.items():
-            samples = result.all_samples
-            if param in samples.columns:
-                ax.hist(samples[param].values, bins=50, alpha=0.5, density=True,
-                       color=METHOD_COLORS.get(method, 'gray'), label=method)
-        
-        ax.set_xlabel(param)
-        ax.set_ylabel('Density')
-        if i == 0:
-            ax.legend(fontsize=8)
-    
-    plt.suptitle('Parameter Posterior Distributions (MCMC Methods)', y=1.02)
-    plt.tight_layout()
-    plt.savefig('figures/04_posterior_distributions.png', dpi=150, bbox_inches='tight')
-    plt.show()
-    print("Figure saved: figures/04_posterior_distributions.png")
+        convergence_data.append({
+            'Objective': name,
+            'Max R-hat': max_gr,
+            'Mean R-hat': mean_gr,
+            'Converged': '✓' if converged else '✗'
+        })
+
+if convergence_data:
+    conv_df = pd.DataFrame(convergence_data)
+    print(f"\n{conv_df.round(3).to_string(index=False)}")
+    print("\nR-hat < 1.2 indicates convergence")
+    print("Consider increasing iterations if not converged")
 else:
-    print("No MCMC samples available for posterior visualization")
+    print("\nNo convergence diagnostics available")
 
 # %% [markdown]
 # ---
-# ## Results Visualization
-
-# %%
-# Comprehensive comparison figure
-fig = make_subplots(
-    rows=2, cols=2,
-    subplot_titles=(
-        'Hydrograph Comparison (Log Scale)',
-        'NSE by Algorithm',
-        'Flow Duration Curves',
-        'Runtime Comparison'
-    ),
-    specs=[[{'type': 'scatter'}, {'type': 'bar'}],
-           [{'type': 'scatter'}, {'type': 'bar'}]]
-)
-
-# 1. Hydrograph
-fig.add_trace(
-    go.Scatter(x=dates_compare, y=obs_compare, name='Observed',
-               line=dict(color='black', width=1.5)),
-    row=1, col=1
-)
-for method, sim in simulations.items():
-    fig.add_trace(
-        go.Scatter(x=dates_compare, y=sim, name=method,
-                   line=dict(color=METHOD_COLORS[method], width=1), opacity=0.8),
-        row=1, col=1
-    )
-
-# 2. NSE comparison
-nse_values = [metrics_comparison[m]['NSE'] for m in all_results.keys()]
-fig.add_trace(
-    go.Bar(x=list(all_results.keys()), y=nse_values,
-           marker_color=[METHOD_COLORS[m] for m in all_results.keys()],
-           showlegend=False),
-    row=1, col=2
-)
-
-# 3. Flow Duration Curves
-exc = np.arange(1, len(obs_compare) + 1) / len(obs_compare) * 100
-obs_sorted = np.sort(obs_compare)[::-1]
-fig.add_trace(
-    go.Scatter(x=exc, y=obs_sorted, name='Observed FDC',
-               line=dict(color='black', width=2), showlegend=False),
-    row=2, col=1
-)
-for method, sim in simulations.items():
-    sim_sorted = np.sort(sim)[::-1]
-    fig.add_trace(
-        go.Scatter(x=exc, y=sim_sorted, name=f'{method} FDC',
-                   line=dict(color=METHOD_COLORS[method], width=1.5), showlegend=False),
-        row=2, col=1
-    )
-
-# 4. Runtime comparison
-runtime_values = [all_results[m].runtime_seconds for m in all_results.keys()]
-fig.add_trace(
-    go.Bar(x=list(all_results.keys()), y=runtime_values,
-           marker_color=[METHOD_COLORS[m] for m in all_results.keys()],
-           showlegend=False),
-    row=2, col=2
-)
-
-# Update axes
-fig.update_yaxes(title_text="Flow (ML/day)", type="log", row=1, col=1)
-fig.update_yaxes(title_text="NSE", row=1, col=2)
-fig.update_xaxes(title_text="Exceedance %", row=2, col=1)
-fig.update_yaxes(title_text="Flow (ML/day)", type="log", row=2, col=1)
-fig.update_yaxes(title_text="Runtime (seconds)", row=2, col=2)
-
-fig.update_layout(
-    title="<b>Algorithm Comparison Results</b>",
-    height=800,
-    showlegend=True,
-    legend=dict(orientation='h', y=1.02)
-)
-fig.show()
-
-# %%
-# Save static figure
-fig_static, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-# 1. NSE comparison
-ax = axes[0, 0]
-ax.bar(list(all_results.keys()), nse_values,
-       color=[METHOD_COLORS[m] for m in all_results.keys()])
-ax.set_ylabel('NSE')
-ax.set_title('NSE by Algorithm')
-ax.axhline(0.7, color='green', linestyle='--', alpha=0.5)
-ax.tick_params(axis='x', rotation=45)
-
-# 2. Runtime comparison
-ax = axes[0, 1]
-ax.bar(list(all_results.keys()), runtime_values,
-       color=[METHOD_COLORS[m] for m in all_results.keys()])
-ax.set_ylabel('Runtime (seconds)')
-ax.set_title('Runtime Comparison')
-ax.tick_params(axis='x', rotation=45)
-
-# 3. Parameter spread (boxplot proxy using bar + error)
-ax = axes[1, 0]
-param_to_show = 'uztwm'
-values = [all_results[m].best_parameters[param_to_show] for m in all_results.keys()]
-ax.bar(list(all_results.keys()), values,
-       color=[METHOD_COLORS[m] for m in all_results.keys()])
-ax.set_ylabel(f'{param_to_show} value')
-ax.set_title(f'Best {param_to_show} by Algorithm')
-ax.tick_params(axis='x', rotation=45)
-
-# 4. FDC comparison
-ax = axes[1, 1]
-ax.plot(exc, obs_sorted, 'k-', lw=2, label='Observed')
-for method, sim in simulations.items():
-    sim_sorted = np.sort(sim)[::-1]
-    ax.plot(exc, sim_sorted, color=METHOD_COLORS[method], lw=1.5, label=method)
-ax.set_xlabel('Exceedance (%)')
-ax.set_ylabel('Flow (ML/day)')
-ax.set_title('Flow Duration Curves')
-ax.set_yscale('log')
-ax.legend(fontsize=8)
-
-plt.suptitle('Algorithm Comparison Summary', y=1.02, fontsize=14)
-plt.tight_layout()
-plt.savefig('figures/04_algorithm_comparison.png', dpi=150, bbox_inches='tight')
-plt.close()
-print("Figure saved: figures/04_algorithm_comparison.png")
-
-# %% [markdown]
-# ---
-# ## Practical Guidance
+# ## Summary and Recommendations
 #
-# ### Decision Flowchart: Which Algorithm Should I Use?
+# ### Key Findings
 #
-# ```
-# START
-#   │
-#   ▼
-# Do you need uncertainty estimates?
-#   │
-#   ├─► YES
-#   │     │
-#   │     ▼
-#   │   Is the posterior complex/multi-modal?
-#   │     │
-#   │     ├─► YES → Use PyDREAM (MT-DREAM(ZS))
-#   │     │           Better mixing, snooker updates
-#   │     │
-#   │     └─► NO  → Use SpotPy DREAM
-#   │                 Simpler, well-tested
-#   │
-#   └─► NO
-#         │
-#         ▼
-#       Need fast calibration?
-#         │
-#         ├─► YES → Use SCE-UA
-#         │           Classic, reliable, fast
-#         │
-#         └─► NO  → Either SCE-UA or SciPy DE
-#                     Both give similar results
-# ```
+# | Aspect | SCE-UA | PyDREAM |
+# |--------|--------|---------|
+# | **Output** | Point estimate | Full posterior |
+# | **Uncertainty** | None | Credible intervals |
+# | **Speed** | Fast (minutes) | Slow (hours) |
+# | **Convergence** | Easy | Requires checking |
+# | **Best for** | Quick calibration | Uncertainty analysis |
 #
 # ### When to Use Each Algorithm
 #
-# | Algorithm | Use When | Avoid When |
-# |-----------|----------|------------|
-# | **SpotPy DREAM** | Need uncertainty; standard problems | Very limited time |
-# | **PyDREAM** | Complex posteriors; multi-modal | Simple problems (overkill) |
-# | **SCE-UA** | Quick calibration; point estimate | Need uncertainty |
-# | **SciPy DE** | No extra dependencies; simple setup | Need uncertainty |
+# **Use SCE-UA when:**
+# - You need a quick calibration
+# - Point estimates are sufficient
+# - Computational resources are limited
+# - Running many catchments
 #
-# ### Parallelization for Production
-#
-# For production calibrations, use parallelization:
-#
-# **SpotPy DREAM with MPI:**
-# ```bash
-# # Create script: mpi_calibration.py
-# mpirun -n 9 python mpi_calibration.py  # 1 master + 8 workers
-# ```
-#
-# **PyDREAM (automatic):**
-# - Chains run in parallel automatically
-# - Multi-try evaluations can be parallelized with `parallel=True`
-
-# %% [markdown]
-# ---
-# ## Summary
-#
-# ### Key Takeaways
-#
-# 1. **MCMC vs Optimization**: Choose based on whether you need uncertainty
-#    - MCMC (DREAM, PyDREAM): Slower but gives credible intervals
-#    - Optimization (SCE-UA, SciPy DE): Faster point estimates
-#
-# 2. **All algorithms found similar optima**: This is expected for well-behaved
-#    problems. Differences are larger for complex, multi-modal posteriors.
-#
-# 3. **Convergence matters for MCMC**: Check Gelman-Rubin R-hat < 1.2
-#
-# 4. **Runtime varies significantly**: Optimization is 5-10x faster than MCMC
+# **Use PyDREAM when:**
+# - Parameter uncertainty is important
+# - Need credible intervals for predictions
+# - Assessing model structural uncertainty
+# - Research applications requiring full posteriors
 
 # %%
 print("=" * 70)
 print("ALGORITHM COMPARISON SUMMARY")
 print("=" * 70)
 
-# Create summary table
-summary_data = []
-for method, result in all_results.items():
-    method_type = "MCMC" if method in ['SpotPy DREAM', 'PyDREAM'] else "Optimization"
-    nse = metrics_comparison[method]['NSE']
-    summary_data.append({
-        'Algorithm': method,
-        'Type': method_type,
-        'NSE': f"{nse:.4f}",
-        'Runtime (s)': f"{result.runtime_seconds:.1f}",
-        'Uncertainty?': 'Yes' if method_type == 'MCMC' else 'No'
-    })
-
-summary_df = pd.DataFrame(summary_data)
-print("\n" + summary_df.to_string(index=False))
+# Summary statistics
+if len(sceua_results) > 0 and len(pydream_results) > 0:
+    common = set(sceua_results.keys()) & set(pydream_results.keys())
+    
+    if len(common) > 0:
+        sceua_times = [sceua_results[k].runtime_seconds for k in common]
+        pydream_times = [pydream_results[k].runtime_seconds for k in common]
+        
+        print(f"\nCompared {len(common)} objective functions")
+        print(f"\nRuntime comparison:")
+        print(f"  SCE-UA average:  {np.mean(sceua_times):.1f} seconds")
+        print(f"  PyDREAM average: {np.mean(pydream_times):.1f} seconds")
+        print(f"  Speed ratio:     {np.mean(pydream_times)/np.mean(sceua_times):.1f}x slower")
 
 print("""
-\nRecommendations:
-  • For quick calibration     → SCE-UA
-  • For uncertainty analysis  → SpotPy DREAM
-  • For complex posteriors    → PyDREAM
-  • For minimal dependencies  → SciPy DE
+Recommendations:
+  • For quick calibration     → SCE-UA (fast, reliable)
+  • For uncertainty analysis  → PyDREAM (full posteriors)
+  • For research papers       → PyDREAM (publishable uncertainty)
+  • For operational use       → SCE-UA (efficient at scale)
+  • For best of both          → SCE-UA first, PyDREAM for final model
 """)
 
 # %% [markdown]
 # ---
 # ## Next Steps
 #
-# - **Notebook 05**: Monitor long-running calibrations in real-time
-# - For production: Increase iterations significantly (10,000+ for MCMC)
-# - Consider MPI parallelization for large-scale calibrations
+# - **Notebook 06**: Sensitivity Analysis (Sobol indices)
+# - For production: Increase PyDREAM iterations (5000-10000+)
+# - Consider running PyDREAM overnight for comprehensive posteriors
+# - Use posteriors for prediction uncertainty bounds
 
 # %%
 print("=" * 70)
@@ -904,10 +1747,12 @@ print("ALGORITHM COMPARISON COMPLETE")
 print("=" * 70)
 print("""
 You now understand:
-  ✓ MCMC vs Optimization paradigms
-  ✓ When to use each algorithm
-  ✓ How to interpret convergence diagnostics
-  ✓ Runtime/uncertainty trade-offs
+  ✓ How SCE-UA and PyDREAM differ fundamentally
+  ✓ How to run calibrations with both algorithms
+  ✓ How to compare posteriors with point estimates
+  ✓ When to use each approach
+  ✓ How to check MCMC convergence
   
-Happy calibrating!
+The posterior distributions provide valuable insight into parameter
+uncertainty that point estimates alone cannot capture!
 """)

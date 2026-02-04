@@ -338,6 +338,11 @@ class GaussianLikelihood(ObjectiveFunction):
     
     Higher values indicate better fit (maximized).
     
+    NOTE: This formulation heavily emphasizes HIGH FLOWS because squared
+    errors in original units are dominated by high-flow periods. For balanced
+    or low-flow emphasis, use TransformedGaussianLikelihood with an appropriate
+    flow transformation.
+    
     Reference:
         Vrugt 2016: Markov chain Monte Carlo simulation using the DREAM 
         software package.
@@ -376,6 +381,279 @@ class GaussianLikelihood(ObjectiveFunction):
         Already in log-likelihood form, directly usable by DREAM.
         """
         return self.calculate(simulated, observed)
+
+
+class TransformedGaussianLikelihood(ObjectiveFunction):
+    """
+    Gaussian likelihood with flow transformation for balanced/low-flow emphasis.
+    
+    This class applies a flow transformation before computing the Gaussian
+    log-likelihood, allowing MCMC calibration (PyDREAM, SpotPy DREAM) to
+    emphasize different flow regimes - analogous to transformed NSE/KGE.
+    
+    Formula
+    -------
+    log_lik = -n/2 * log(Σ(T(obs) - T(sim))²)
+    
+    where T() is the flow transformation function.
+    
+    Parameters
+    ----------
+    transform : str or FlowTransformation, default='sqrt'
+        Flow transformation to apply. Can be:
+        - String: 'none', 'sqrt', 'log', 'inverse', 'power', 'boxcox'
+        - FlowTransformation instance for full control
+        
+        Default is 'sqrt' for balanced flow emphasis.
+    
+    epsilon_value : float, default=0.01
+        Value for handling zero flows (as fraction of mean observed flow).
+        Only used when transform is a string.
+    
+    Flow Emphasis by Transformation
+    -------------------------------
+    | Transform | Emphasis | Equivalent to |
+    |-----------|----------|---------------|
+    | none | High flows | GaussianLikelihood, NSE |
+    | sqrt | Balanced | NSE(sqrt) |
+    | power (p=0.2) | Low-medium | NSE(power) |
+    | log | Low flows | LogNSE |
+    | inverse | Very low flows | InvNSE |
+    
+    Notes
+    -----
+    - For general-purpose calibration, 'sqrt' provides good balance
+    - For baseflow/recession emphasis, use 'log' or 'inverse'
+    - For peak flow focus, use 'none' (equivalent to GaussianLikelihood)
+    
+    WARNING: Log transformation can cause numerical issues with near-zero
+    flows. The epsilon parameter helps mitigate this.
+    
+    References
+    ----------
+    Vrugt 2016: Markov chain Monte Carlo simulation using the DREAM 
+    software package.
+    
+    Pushpalatha et al. (2012): A review of efficiency criteria suitable 
+    for evaluating low-flow simulations. Journal of Hydrology.
+    
+    Examples
+    --------
+    >>> # Balanced likelihood (sqrt transform) - recommended default
+    >>> likelihood = TransformedGaussianLikelihood('sqrt')
+    
+    >>> # Low-flow emphasis
+    >>> likelihood = TransformedGaussianLikelihood('log')
+    
+    >>> # Very low-flow emphasis (inverse)
+    >>> likelihood = TransformedGaussianLikelihood('inverse')
+    
+    >>> # Custom transformation with full control
+    >>> from pyrrm.objectives import FlowTransformation
+    >>> transform = FlowTransformation('power', p=0.3)
+    >>> likelihood = TransformedGaussianLikelihood(transform=transform)
+    """
+    
+    # Flow emphasis descriptions for documentation
+    _TRANSFORM_EMPHASIS = {
+        'none': 'high',
+        'sqrt': 'balanced',
+        'log': 'low',
+        'inverse': 'very_low',
+        'power': 'low_medium',
+        'boxcox': 'balanced',
+        'squared': 'very_high',
+        'inverse_squared': 'extreme_low',
+    }
+    
+    def __init__(
+        self, 
+        transform: Optional[str] = 'sqrt',
+        epsilon_value: float = 0.01
+    ):
+        """
+        Initialize transformed Gaussian likelihood.
+        
+        Parameters
+        ----------
+        transform : str or FlowTransformation, optional
+            Flow transformation. String options: 'none', 'sqrt', 'log', 
+            'inverse', 'power', 'boxcox'. Default is 'sqrt' for balanced
+            flow emphasis.
+        epsilon_value : float, default=0.01
+            Epsilon value for zero-flow handling (fraction of mean flow).
+        """
+        # Handle FlowTransformation import
+        try:
+            from pyrrm.objectives import FlowTransformation
+            self._FlowTransformation = FlowTransformation
+        except ImportError:
+            # Fallback if new objectives module not available
+            self._FlowTransformation = None
+        
+        # Store original arguments for pickling/recreation
+        self._transform_arg = transform
+        self._epsilon_value = epsilon_value
+        
+        # Create or store the transformation
+        if transform is None or transform == 'none':
+            self._transform = None
+            self._transform_type = 'none'
+        elif isinstance(transform, str):
+            if self._FlowTransformation is not None:
+                self._transform = self._FlowTransformation(
+                    transform_type=transform,
+                    epsilon_method='mean_fraction',
+                    epsilon_value=epsilon_value
+                )
+            else:
+                # Fallback: store transform type for manual application
+                self._transform = None
+                self._transform_type = transform
+            self._transform_type = transform
+        else:
+            # Assume it's a FlowTransformation instance
+            self._transform = transform
+            self._transform_type = getattr(transform, 'transform_type', 'custom')
+        
+        self._flow_emphasis = self._TRANSFORM_EMPHASIS.get(self._transform_type, 'custom')
+    
+    @property
+    def maximize(self) -> bool:
+        return True
+    
+    @property
+    def flow_emphasis(self) -> str:
+        """Return the flow regime this likelihood emphasizes."""
+        return self._flow_emphasis
+    
+    @property
+    def transform_type(self) -> str:
+        """Return the transformation type."""
+        return self._transform_type
+    
+    def __repr__(self) -> str:
+        return f"TransformedGaussianLikelihood(transform='{self._transform_type}', emphasis='{self._flow_emphasis}')"
+    
+    def _apply_transform(self, values: np.ndarray, reference: np.ndarray) -> np.ndarray:
+        """
+        Apply the flow transformation.
+        
+        Parameters
+        ----------
+        values : np.ndarray
+            Values to transform (simulated or observed)
+        reference : np.ndarray
+            Reference values for epsilon calculation (typically observed)
+        
+        Returns
+        -------
+        np.ndarray
+            Transformed values
+        """
+        if self._transform is not None:
+            return self._transform.apply(values, reference)
+        elif self._transform_type == 'none':
+            return values
+        else:
+            # Manual transformation fallback
+            eps = np.mean(reference[reference > 0]) * self._epsilon_value if np.any(reference > 0) else self._epsilon_value
+            
+            if self._transform_type == 'sqrt':
+                return np.sqrt(values + eps)
+            elif self._transform_type == 'log':
+                return np.log(values + eps)
+            elif self._transform_type == 'inverse':
+                return 1.0 / (values + eps)
+            elif self._transform_type == 'power':
+                return (values + eps) ** 0.2
+            elif self._transform_type == 'boxcox':
+                lam = 0.25
+                return ((values + eps) ** lam - 1) / lam
+            elif self._transform_type == 'squared':
+                return values ** 2
+            elif self._transform_type == 'inverse_squared':
+                return 1.0 / (values + eps) ** 2
+            else:
+                return values
+    
+    def calculate(self, simulated: np.ndarray, observed: np.ndarray) -> float:
+        """
+        Calculate transformed Gaussian log-likelihood.
+        
+        Parameters
+        ----------
+        simulated : np.ndarray
+            Simulated flow values
+        observed : np.ndarray
+            Observed flow values
+        
+        Returns
+        -------
+        float
+            Log-likelihood value (higher is better)
+        """
+        sim = np.asarray(simulated).flatten()
+        obs = np.asarray(observed).flatten()
+        
+        # Remove NaN values
+        mask = ~(np.isnan(sim) | np.isnan(obs))
+        sim, obs = sim[mask], obs[mask]
+        
+        if len(obs) == 0:
+            return -np.inf
+        
+        # Apply transformation
+        obs_t = self._apply_transform(obs, obs)
+        sim_t = self._apply_transform(sim, obs)  # Use obs as reference for epsilon
+        
+        # Check for invalid values after transformation
+        if np.any(np.isnan(obs_t)) or np.any(np.isnan(sim_t)):
+            return -np.inf
+        if np.any(np.isinf(obs_t)) or np.any(np.isinf(sim_t)):
+            return -np.inf
+        
+        # Calculate error residuals in transformed space
+        error = obs_t - sim_t
+        sum_squared_error = np.sum(error ** 2)
+        
+        if sum_squared_error <= 0:
+            return -np.inf
+        
+        # Gaussian likelihood with measurement error integrated out
+        n = len(obs)
+        return -n / 2.0 * np.log(sum_squared_error)
+    
+    def for_spotpy(self, simulated: np.ndarray, observed: np.ndarray) -> float:
+        """
+        Return value suitable for SPOTPY DREAM.
+        
+        Already in log-likelihood form, directly usable by DREAM.
+        """
+        return self.calculate(simulated, observed)
+    
+    def __getstate__(self):
+        """Support pickling for multiprocessing."""
+        state = self.__dict__.copy()
+        # Remove unpicklable FlowTransformation class reference
+        state['_FlowTransformation'] = None
+        return state
+    
+    def __setstate__(self, state):
+        """Support unpickling for multiprocessing."""
+        self.__dict__.update(state)
+        # Recreate transformation on unpickle
+        try:
+            from pyrrm.objectives import FlowTransformation
+            self._FlowTransformation = FlowTransformation
+            if self._transform_arg is not None and isinstance(self._transform_arg, str) and self._transform_arg != 'none':
+                self._transform = FlowTransformation(
+                    transform_type=self._transform_arg,
+                    epsilon_method='mean_fraction',
+                    epsilon_value=self._epsilon_value
+                )
+        except ImportError:
+            self._FlowTransformation = None
 
 
 # =============================================================================

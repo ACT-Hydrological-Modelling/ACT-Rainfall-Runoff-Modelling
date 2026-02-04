@@ -3081,1043 +3081,272 @@ print("  • General purpose → Look for balanced performance across all metric
 
 # %% [markdown]
 # ---
-# ## Step 9: Automated Parameter Bounds Analysis & Adjustment
+# ## Step 9: Manual Parameter Bounds Adjustment
 #
-# ### Why Analyze Parameter Bounds?
+# ### Why Adjust Parameter Bounds?
 #
-# When calibrated parameters are very close to their bounds (within 5% of either end),
-# it suggests the optimizer may be constrained and unable to find the true optimum.
-# This analysis:
+# Based on analysis of calibration results, we may observe that certain parameters
+# consistently approach their lower or upper bounds. This suggests the optimizer
+# may be constrained and unable to find the true optimum.
 #
-# - **Detects bound-limited parameters**: Finds parameters within 5% of their bounds
-# - **Identifies affected experiments**: Shows which calibrations may be constrained
-# - **Generates updated bounds**: Automatically extends limiting bounds by 10%
-# - **Re-runs only affected experiments**: Efficient targeted re-calibration
+# In this example, we manually extend the lower bounds of selected parameters
+# that showed potential limitation in our calibrations:
+#
+# - **lzfpm**: Lower zone free water primary maximum (mm)
+# - **lzpk**: Lower zone primary depletion rate (1/day)  
+# - **uztwm**: Upper zone tension water maximum (mm)
+# - **uzk**: Upper zone depletion rate (1/day)
 
 # %%
-# Collect all calibration results for analysis
-all_calibrations = {
-    'NSE': result,
-    'LogNSE': log_result,
-    'InvNSE': inv_result,
-    'SqrtNSE': sqrt_result,
-    'SDEB': sdeb_result,
-    'KGE': kge_result,
-    'KGE_inv': kge_inv_result,
-    'KGE_sqrt': kge_sqrt_result,
-    'KGE_log': kge_log_result,
-    'KGE_np': kge_np_result,
-    'KGE_np_inv': kge_np_inv_result,
-    'KGE_np_sqrt': kge_np_sqrt_result,
-    'KGE_np_log': kge_np_log_result,
-}
-
-# Store corresponding objectives for re-calibration
-all_objectives = {
-    'NSE': objective,  # The basic NSE objective defined earlier
-    'LogNSE': log_nse_objective,
-    'InvNSE': inv_nse_objective,
-    'SqrtNSE': sqrt_nse_objective,
-    'SDEB': sdeb_objective,
-    'KGE': kge_objective,
-    'KGE_inv': kge_inv_objective,
-    'KGE_sqrt': kge_sqrt_objective,
-    'KGE_log': kge_log_objective,
-    'KGE_np': kge_np_objective,
-    'KGE_np_inv': kge_np_inv_objective,
-    'KGE_np_sqrt': kge_np_sqrt_objective,
-    'KGE_np_log': kge_np_log_objective,
-}
-
+# Define custom bounds with extended lower limits
 print("=" * 80)
-print("PARAMETER BOUNDS ANALYSIS")
-print("=" * 80)
-print(f"\nAnalyzing {len(all_calibrations)} calibration experiments...")
-print("Threshold: Parameters within 5% of bounds are flagged as potentially limited")
-
-# %%
-# Analyze each calibration for bound-hitting parameters
-THRESHOLD_PCT = 5.0  # Parameters within 5% of bounds
-
-# Define physical limits for parameter categories
-# Store sizes (mm) - must remain positive (minimum 1mm for physical realism)
-STORE_PARAMS = {'uztwm', 'uzfwm', 'lztwm', 'lzfpm', 'lzfsm', 'ssout'}
-STORE_PHYSICAL_MIN = 1.0  # Minimum 1mm - stores must have some capacity
-STORE_PHYSICAL_MAX = float('inf')
-
-# Fractions/percentages - must stay in [0, 1] range
-FRACTION_PARAMS = {'pctim', 'adimp', 'pfree', 'rserv', 'side', 'sarva', 
-                   'uh1', 'uh2', 'uh3', 'uh4', 'uh5'}
-FRACTION_PHYSICAL_MIN = 0.0
-FRACTION_PHYSICAL_MAX = 1.0
-
-# Rates (1/day) - must remain positive (use small epsilon)
-# These control drainage/flow rates, must be non-zero for model function
-RATE_PARAMS = {'uzk', 'lzpk', 'lzsk'}
-RATE_PHYSICAL_MIN = 0.0001  # Minimum rate to avoid numerical issues
-RATE_PHYSICAL_MAX = float('inf')
-
-# Other positive parameters (scale factors, exponents)
-OTHER_POSITIVE_PARAMS = {'zperc', 'rexp'}
-OTHER_POSITIVE_MIN = 0.1  # Minimum for scale/exponent parameters
-OTHER_POSITIVE_MAX = float('inf')
-
-def get_physical_limits(param_name):
-    """Get physical min/max limits for a parameter."""
-    if param_name in FRACTION_PARAMS:
-        return FRACTION_PHYSICAL_MIN, FRACTION_PHYSICAL_MAX
-    elif param_name in STORE_PARAMS:
-        return STORE_PHYSICAL_MIN, STORE_PHYSICAL_MAX
-    elif param_name in RATE_PARAMS:
-        return RATE_PHYSICAL_MIN, RATE_PHYSICAL_MAX
-    elif param_name in OTHER_POSITIVE_PARAMS:
-        return OTHER_POSITIVE_MIN, OTHER_POSITIVE_MAX
-    else:
-        # Default: positive only with small minimum
-        return 0.001, float('inf')
-
-def can_extend_bound(param_name, bound_type, current_bounds, extension_factor=0.5):
-    """
-    Check if a bound can actually be extended given physical constraints.
-    Uses multiplicative factor: lower × (1-factor) or upper × (1+factor).
-    Returns (can_extend, reason) tuple.
-    """
-    phys_min, phys_max = get_physical_limits(param_name)
-    low, high = current_bounds[param_name]
-    
-    if bound_type == 'LOWER':
-        proposed_new_low = low * (1 - extension_factor)
-        # Check if current bound is already at physical minimum
-        if low <= phys_min:
-            return False, f"already at physical min ({phys_min})"
-        # Check if proposed extension would hit physical minimum
-        actual_new_low = max(phys_min, proposed_new_low)
-        if actual_new_low >= low * 0.99:  # Allow small tolerance
-            return False, f"cannot extend below physical min ({phys_min})"
-        return True, None
-    else:  # UPPER
-        proposed_new_high = high * (1 + extension_factor)
-        # Check if current bound is already at physical maximum
-        if high >= phys_max:
-            return False, f"already at physical max ({phys_max})"
-        # Check if proposed extension would hit physical maximum
-        actual_new_high = min(phys_max, proposed_new_high)
-        if actual_new_high <= high * 1.01:  # Allow small tolerance
-            return False, f"cannot extend above physical max ({phys_max})"
-        return True, None
-
-def calculate_position_pct(value, param_name, bounds):
-    """Calculate parameter position as percentage within bounds (0-100%)."""
-    low, high = bounds[param_name]
-    if high == low:
-        return 50.0
-    return (value - low) / (high - low) * 100
-
-def is_near_bound(position_pct, threshold=THRESHOLD_PCT):
-    """Check if position is within threshold% of either bound."""
-    return position_pct <= threshold or position_pct >= (100 - threshold)
-
-def get_bound_status(position_pct, threshold=THRESHOLD_PCT):
-    """Return which bound is being hit, if any."""
-    if position_pct <= threshold:
-        return 'LOWER'
-    elif position_pct >= (100 - threshold):
-        return 'UPPER'
-    return None
-
-# Build analysis results
-bound_analysis = {}  # {experiment: {param: {'position': pct, 'status': 'LOWER'/'UPPER'/None, 'can_extend': bool}}}
-params_hitting_bounds = {}  # {param: {'lower': [experiments], 'upper': [experiments]}}
-params_at_physical_limit = {}  # {param: {'lower': [experiments], 'upper': [experiments]}} - cannot be extended
-
-for exp_name, cal_result in all_calibrations.items():
-    bound_analysis[exp_name] = {}
-    for param_name, value in cal_result.best_parameters.items():
-        position = calculate_position_pct(value, param_name, param_bounds)
-        status = get_bound_status(position)
-        
-        # Check if bound can be extended
-        can_extend = False
-        extend_reason = None
-        if status:
-            can_extend, extend_reason = can_extend_bound(param_name, status, param_bounds)
-        
-        bound_analysis[exp_name][param_name] = {
-            'value': value,
-            'position': position,
-            'status': status,
-            'can_extend': can_extend,
-            'extend_reason': extend_reason
-        }
-        
-        # Track which experiments hit each bound (separately for extendable vs at physical limit)
-        if status:
-            if can_extend:
-                # Can be extended - add to params_hitting_bounds
-                if param_name not in params_hitting_bounds:
-                    params_hitting_bounds[param_name] = {'lower': [], 'upper': []}
-                if status == 'LOWER':
-                    params_hitting_bounds[param_name]['lower'].append(exp_name)
-                else:
-                    params_hitting_bounds[param_name]['upper'].append(exp_name)
-            else:
-                # At physical limit - cannot be extended
-                if param_name not in params_at_physical_limit:
-                    params_at_physical_limit[param_name] = {'lower': [], 'upper': []}
-                if status == 'LOWER':
-                    params_at_physical_limit[param_name]['lower'].append(exp_name)
-                else:
-                    params_at_physical_limit[param_name]['upper'].append(exp_name)
-
-# %%
-# Display summary of bound-limited parameters
-print("\n" + "=" * 80)
-print("PARAMETERS HITTING BOUNDS (within 5% of limit)")
+print("MANUAL PARAMETER BOUNDS ADJUSTMENT")
 print("=" * 80)
 
-# First show parameters that CAN be extended
-if params_hitting_bounds:
-    print("\n📊 EXTENDABLE - These bounds CAN be extended:")
-    print(f"{'Parameter':<10} {'Bound':<8} {'Experiments Affected':<60}")
-    print("-" * 80)
-    
-    for param in sorted(params_hitting_bounds.keys()):
-        bounds_info = params_hitting_bounds[param]
-        if bounds_info['lower']:
-            exps = ', '.join(bounds_info['lower'])
-            print(f"{param:<10} {'LOWER':<8} {exps:<60}")
-        if bounds_info['upper']:
-            exps = ', '.join(bounds_info['upper'])
-            print(f"{param:<10} {'UPPER':<8} {exps:<60}")
-else:
-    print("\n✓ No parameters with extendable bounds are hitting their limits!")
+# Parameters to adjust (lower bound × 0.5)
+params_to_adjust = ['lzfpm', 'lzpk', 'uztwm', 'uzk']
 
-# Then show parameters at PHYSICAL limits (cannot be extended)
-if params_at_physical_limit:
-    print("\n" + "-" * 80)
-    print("⚠️  AT PHYSICAL LIMIT - These bounds CANNOT be extended:")
-    print("    (Parameter is at its fundamental physical constraint)")
-    print(f"{'Parameter':<10} {'Bound':<8} {'Reason':<25} {'Experiments':<35}")
-    print("-" * 80)
-    
-    for param in sorted(params_at_physical_limit.keys()):
-        phys_min, phys_max = get_physical_limits(param)
-        bounds_info = params_at_physical_limit[param]
-        if bounds_info['lower']:
-            exps = ', '.join(bounds_info['lower'][:3])
-            if len(bounds_info['lower']) > 3:
-                exps += f" +{len(bounds_info['lower'])-3} more"
-            print(f"{param:<10} {'LOWER':<8} {'at physical min='+str(phys_min):<25} {exps:<35}")
-        if bounds_info['upper']:
-            exps = ', '.join(bounds_info['upper'][:3])
-            if len(bounds_info['upper']) > 3:
-                exps += f" +{len(bounds_info['upper'])-3} more"
-            print(f"{param:<10} {'UPPER':<8} {'at physical max='+str(phys_max):<25} {exps:<35}")
-    
-    print("\n    Note: These experiments are constrained by physical limits, not by")
-    print("    arbitrary bounds. No re-calibration with extended bounds will help.")
+print("\nOriginal vs Custom Bounds:")
+print("-" * 60)
+print(f"{'Parameter':<10} {'Original Low':>15} {'Custom Low':>15} {'Upper':>15}")
+print("-" * 60)
+
+custom_bounds = dict(param_bounds)  # Copy original bounds
+for param in params_to_adjust:
+    orig_low, high = param_bounds[param]
+    new_low = orig_low * 0.7
+    custom_bounds[param] = (new_low, high)
+    print(f"{param:<10} {orig_low:>15.4f} {new_low:>15.4f} {high:>15.4f}")
+
+# Show all bounds for reference
+print("\n" + "-" * 60)
+print("Complete Custom Bounds:")
+print("-" * 60)
+for param, (low, high) in custom_bounds.items():
+    adjusted = " *" if param in params_to_adjust else ""
+    print(f"{param:<10} [{low:>10.4f}, {high:>10.4f}]{adjusted}")
 
 # %%
-# Create detailed table showing parameter positions for all experiments
-print("\n" + "=" * 80)
-print("DETAILED PARAMETER POSITIONS (% within bounds)")
-print("=" * 80)
-print("Legend: Values < 5% or > 95% are flagged (potential bound limitation)")
-
-# Create DataFrame for visualization
-position_data = {}
-for exp_name in all_calibrations.keys():
-    position_data[exp_name] = {}
-    for param_name in param_bounds.keys():
-        position_data[exp_name][param_name] = bound_analysis[exp_name][param_name]['position']
-
-position_df = pd.DataFrame(position_data)
-
-# Display with color coding via Plotly table
-def get_position_color(position, param_name, exp_name):
-    """Color code based on position and whether bound can be extended."""
-    if position <= THRESHOLD_PCT or position >= (100 - THRESHOLD_PCT):
-        # Check if this is at a physical limit
-        info = bound_analysis[exp_name][param_name]
-        if info['status'] and not info.get('can_extend', False):
-            return 'rgb(220, 180, 255)'  # Light purple - at physical limit, cannot extend
-        else:
-            return 'rgb(255, 200, 200)'  # Light red - hitting bound, CAN extend
-    elif position <= 15 or position >= 85:
-        return 'rgb(255, 255, 200)'  # Light yellow - close to bound
-    else:
-        return 'rgb(200, 255, 200)'  # Light green - safely in middle
-
-# Prepare table data
-table_data = []
-cell_colors = []
-
-for param in position_df.index:
-    row_data = [param]
-    row_colors = ['white']
-    
-    for exp in position_df.columns:
-        pos = position_df.loc[param, exp]
-        color = get_position_color(pos, param, exp)
-        row_colors.append(color)
-        
-        # Add indicator if at physical limit
-        info = bound_analysis[exp][param]
-        if info['status'] and not info.get('can_extend', False):
-            row_data.append(f'{pos:.1f}%⚠')
-        else:
-            row_data.append(f'{pos:.1f}%')
-    
-    table_data.append(row_data)
-    cell_colors.append(row_colors)
-
-header = ['Parameter'] + list(position_df.columns)
-table_values = list(zip(*table_data))
-color_values = list(zip(*cell_colors))
-
-fig_positions = go.Figure(data=[go.Table(
-    header=dict(
-        values=header,
-        fill_color='lightblue',
-        align='left',
-        font=dict(size=10, color='black')
-    ),
-    cells=dict(
-        values=table_values,
-        fill_color=color_values,
-        align='center',
-        font=dict(size=9),
-        height=22
-    )
-)])
-
-fig_positions.update_layout(
-    title="<b>Parameter Positions Within Bounds (0% = lower, 100% = upper)</b><br>" +
-          f"<sup>Red = extendable bound hit | Purple (⚠) = at physical limit (cannot extend) | Yellow = 5-15% | Green = safe</sup>",
-    height=700,
-    width=1800
-)
-fig_positions.show()
-
-# %%
-# Identify experiments that need re-calibration
-# ONLY include experiments where at least one parameter CAN actually be extended
-experiments_to_recalibrate = set()
-experiments_at_physical_limit_only = set()  # Experiments where all hitting params are at physical limits
-
-for exp_name, params in bound_analysis.items():
-    has_extendable_param = False
-    has_any_bound_hit = False
-    
-    for param_name, info in params.items():
-        if info['status'] is not None:
-            has_any_bound_hit = True
-            if info.get('can_extend', False):
-                has_extendable_param = True
-    
-    if has_extendable_param:
-        experiments_to_recalibrate.add(exp_name)
-    elif has_any_bound_hit:
-        experiments_at_physical_limit_only.add(exp_name)
+# Save custom bounds to file
+custom_bounds_file = Path('../data/410734/sacramento_bounds_custom.txt')
 
 print("\n" + "=" * 80)
-print("EXPERIMENTS ANALYSIS SUMMARY")
+print("SAVING CUSTOM BOUNDS FILE")
 print("=" * 80)
 
-if experiments_to_recalibrate:
-    print(f"\n📊 {len(experiments_to_recalibrate)} experiment(s) WILL BE RE-CALIBRATED:")
-    print("   (These have parameters hitting bounds that CAN be extended)")
-    for exp in sorted(experiments_to_recalibrate):
-        extendable_params = [p for p, info in bound_analysis[exp].items() 
-                           if info['status'] and info.get('can_extend', False)]
-        print(f"  • {exp}: {', '.join(extendable_params)}")
-else:
-    print("\n✓ No experiments need re-calibration with extended bounds!")
-
-if experiments_at_physical_limit_only:
-    print(f"\n⚠️  {len(experiments_at_physical_limit_only)} experiment(s) have parameters at PHYSICAL LIMITS:")
-    print("   (No re-calibration possible - already at fundamental constraints)")
-    for exp in sorted(experiments_at_physical_limit_only):
-        limited_params = [p for p, info in bound_analysis[exp].items() 
-                        if info['status'] and not info.get('can_extend', False)]
-        print(f"  • {exp}: {', '.join(limited_params)} (at physical limit)")
-
-# %%
-# Generate updated bounds using MULTIPLICATIVE factor
-# This gives more reasonable extensions regardless of the range size
-EXTENSION_FACTOR = 0.5  # Multiply bound by this factor for extension
-
-print("\n" + "=" * 80)
-print("GENERATING UPDATED PARAMETER BOUNDS")
-print("=" * 80)
-print(f"\nUsing multiplicative extension factor: {EXTENSION_FACTOR}")
-print("  • Lower bound hit: new_low = original_low × (1 - factor)")
-print("  • Upper bound hit: new_high = original_high × (1 + factor)")
-print("\nPhysical constraints applied:")
-print(f"  • Store parameters (mm): min={STORE_PHYSICAL_MIN}mm")
-print(f"  • Fraction parameters: range [0, 1]")
-print(f"  • Rate parameters: min={RATE_PHYSICAL_MIN}")
-print(f"  • Other parameters: min={OTHER_POSITIVE_MIN}")
-
-updated_bounds = {k: list(v) for k, v in param_bounds.items()}  # Deep copy
-bounds_changes = []
-
-for param, bounds_info in params_hitting_bounds.items():
-    original_low, original_high = param_bounds[param]
-    phys_min, phys_max = get_physical_limits(param)
-    
-    if bounds_info['lower']:
-        # Extend lower bound using multiplicative factor
-        # new_low = original_low × (1 - factor), e.g., 40 × 0.5 = 20
-        new_low = original_low * (1 - EXTENSION_FACTOR)
-        
-        # Apply physical constraint
-        new_low = max(phys_min, new_low)
-        
-        updated_bounds[param][0] = new_low
-        proposed_low = original_low * (1 - EXTENSION_FACTOR)
-        was_constrained = new_low > proposed_low
-        bounds_changes.append({
-            'param': param,
-            'bound': 'lower',
-            'original': original_low,
-            'updated': new_low,
-            'constrained': was_constrained,
-            'phys_limit': phys_min if was_constrained else None,
-            'experiments': bounds_info['lower']
-        })
-    
-    if bounds_info['upper']:
-        # Extend upper bound using multiplicative factor
-        # new_high = original_high × (1 + factor), e.g., 600 × 1.5 = 900
-        new_high = original_high * (1 + EXTENSION_FACTOR)
-        
-        # Apply physical constraint
-        new_high = min(phys_max, new_high)
-        
-        updated_bounds[param][1] = new_high
-        proposed_high = original_high * (1 + EXTENSION_FACTOR)
-        was_constrained = new_high < proposed_high
-        bounds_changes.append({
-            'param': param,
-            'bound': 'upper',
-            'original': original_high,
-            'updated': new_high,
-            'constrained': was_constrained,
-            'phys_limit': phys_max if was_constrained else None,
-            'experiments': bounds_info['upper']
-        })
-
-# Convert lists back to tuples
-updated_bounds = {k: tuple(v) for k, v in updated_bounds.items()}
-
-# Display changes
-if bounds_changes:
-    print(f"\n{'Parameter':<10} {'Bound':<8} {'Original':>12} {'Updated':>12} {'Change':>10} {'Note':<25}")
-    print("-" * 90)
-    for change in bounds_changes:
-        diff = change['updated'] - change['original']
-        note = ""
-        if change.get('constrained', False):
-            phys_limit = change.get('phys_limit', 0)
-            note = f"(constrained to {phys_limit})"
-        print(f"{change['param']:<10} {change['bound']:<8} {change['original']:>12.4f} {change['updated']:>12.4f} {diff:>+10.4f} {note:<25}")
-else:
-    print("\n✓ No bounds need to be updated!")
-
-# %%
-# Save updated bounds to file
-updated_bounds_file = Path('../data/410734/sacramento_bounds_custom.txt')
-
-print("\n" + "=" * 80)
-print("SAVING UPDATED BOUNDS FILE")
-print("=" * 80)
-
-with open(updated_bounds_file, 'w') as f:
-    f.write("# Sacramento Model Parameter Bounds - Auto-Adjusted\n")
-    f.write(f"# Generated by automated bounds analysis\n")
-    f.write(f"# Detection threshold: {THRESHOLD_PCT}% | Extension factor: {EXTENSION_FACTOR}\n")
-    f.write(f"# Extension method: lower × (1-{EXTENSION_FACTOR}) | upper × (1+{EXTENSION_FACTOR})\n")
+with open(custom_bounds_file, 'w') as f:
+    f.write("# Sacramento Model Parameter Bounds - Custom Adjusted\n")
+    f.write("# Manual adjustment: lower bounds of lzfpm, lzpk, uztwm, uzk × 0.5\n")
     f.write(f"# Date: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     f.write("#\n")
-    f.write("# Physical constraints applied (stores and rates must remain positive):\n")
-    f.write(f"#   - Store parameters (uztwm, uzfwm, lztwm, lzfpm, lzfsm, ssout): min >= {STORE_PHYSICAL_MIN}mm\n")
-    f.write("#   - Fraction parameters (pctim, adimp, pfree, rserv, side, sarva, uh*): range [0, 1]\n")
-    f.write(f"#   - Rate parameters (uzk, lzpk, lzsk): min >= {RATE_PHYSICAL_MIN}\n")
-    f.write(f"#   - Other positive parameters (zperc, rexp): min >= {OTHER_POSITIVE_MIN}\n")
+    f.write("# Format: parameter_name lower_bound upper_bound\n")
     f.write("#\n")
-    f.write("# Parameters adjusted:\n")
-    for change in bounds_changes:
-        constraint_note = f" (constrained to {change.get('phys_limit', '')})" if change.get('constrained', False) else ""
-        f.write(f"#   {change['param']} ({change['bound']}): {change['original']:.4f} -> {change['updated']:.4f}{constraint_note}\n")
-    f.write("#\n\n")
-    
-    for param, (low, high) in updated_bounds.items():
-        # Check if this param was changed
-        was_changed = param in params_hitting_bounds
-        comment = "  # ADJUSTED" if was_changed else ""
-        f.write(f"{param} = {low:.6f}, {high:.6f}{comment}\n")
+    for param in sorted(custom_bounds.keys()):
+        low, high = custom_bounds[param]
+        adjusted = "  # adjusted" if param in params_to_adjust else ""
+        f.write(f"{param} {low} {high}{adjusted}\n")
 
-print(f"\nSaved to: {updated_bounds_file}")
-print("\nFile contents:")
-print("-" * 70)
-with open(updated_bounds_file, 'r') as f:
-    print(f.read())
+print(f"\n✓ Custom bounds saved to: {custom_bounds_file}")
 
 # %% [markdown]
-# ### Selective Re-calibration with Updated Bounds
+# ### Re-calibrate with Custom Bounds
 #
-# Now we re-run ONLY the experiments that had parameters hitting their bounds.
-# This is more efficient than re-running all calibrations.
+# We'll re-run a selection of calibrations using the custom bounds to see if 
+# the extended lower limits allow the optimizer to find better solutions.
 
 # %%
-# Re-calibrate only affected experiments with updated bounds
+# Re-calibrate SDEB with custom bounds
+print("=" * 80)
+print("RE-CALIBRATION WITH CUSTOM BOUNDS")
+print("=" * 80)
+print("\nRunning calibration with SDEB objective and custom bounds...")
+
+custom_runner = CalibrationRunner(
+    model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
+    inputs=cal_inputs,
+    observed=cal_observed,
+    objective=sdeb_objective,
+    parameter_bounds=custom_bounds,
+    warmup_period=WARMUP_DAYS
+)
+
+custom_result = custom_runner.run_sceua_direct(
+    max_evals=MAX_EVALS_SAC,
+    seed=42,
+    verbose=True,
+    max_tolerant_iter=100
+)
+
+print("\n" + custom_result.summary())
+
+# Run simulation with custom-calibrated parameters
+custom_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+custom_model.set_parameters(custom_result.best_parameters)
+custom_model.reset()
+custom_sim_flow = custom_model.run(cal_data)['runoff'].values[WARMUP_DAYS:]
+
+print(f"\n✓ Calibration complete!")
+print(f"  Best SDEB: {-custom_result.best_objective:.4f}")
+
+# %%
+# Save the custom calibration report
+custom_report = custom_runner.create_report(custom_result, catchment_info={
+    'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
+})
+custom_report.save('../test_data/reports/410734_sdeb_custom')
+print(f"Calibration saved to: test_data/reports/410734_sdeb_custom.pkl")
+
+# %%
+# Compare default bounds vs custom bounds results (SDEB)
 print("\n" + "=" * 80)
-print("SELECTIVE RE-CALIBRATION WITH UPDATED BOUNDS")
+print("COMPARISON: DEFAULT BOUNDS vs CUSTOM BOUNDS (SDEB)")
 print("=" * 80)
 
-if not experiments_to_recalibrate:
-    print("\n✓ No re-calibration needed - all parameters were within safe bounds!")
-    recalibrated_results = {}
-else:
-    print(f"\nRe-running {len(experiments_to_recalibrate)} experiment(s) with extended bounds...")
-    print(f"Experiments: {', '.join(sorted(experiments_to_recalibrate))}")
+# Get metrics for both calibrations
+default_metrics = comprehensive_evaluation(obs_flow, sdeb_sim_flow)
+custom_metrics = comprehensive_evaluation(obs_flow, custom_sim_flow)
+
+print("\n" + "-" * 60)
+print(f"{'Metric':<20} {'Default Bounds':>18} {'Custom Bounds':>18}")
+print("-" * 60)
+
+for metric in default_metrics.keys():
+    default_val = default_metrics[metric]
+    custom_val = custom_metrics[metric]
+    print(f"{metric:<20} {default_val:>18.4f} {custom_val:>18.4f}")
+
+print("-" * 60)
 
 # %%
-# Run selective re-calibration for affected experiments
-recalibrated_results = {}
-recalibrated_simulations = {}
+# Compare calibrated parameters: default vs custom bounds (SDEB)
+print("\n" + "=" * 80)
+print("CALIBRATED PARAMETERS COMPARISON (SDEB)")
+print("=" * 80)
 
-if experiments_to_recalibrate:
-    for exp_name in sorted(experiments_to_recalibrate):
-        print(f"\n{'=' * 70}")
-        print(f"RE-CALIBRATION: {exp_name} with Extended Bounds")
-        print(f"{'=' * 70}")
-        
-        # Get the objective function for this experiment
-        objective = all_objectives[exp_name]
-        
-        # Create runner with updated bounds
-        runner = CalibrationRunner(
-            model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
-            inputs=cal_inputs,
-            observed=cal_observed,
-            objective=objective,
-            parameter_bounds=updated_bounds,
-            warmup_period=WARMUP_DAYS
-        )
-        
-        # Run calibration
-        cal_result = runner.run_sceua_direct(
-            max_evals=MAX_EVALS_SAC,
-            seed=42,
-            verbose=True,
-            max_tolerant_iter=50,
-            tolerance=1e-4
-        )
-        print("\n" + cal_result.summary())
-        
-        # Store result
-        recalibrated_results[exp_name] = cal_result
-        
-        # Save calibration report
-        report = runner.create_report(cal_result, catchment_info={
-            'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
-        })
-        save_name = f"410734_{exp_name.lower().replace('_', '')}_extended"
-        report.save(f'../test_data/reports/{save_name}')
-        print(f"Calibration saved to: test_data/reports/{save_name}.pkl")
-        
-        # Run simulation with new parameters
-        model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-        model.set_parameters(cal_result.best_parameters)
-        model.reset()
-        sim = model.run(cal_data)['runoff'].values[WARMUP_DAYS:]
-        recalibrated_simulations[exp_name] = sim
+print(f"\n{'Parameter':<10} {'Default Bounds':>18} {'Custom Bounds':>18} {'Difference':>15}")
+print("-" * 65)
+
+for param in sorted(sdeb_result.best_parameters.keys()):
+    default_val = sdeb_result.best_parameters[param]
+    custom_val = custom_result.best_parameters[param]
+    diff = custom_val - default_val
+    diff_str = f"{diff:+.4f}" if abs(diff) > 0.0001 else "~0"
+    print(f"{param:<10} {default_val:>18.4f} {custom_val:>18.4f} {diff_str:>15}")
 
 # %%
-# Analyze parameter positions AFTER re-calibration
-if recalibrated_results:
-    print("\n" + "=" * 80)
-    print("POST-RECALIBRATION PARAMETER ANALYSIS")
-    print("=" * 80)
-    
-    # Check if parameters are still hitting bounds after recalibration
-    still_hitting_bounds = {}
-    
-    for exp_name, cal_result in recalibrated_results.items():
-        for param_name, value in cal_result.best_parameters.items():
-            position = calculate_position_pct(value, param_name, updated_bounds)
-            status = get_bound_status(position)
-            
-            if status:
-                if exp_name not in still_hitting_bounds:
-                    still_hitting_bounds[exp_name] = []
-                still_hitting_bounds[exp_name].append((param_name, status, position))
-    
-    if still_hitting_bounds:
-        print("\n⚠ Some parameters are STILL hitting bounds after re-calibration:")
-        for exp_name, params in still_hitting_bounds.items():
-            print(f"\n  {exp_name}:")
-            for param, status, pos in params:
-                print(f"    • {param}: {status} bound ({pos:.1f}%)")
-        print("\n  Consider further extending bounds or investigating model structure.")
-    else:
-        print("\n✓ All parameters are now within safe bounds after re-calibration!")
-    
-    # Create comparison table: Before vs After
-    print("\n" + "=" * 80)
-    print("PARAMETER POSITION COMPARISON: BEFORE vs AFTER RE-CALIBRATION")
-    print("=" * 80)
-    
-    for exp_name in sorted(recalibrated_results.keys()):
-        print(f"\n{exp_name}:")
-        print(f"  {'Parameter':<10} {'Before':>12} {'After':>12} {'Improved?':>12}")
-        print(f"  {'-' * 48}")
-        
-        original_result = all_calibrations[exp_name]
-        new_result = recalibrated_results[exp_name]
-        
-        for param in original_result.best_parameters.keys():
-            before_pos = bound_analysis[exp_name][param]['position']
-            after_val = new_result.best_parameters[param]
-            after_pos = calculate_position_pct(after_val, param, updated_bounds)
-            
-            # Check if it was hitting bounds before
-            was_limited = bound_analysis[exp_name][param]['status'] is not None
-            now_safe = 5 < after_pos < 95
-            
-            improved = ""
-            if was_limited and now_safe:
-                improved = "✓ Fixed"
-            elif was_limited and not now_safe:
-                improved = "⚠ Still limited"
-            
-            print(f"  {param:<10} {before_pos:>11.1f}% {after_pos:>11.1f}% {improved:>12}")
+# Visual comparison: Default vs Custom bounds hydrographs (SDEB)
+fig = make_subplots(
+    rows=2, cols=2,
+    subplot_titles=['Hydrograph (Linear)', 'Hydrograph (Log)', 
+                    'Flow Duration Curve', 'Scatter Plot'],
+    specs=[[{}, {}], [{}, {}]]
+)
 
-# %%
-# Visual comparison of parameter positions with UPDATED bounds
-if recalibrated_results:
-    param_names_list = list(param_bounds.keys())
-    n_experiments = len(recalibrated_results)
-    
-    # Calculate normalized positions for updated bounds
-    def normalize_param_updated(value, param_name):
-        low, high = updated_bounds[param_name]
-        return (value - low) / (high - low) * 100
-    
-    # Create figure
-    fig = make_subplots(
-        rows=1, cols=n_experiments,
-        subplot_titles=[f"{exp} (Extended)" for exp in sorted(recalibrated_results.keys())],
-        horizontal_spacing=0.02
-    )
-    
-    color_map = {
-        'NSE': colors['nse'], 'LogNSE': colors['log'], 'InvNSE': colors['inv'],
-        'SqrtNSE': colors['sqrt'], 'SDEB': colors['sdeb'], 'KGE': colors['kge'],
-        'KGE_inv': colors['kge_inv'], 'KGE_sqrt': colors['kge_sqrt'], 
-        'KGE_log': colors['kge_log'], 'KGE_np': colors['kge_np'],
-        'KGE_np_inv': colors['kge_np_inv'], 'KGE_np_sqrt': colors['kge_np_sqrt'],
-        'KGE_np_log': colors['kge_np_log']
-    }
-    
-    for col, exp_name in enumerate(sorted(recalibrated_results.keys()), 1):
-        result = recalibrated_results[exp_name]
-        color = color_map.get(exp_name, '#888888')
-        
-        actual_values = [result.best_parameters[p] for p in param_names_list]
-        norm_values = [normalize_param_updated(v, p) for v, p in zip(actual_values, param_names_list)]
-        
-        def format_val(v):
-            if abs(v) >= 100: return f'{v:.1f}'
-            elif abs(v) >= 10: return f'{v:.2f}'
-            elif abs(v) >= 1: return f'{v:.3f}'
-            else: return f'{v:.4f}'
-        
-        bar_text = [format_val(v) for v in actual_values]
-        
-        fig.add_trace(
-            go.Bar(
-                y=param_names_list,
-                x=norm_values,
-                orientation='h',
-                marker_color=color,
-                text=bar_text,
-                textposition='inside',
-                textfont=dict(color='white', size=9),
-                showlegend=False
-            ),
-            row=1, col=col
-        )
-        
-        fig.add_vline(x=50, line_dash="dash", line_color="gray", opacity=0.5, row=1, col=col)
-        # Add warning zones
-        fig.add_vrect(x0=0, x1=5, fillcolor="red", opacity=0.1, line_width=0, row=1, col=col)
-        fig.add_vrect(x0=95, x1=100, fillcolor="red", opacity=0.1, line_width=0, row=1, col=col)
-    
-    fig.update_xaxes(range=[0, 100], tickvals=[0, 50, 100], ticktext=['0%', '50%', '100%'])
-    fig.update_yaxes(categoryorder='array', categoryarray=param_names_list[::-1])
-    
-    for col in range(2, n_experiments + 1):
-        fig.update_yaxes(showticklabels=False, row=1, col=col)
-    
-    fig.update_layout(
-        title="<b>Re-calibrated Parameters with Extended Bounds</b><br>" +
-              "<sup>Red zones = within 5% of bounds (potential limitation) | Bar text = actual value</sup>",
-        height=650,
-        width=min(1600, 250 * n_experiments + 200),
-        bargap=0.3
-    )
-    
-    fig.show()
-    
-    print("\nInterpretation:")
-    print("  - Red shaded zones (0-5% and 95-100%) indicate potential bound limitations")
-    print("  - Parameters should ideally be away from the red zones")
-    print("  - If parameters still hit bounds, further investigation may be needed")
+# Hydrograph - Linear
+fig.add_trace(go.Scatter(x=comparison.index, y=obs_flow, name='Observed', 
+                         line=dict(color='black', width=1)), row=1, col=1)
+fig.add_trace(go.Scatter(x=comparison.index, y=sdeb_sim_flow, name='Default Bounds', 
+                         line=dict(color='blue', width=1, dash='dash')), row=1, col=1)
+fig.add_trace(go.Scatter(x=comparison.index, y=custom_sim_flow, name='Custom Bounds', 
+                         line=dict(color='red', width=1)), row=1, col=1)
+
+# Hydrograph - Log
+fig.add_trace(go.Scatter(x=comparison.index, y=obs_flow, name='Observed', 
+                         line=dict(color='black', width=1), showlegend=False), row=1, col=2)
+fig.add_trace(go.Scatter(x=comparison.index, y=sdeb_sim_flow, name='Default Bounds', 
+                         line=dict(color='blue', width=1, dash='dash'), showlegend=False), row=1, col=2)
+fig.add_trace(go.Scatter(x=comparison.index, y=custom_sim_flow, name='Custom Bounds', 
+                         line=dict(color='red', width=1), showlegend=False), row=1, col=2)
+fig.update_yaxes(type='log', row=1, col=2)
+
+# FDC
+obs_sorted = np.sort(obs_flow)[::-1]
+sdeb_sorted = np.sort(sdeb_sim_flow)[::-1]
+custom_sorted = np.sort(custom_sim_flow)[::-1]
+exceedance = np.arange(1, len(obs_sorted) + 1) / len(obs_sorted) * 100
+
+fig.add_trace(go.Scatter(x=exceedance, y=obs_sorted, name='Observed', 
+                         line=dict(color='black', width=1), showlegend=False), row=2, col=1)
+fig.add_trace(go.Scatter(x=exceedance, y=sdeb_sorted, name='Default Bounds', 
+                         line=dict(color='blue', width=1, dash='dash'), showlegend=False), row=2, col=1)
+fig.add_trace(go.Scatter(x=exceedance, y=custom_sorted, name='Custom Bounds', 
+                         line=dict(color='red', width=1), showlegend=False), row=2, col=1)
+fig.update_yaxes(type='log', row=2, col=1)
+fig.update_xaxes(title_text='Exceedance %', row=2, col=1)
+
+# Scatter
+fig.add_trace(go.Scatter(x=obs_flow, y=sdeb_sim_flow, mode='markers', name='Default Bounds',
+                         marker=dict(color='blue', size=3, opacity=0.5), showlegend=False), row=2, col=2)
+fig.add_trace(go.Scatter(x=obs_flow, y=custom_sim_flow, mode='markers', name='Custom Bounds',
+                         marker=dict(color='red', size=3, opacity=0.5), showlegend=False), row=2, col=2)
+max_flow = max(obs_flow.max(), sdeb_sim_flow.max(), custom_sim_flow.max())
+fig.add_trace(go.Scatter(x=[0, max_flow], y=[0, max_flow], mode='lines', 
+                         line=dict(color='gray', dash='dash'), showlegend=False), row=2, col=2)
+fig.update_xaxes(title_text='Observed', row=2, col=2)
+fig.update_yaxes(title_text='Simulated', row=2, col=2)
+
+fig.update_layout(
+    title='<b>Comparison: Default Bounds vs Custom Bounds (SDEB Calibration)</b>',
+    height=700,
+    width=1200,
+    legend=dict(orientation='h', y=1.02, x=0.5, xanchor='center')
+)
+fig.show()
 
 # %% [markdown]
-# ### Comparing Default vs Extended Bounds Results
-
-# %%
-# Comprehensive evaluation: Default bounds vs Extended bounds (only for recalibrated experiments)
-if recalibrated_results:
-    print("=" * 100)
-    print("COMPREHENSIVE COMPARISON: DEFAULT BOUNDS vs EXTENDED BOUNDS")
-    print("=" * 100)
-    
-    # Map experiment names to their original simulations
-    original_simulations = {
-        'NSE': sim_flow, 'LogNSE': log_sim_flow, 'InvNSE': inv_sim_flow,
-        'SqrtNSE': sqrt_sim_flow, 'SDEB': sdeb_sim_flow, 'KGE': kge_sim_flow,
-        'KGE_inv': kge_inv_sim_flow, 'KGE_sqrt': kge_sqrt_sim_flow,
-        'KGE_log': kge_log_sim_flow, 'KGE_np': kge_np_sim_flow,
-        'KGE_np_inv': kge_np_inv_sim_flow, 'KGE_np_sqrt': kge_np_sqrt_sim_flow,
-        'KGE_np_log': kge_np_log_sim_flow
-    }
-    
-    # Build comparison dictionary
-    bounds_comparison = {}
-    for exp_name in sorted(recalibrated_results.keys()):
-        bounds_comparison[f'{exp_name} (Default)'] = comprehensive_evaluation(obs_flow, original_simulations[exp_name])
-        bounds_comparison[f'{exp_name} (Extended)'] = comprehensive_evaluation(obs_flow, recalibrated_simulations[exp_name])
-    
-    # Create DataFrame with all metrics
-    bounds_df = pd.DataFrame(bounds_comparison).T
-    
-    # Display comprehensive results
-    print("\n" + "=" * 100)
-    print("FULL METRICS COMPARISON")
-    print("=" * 100)
-    print(bounds_df.round(4).to_string())
-    
-    # Calculate improvements (Extended - Default) for each recalibrated experiment
-    print("\n" + "=" * 100)
-    print("IMPROVEMENT FROM EXTENDED BOUNDS (Extended - Default)")
-    print("=" * 100)
-    print("Positive values = improvement for efficiency metrics")
-    print("-" * 100)
-    
-    improvements = {}
-    for exp_name in sorted(recalibrated_results.keys()):
-        default_metrics = bounds_comparison[f'{exp_name} (Default)']
-        extended_metrics = bounds_comparison[f'{exp_name} (Extended)']
-        improvements[exp_name] = {k: extended_metrics[k] - default_metrics[k] for k in default_metrics.keys()}
-    
-    improve_df = pd.DataFrame(improvements).T
-    print(improve_df.round(4).to_string())
-    
-    # Summary: Which calibrations improved most with extended bounds?
-    print("\n" + "=" * 100)
-    print("SUMMARY: IMPACT OF EXTENDED BOUNDS")
-    print("=" * 100)
-    
-    # Key metrics to highlight
-    key_metrics = ['NSE', 'KGE', 'KGE_np', 'NSE (log Q)', 'NSE (1/Q)', 'NSE (√Q)', 'PBIAS (%)']
-    available_key = [m for m in key_metrics if m in improve_df.columns]
-    
-    print(f"\n{'Experiment':<15} | ", end="")
-    for metric in available_key:
-        print(f"{metric:>12} | ", end="")
-    print()
-    print("-" * (18 + len(available_key) * 16))
-    
-    for exp in improve_df.index:
-        print(f"{exp:<15} | ", end="")
-        for metric in available_key:
-            val = improve_df.loc[exp, metric]
-            sign = "+" if val > 0 else ""
-            print(f"{sign}{val:>11.4f} | ", end="")
-        print()
-    
-    print("\n" + "-" * 100)
-    print("Interpretation:")
-    print("  - NSE/KGE metrics: Positive = better (higher efficiency)")
-    print("  - If improvements are small, the original bounds may have been adequate")
-    print("  - Large improvements suggest the parameter was previously constrained")
-else:
-    print("\n✓ No re-calibration was performed - all experiments had parameters within safe bounds!")
-
-# %%
-# Visual comparison: Default vs Extended bounds calibration
-# Reorganized: rows = experiments, columns = Linear / Log / FDC
-if recalibrated_results:
-    n_exp = len(recalibrated_results)
-    exp_names = sorted(recalibrated_results.keys())
-    
-    # Create subplot titles: 3 columns (Linear, Log, FDC) × n_exp rows
-    subplot_titles = []
-    for exp in exp_names:
-        subplot_titles.extend([f'{exp} - Linear', f'{exp} - Log Scale', f'{exp} - FDC'])
-    
-    fig = make_subplots(
-        rows=n_exp, cols=3,
-        subplot_titles=subplot_titles,
-        vertical_spacing=0.05,
-        horizontal_spacing=0.06,
-        column_widths=[0.4, 0.35, 0.25]
-    )
-    
-    # Colors
-    color_default = '#1f77b4'  # Blue
-    color_extended = '#ff7f0e'   # Orange
-    
-    # Prepare FDC data
-    obs_fdc = np.sort(obs_flow)[::-1]
-    exceedance_fdc = np.arange(1, len(obs_fdc) + 1) / len(obs_fdc) * 100
-    
-    for row, exp_name in enumerate(exp_names, 1):
-        show_legend = (row == 1)  # Only show legend for first row
-        sim_default = original_simulations[exp_name]
-        sim_extended = recalibrated_simulations[exp_name]
-        fdc_default = np.sort(sim_default)[::-1]
-        fdc_extended = np.sort(sim_extended)[::-1]
-        
-        # Column 1: Linear scale hydrograph
-        fig.add_trace(go.Scatter(x=comparison.index, y=obs_flow, 
-                      name='Observed' if show_legend else None, showlegend=show_legend,
-                      line=dict(color='black', width=1.5)), row=row, col=1)
-        fig.add_trace(go.Scatter(x=comparison.index, y=sim_default, 
-                      name='Default bounds' if show_legend else None, showlegend=show_legend,
-                      line=dict(color=color_default, width=1)), row=row, col=1)
-        fig.add_trace(go.Scatter(x=comparison.index, y=sim_extended, 
-                      name='Extended bounds' if show_legend else None, showlegend=show_legend,
-                      line=dict(color=color_extended, width=1)), row=row, col=1)
-        
-        # Column 2: Log scale hydrograph
-        fig.add_trace(go.Scatter(x=comparison.index, y=obs_flow, showlegend=False,
-                      line=dict(color='black', width=1.5)), row=row, col=2)
-        fig.add_trace(go.Scatter(x=comparison.index, y=sim_default, showlegend=False,
-                      line=dict(color=color_default, width=1)), row=row, col=2)
-        fig.add_trace(go.Scatter(x=comparison.index, y=sim_extended, showlegend=False,
-                      line=dict(color=color_extended, width=1)), row=row, col=2)
-        
-        # Column 3: FDC
-        fig.add_trace(go.Scatter(x=exceedance_fdc, y=obs_fdc, showlegend=False,
-                      line=dict(color='black', width=2)), row=row, col=3)
-        fig.add_trace(go.Scatter(x=exceedance_fdc, y=fdc_default, showlegend=False,
-                      line=dict(color=color_default, width=1.5)), row=row, col=3)
-        fig.add_trace(go.Scatter(x=exceedance_fdc, y=fdc_extended, showlegend=False,
-                      line=dict(color=color_extended, width=1.5)), row=row, col=3)
-        
-        # Update axes for this row
-        fig.update_yaxes(title_text="Flow (ML/day)", row=row, col=1)
-        fig.update_yaxes(title_text="Flow (ML/day)", type="log", row=row, col=2)
-        fig.update_yaxes(title_text="Flow (ML/day)", type="log", row=row, col=3)
-        fig.update_xaxes(title_text="Exceedance (%)", row=row, col=3)
-    
-    fig.update_layout(
-        title="<b>Impact of Extended Parameter Bounds on Calibration Results</b><br>" +
-              "<sup>Black=Observed | Blue=Default bounds | Orange=Extended bounds</sup>",
-        height=300 * n_exp + 100,
-        width=1800,
-        legend=dict(orientation='h', y=1.01, x=0.5, xanchor='center')
-    )
-    fig.show()
-
-# %% [markdown]
-# ### Key Takeaways on Parameter Bounds Analysis
+# ### Key Takeaways on Parameter Bounds Adjustment
 #
-# - **Automated detection**: The analysis automatically finds parameters within 5% of their bounds
-# - **Selective re-calibration**: Only experiments with bound-limited parameters are re-run
-# - **10% extension**: Bounds are extended by 10% of their original range
-# - **Validation**: Compare before/after metrics to ensure improvements are genuine
-# - **Iterative process**: If parameters still hit bounds, consider further investigation
+# - **Manual adjustment**: Based on analysis, we extended lower bounds of `lzfpm`, `lzpk`, `uztwm`, `uzk` by ×0.5
+# - **Custom bounds file**: Saved to `data/410734/sacramento_bounds_custom.txt` for future use
+# - **Re-calibration**: NSE calibration re-run with custom bounds to test sensitivity
+# - **Comparison**: Metrics and hydrographs compared to evaluate impact of bound changes
+
 
 # %% [markdown]
 # ---
-# ## Step 10: Working with Saved Calibration Reports
+# ## Summary
 #
-# All calibrations in this notebook have been automatically saved as `CalibrationReport` objects.
-# These reports contain everything needed for visualization, analysis, and re-simulation.
+# This notebook demonstrated:
 #
-# ### Summary of Saved Calibrations
+# 1. **Loading data** and setting up the Sacramento model
+# 2. **Configuring calibration** with the CalibrationRunner
+# 3. **Running multiple calibrations** with different objective functions:
+#    - NSE variants (standard, log, sqrt, inverse)
+#    - KGE variants (standard, log, sqrt, inverse, non-parametric)
+#    - Composite objectives (SDEB)
+# 4. **Comparing results** to understand trade-offs between metrics
+# 5. **Manual parameter bounds adjustment** based on observed limitations
 #
-# **NSE-based Objectives (Default Bounds):**
+# ### Key Recommendations
 #
-# | Report File | Objective | Description |
-# |-------------|-----------|-------------|
-# | `410734_nse.pkl` | NSE | Standard NSE on flows |
-# | `410734_lognse.pkl` | LogNSE | Log-transformed, balanced |
-# | `410734_invnse.pkl` | InvNSE | Inverse-transformed, low flows |
-# | `410734_sqrtnse.pkl` | SqrtNSE | Sqrt-transformed, moderate |
-# | `410734_sdeb.pkl` | SDEB | FDC + timing |
+# | Flow Regime | Recommended Objective |
+# |-------------|----------------------|
+# | **Balanced performance** | `KGE(√Q)` or `SqrtNSE` |
+# | **High flows / floods** | Standard `NSE` or `KGE` |
+# | **Low flows / drought** | `LogNSE` or `KGE(log Q)` |
+# | **Very low flows** | `InvNSE` or `KGE(1/Q)` |
+# | **Flow duration curve** | `SDEB` |
 #
-# **KGE-based Objectives (Default Bounds):**
-#
-# | Report File | Objective | Description |
-# |-------------|-----------|-------------|
-# | `410734_kge.pkl` | KGE | Standard KGE (2012) |
-# | `410734_kge_inv.pkl` | KGE(1/Q) | Inverse-transformed, low flows |
-# | `410734_kge_sqrt.pkl` | KGE(√Q) | Sqrt-transformed, balanced (recommended) |
-# | `410734_kge_log.pkl` | KGE(log) | Log-transformed (use with caution) |
-# | `410734_kge_np.pkl` | KGE_np | Non-parametric, robust |
-#
-# **Extended Bounds Calibrations (from Step 9):**
-#
-# Reports are dynamically generated based on which experiments had bound-limited parameters.
-# The naming convention is `410734_{objective}_extended.pkl`.
-#
-# ### Loading Saved Reports
-#
-# You can load any saved report and generate visualizations:
-
-# %%
-# List all saved reports
-from pathlib import Path
-from pyrrm.calibration import CalibrationReport
-
-report_dir = Path('../test_data/reports')
-report_files = sorted(report_dir.glob('410734_*.pkl'))
-
-print("=" * 70)
-print("SAVED CALIBRATION REPORTS")
-print("=" * 70)
-print(f"\nFound {len(report_files)} saved reports in {report_dir}:\n")
-
-for report_file in report_files:
-    try:
-        rpt = CalibrationReport.load(str(report_file))
-        metrics = rpt.calculate_metrics()
-        print(f"  {report_file.name:30s} | {rpt.result.objective_name:12s} | NSE: {metrics['NSE']:.4f}")
-    except Exception as e:
-        print(f"  {report_file.name:30s} | Error: {e}")
-
-# %%
-# Load a specific report for detailed analysis
-# Using the SDEB report as an example
-loaded_report = CalibrationReport.load('../test_data/reports/410734_sdeb.pkl')
-print(f"Loaded report: {loaded_report}")
-
-# Check that we can still calculate metrics
-metrics = loaded_report.calculate_metrics()
-print(f"\nMetrics from loaded report:")
-for name, value in metrics.items():
-    print(f"  {name}: {value:.4f}")
-
-# %% [markdown]
-# ### Generating Report Cards
-#
-# The CalibrationReport provides methods for generating comprehensive visualizations:
-
-# %%
-# Generate a matplotlib report card (comprehensive figure)
-fig = loaded_report.plot_report_card(figsize=(18, 14))
-fig.savefig('../test_data/reports/410734_sdeb_report_card.png', dpi=150, bbox_inches='tight')
-print("Report card saved to: ../test_data/reports/410734_sdeb_report_card.png")
-plt.show()
-
-# %%
-# Generate an interactive Plotly report card (HTML)
-fig_plotly = loaded_report.plot_report_card_interactive(height=1000)
-fig_plotly.write_html('../test_data/reports/410734_sdeb_report_card.html')
-print("Interactive report saved to: ../test_data/reports/410734_sdeb_report_card.html")
-fig_plotly.show()
-
-# %% [markdown]
-# ### Individual Plots
-#
-# You can also generate individual plots from the report:
-
-# %%
-# Individual plots can be generated with either Matplotlib or Plotly backend
-# Use backend='matplotlib' (default) or backend='plotly'
-
-# Matplotlib versions (static, good for publications)
-print("=== Matplotlib Plots ===")
-fig_hydro = loaded_report.plot_hydrograph(log_scale=False, backend='matplotlib')
-plt.show()
-
-fig_fdc = loaded_report.plot_fdc(log_scale=True, backend='matplotlib')
-plt.show()
-
-fig_scatter = loaded_report.plot_scatter(backend='matplotlib')
-plt.show()
-
-fig_bounds = loaded_report.plot_parameter_bounds(backend='matplotlib')
-plt.show()
-
-# %%
-# Plotly versions (interactive, good for exploration)
-print("=== Plotly Plots (Interactive) ===")
-
-fig_hydro_plotly = loaded_report.plot_hydrograph(log_scale=False, backend='plotly')
-fig_hydro_plotly.show()
-
-fig_fdc_plotly = loaded_report.plot_fdc(log_scale=True, backend='plotly')
-fig_fdc_plotly.show()
-
-fig_scatter_plotly = loaded_report.plot_scatter(backend='plotly')
-fig_scatter_plotly.show()
-
-fig_bounds_plotly = loaded_report.plot_parameter_bounds(backend='plotly')
-fig_bounds_plotly.show()
-
-# %% [markdown]
-# ### Re-running Simulations
-#
-# If you included the input data (default), you can re-run simulations with modified parameters:
-
-# %%
-# Check if re-simulation is possible
-print(f"Can re-run simulation: {loaded_report.can_rerun()}")
-
-# Re-run with best parameters (should match stored simulation)
-sim_rerun = loaded_report.rerun_simulation()
-print(f"Re-run simulation length: {len(sim_rerun)}")
-
-# Verify it matches the stored simulation
-if np.allclose(sim_rerun, loaded_report.simulated, rtol=1e-6):
-    print("Re-run matches stored simulation!")
-else:
-    print("Note: Minor differences due to floating-point precision")
-
-# %%
-# You can also try modified parameters
-modified_params = loaded_report.result.best_parameters.copy()
-modified_params['uztwm'] = modified_params['uztwm'] * 1.5  # Increase upper zone storage
-
-sim_modified = loaded_report.rerun_simulation(modified_params)
-print(f"Modified simulation length: {len(sim_modified)}")
-
-# Compare metrics
-from pyrrm.calibration.objective_functions import calculate_metrics
-original_metrics = calculate_metrics(loaded_report.simulated, loaded_report.observed)
-modified_metrics = calculate_metrics(sim_modified, loaded_report.observed)
-
-print(f"\nOriginal NSE: {original_metrics['NSE']:.4f}")
-print(f"Modified NSE: {modified_metrics['NSE']:.4f}")
+# All calibration reports are saved to `test_data/reports/` for future analysis.
 
 # %% [markdown]
 # ---
 # ## Next Steps
 #
+# ### Working with Saved Reports
+#
+# All calibrations have been saved as `CalibrationReport` objects. See **Notebook 08: Calibration Reports**
+# for detailed instructions on:
+# - Loading and inspecting saved reports
+# - Generating comprehensive report cards
+# - Comparing multiple calibrations
+# - Exporting data for external analysis
+#
 # ### Improve Your Calibration
 #
 # - **More evaluations**: Increase `max_evals` for better convergence
 # - **Longer period**: Use more years of data for robust parameters
-# - **Different objective**: Try KGE or composite objectives (see Notebook 04)
+# - **Different objective**: Try composite objectives (see Notebook 04)
 # - **Different algorithm**: Try DREAM for uncertainty estimation (see Notebook 05)
 #
 # ### Validate Your Model
@@ -4137,6 +3366,7 @@ print(f"Modified NSE: {modified_metrics['NSE']:.4f}")
 # | **04_objective_functions** | Different metrics and how they affect calibration |
 # | **05_algorithm_comparison** | Compare DREAM, PyDREAM, SCE-UA Direct, and SciPy DE |
 # | **06_calibration_monitor** | Monitor long-running calibrations in real-time |
+# | **08_calibration_reports** | Working with saved calibration reports |
 #
 # ### Troubleshooting
 #
@@ -4157,3 +3387,4 @@ print("QUICKSTART COMPLETE!")
 print("=" * 70)
 print("\nYou've successfully calibrated your first rainfall-runoff model.")
 print("Explore the other notebooks to deepen your understanding.")
+print("\nNext: See Notebook 08 for working with saved calibration reports.")
