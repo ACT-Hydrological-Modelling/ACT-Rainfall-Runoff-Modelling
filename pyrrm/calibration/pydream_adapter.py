@@ -18,6 +18,7 @@ Key features of PyDREAM vs SpotPy DREAM:
 """
 
 from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING, Callable
+import sys
 import numpy as np
 import pandas as pd
 import warnings
@@ -466,7 +467,7 @@ def run_pydream(
     multitry: int = 5,
     snooker: float = 0.1,
     nCR: int = 3,
-    adapt_crossover: bool = True,
+    adapt_crossover: bool = False,  # Disabled by default due to PyDREAM bug
     adapt_gamma: bool = False,
     DEpairs: int = 1,
     gamma_levels: int = 1,
@@ -485,6 +486,12 @@ def run_pydream(
     nverbose: int = 100,
     hardboundaries: bool = True,
     convergence_check: bool = True,
+    convergence_threshold: float = 1.05,
+    # Batch mode parameters (optional - enables early stopping)
+    batch_size: Optional[int] = None,
+    min_iterations: int = 300,
+    patience: int = 2,
+    post_convergence_iterations: int = 1000,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -540,7 +547,9 @@ def run_pydream(
                   When parallel=True, these are evaluated in parallel.
         snooker: Probability of snooker update (0 to disable)
         nCR: Number of crossover values
-        adapt_crossover: Whether to adapt crossover probabilities
+        adapt_crossover: Whether to adapt crossover probabilities.
+                        WARNING: Disabled by default due to PyDREAM bug in
+                        estimate_crossover_probabilities().
         adapt_gamma: Whether to adapt gamma (step size) levels
         DEpairs: Number of chain pairs for differential evolution
         gamma_levels: Number of gamma levels
@@ -567,6 +576,16 @@ def run_pydream(
                   Use `dbname` for reliable progress tracking.
         hardboundaries: Whether to enforce hard parameter boundaries
         convergence_check: Whether to check Gelman-Rubin convergence
+        convergence_threshold: Gelman-Rubin threshold (default: 1.2 in normal mode, 1.05 recommended for batch mode)
+        batch_size: If set (>0), enables batch mode with early stopping.
+                   Runs iterations in batches of this size, checking GR convergence
+                   after each batch and stopping early when converged.
+                   If None or 0, runs all iterations without early stopping (normal mode).
+        min_iterations: Minimum iterations before checking convergence (batch mode only)
+        patience: Number of consecutive converged batches required before stopping (batch mode only)
+        post_convergence_iterations: Additional iterations to run after convergence
+                                    is detected, for robust posterior sampling (batch mode only).
+                                    Default: 1000 for sufficient posterior samples.
         **kwargs: Additional arguments passed to PyDREAM
         
     Returns:
@@ -629,45 +648,231 @@ def run_pydream(
         )
         nchains = min_chains
     
+    # Check if batch mode is enabled
+    use_batch_mode = batch_size is not None and batch_size > 0
+    
     # Run PyDREAM
     if verbose:
-        print(f"Running PyDREAM (MT-DREAM(ZS)) with:")
-        print(f"  - {niterations} iterations")
+        mode_str = "BATCH MODE (with early stopping)" if use_batch_mode else "NORMAL MODE"
+        print(f"Running PyDREAM (MT-DREAM(ZS)) - {mode_str}")
+        print(f"  - {niterations} iterations per chain" + (f" (max)" if use_batch_mode else ""))
         print(f"  - {nchains} chains (running in parallel)")
         print(f"  - {multitry} multi-try samples" + (" (parallel)" if parallel else ""))
         print(f"  - {snooker:.1%} snooker probability")
+        print(f"  - {DEpairs} DE pairs")
         print(f"  - {len(param_names)} parameters")
         if parallel:
             print(f"  - Multi-try parallelization: ENABLED")
+        if use_batch_mode:
+            print(f"  - Batch size: {batch_size} iterations")
+            print(f"  - Min iterations: {min_iterations}")
+            print(f"  - Convergence: GR < {convergence_threshold} for {patience} consecutive batches")
+            if post_convergence_iterations > 0:
+                print(f"  - Post-convergence: {post_convergence_iterations} additional iterations")
+        elif convergence_check:
+            print(f"  - Convergence check: ENABLED (GR threshold: {convergence_threshold})")
+        sys.stdout.flush()
     
-    try:
-        sampled_params, log_ps = pydream_run_dream(
-            parameters=pydream_params,
-            likelihood=likelihood_func,
-            niterations=niterations,
-            nchains=nchains,
-            multitry=multitry,
-            snooker=snooker,
-            nCR=nCR,
-            adapt_crossover=adapt_crossover,
-            adapt_gamma=adapt_gamma,
-            DEpairs=DEpairs,
-            gamma_levels=gamma_levels,
-            p_gamma_unity=p_gamma_unity,
-            history_thin=history_thin,
-            start=start,
-            start_random=start_random,
-            save_history=save_history,
-            model_name=model_name,
-            parallel=parallel,
-            mp_context=mp_context,
-            verbose=verbose,
-            nverbose=nverbose,
-            hardboundaries=hardboundaries,
-            **kwargs
-        )
-    except Exception as e:
-        raise RuntimeError(f"PyDREAM sampling failed: {e}")
+    # =========================================================================
+    # BATCH MODE: Run in batches with convergence-based early stopping
+    # =========================================================================
+    if use_batch_mode:
+        # Track convergence
+        convergence_history = []
+        total_iterations = 0
+        batches_converged = 0
+        early_stopped = False
+        convergence_iteration = None
+        post_convergence_remaining = 0
+        in_post_convergence_phase = False
+        
+        # Combined results storage
+        all_sampled_params = None
+        all_log_ps = None
+        current_positions = start  # Starting positions (None = random)
+        
+        batch_num = 0
+        while total_iterations < niterations:
+            batch_num += 1
+            remaining = niterations - total_iterations
+            current_batch = min(batch_size, remaining)
+            
+            if verbose:
+                print(f"\n[Batch {batch_num}] Running {current_batch} iterations "
+                      f"(total: {total_iterations} → {total_iterations + current_batch})...")
+                sys.stdout.flush()
+            
+            # Determine if this is a restart
+            is_restart = current_positions is not None and batch_num > 1
+            
+            # Run batch
+            try:
+                batch_sampled, batch_log_ps = pydream_run_dream(
+                    parameters=pydream_params,
+                    likelihood=likelihood_func,
+                    niterations=current_batch,
+                    nchains=nchains,
+                    multitry=multitry,
+                    snooker=snooker,
+                    nCR=nCR,
+                    adapt_crossover=False,  # Disabled due to PyDREAM bug with batch restarts
+                    adapt_gamma=adapt_gamma,
+                    DEpairs=DEpairs,
+                    gamma_levels=gamma_levels,
+                    p_gamma_unity=p_gamma_unity,
+                    history_thin=history_thin,
+                    start=current_positions,
+                    start_random=(current_positions is None),
+                    save_history=save_history,
+                    model_name=model_name,
+                    parallel=parallel,
+                    mp_context=mp_context,
+                    verbose=False,  # Suppress per-batch verbose
+                    nverbose=nverbose,
+                    hardboundaries=hardboundaries,
+                    **kwargs
+                )
+            except Exception as e:
+                warnings.warn(f"Batch {batch_num} failed: {e}")
+                break
+            
+            # Update total iterations
+            total_iterations += current_batch
+            
+            # Accumulate results
+            if all_sampled_params is None:
+                all_sampled_params = batch_sampled
+                all_log_ps = batch_log_ps
+            else:
+                all_sampled_params = [
+                    np.vstack([prev, curr]) 
+                    for prev, curr in zip(all_sampled_params, batch_sampled)
+                ]
+                all_log_ps = [
+                    np.vstack([prev, curr])
+                    for prev, curr in zip(all_log_ps, batch_log_ps)
+                ]
+            
+            # Update starting positions for next batch
+            current_positions = [chain[-1, :] for chain in batch_sampled]
+            
+            # Check convergence (only after minimum iterations)
+            if total_iterations >= min_iterations:
+                try:
+                    gr_values = Gelman_Rubin(all_sampled_params)
+                    gr_dict = dict(zip(param_names, gr_values))
+                    max_gr = float(np.max(gr_values))
+                    mean_gr = float(np.mean(gr_values))
+                    is_converged = np.all(gr_values < convergence_threshold)
+                    
+                    convergence_history.append({
+                        'iteration': total_iterations,
+                        'max_gr': max_gr,
+                        'mean_gr': mean_gr,
+                        'converged': is_converged,
+                        'gr_values': gr_dict.copy()
+                    })
+                    
+                    if verbose:
+                        status = "✓ CONVERGED" if is_converged else "○ Not converged"
+                        if in_post_convergence_phase:
+                            status += f" (post-conv: {post_convergence_remaining} remaining)"
+                        print(f"  GR check: max={max_gr:.4f}, mean={mean_gr:.4f} → {status}")
+                        sys.stdout.flush()
+                    
+                    # Handle post-convergence phase
+                    if in_post_convergence_phase:
+                        post_convergence_remaining -= current_batch
+                        if post_convergence_remaining <= 0:
+                            if verbose:
+                                print(f"\n{'='*70}")
+                                print(f"✓ POST-CONVERGENCE COMPLETE")
+                                print(f"  Converged at iteration: {convergence_iteration}")
+                                print(f"  Post-convergence samples: {post_convergence_iterations}")
+                                print(f"  Total iterations: {total_iterations}")
+                                print(f"{'='*70}")
+                                sys.stdout.flush()
+                            break
+                    elif is_converged:
+                        batches_converged += 1
+                        if batches_converged >= patience:
+                            early_stopped = True
+                            convergence_iteration = total_iterations
+                            
+                            if post_convergence_iterations > 0:
+                                # Enter post-convergence phase
+                                in_post_convergence_phase = True
+                                post_convergence_remaining = post_convergence_iterations
+                                if verbose:
+                                    print(f"\n{'='*70}")
+                                    print(f"✓ CONVERGENCE DETECTED at iteration {convergence_iteration}")
+                                    print(f"  Max GR: {max_gr:.4f} < {convergence_threshold}")
+                                    print(f"  Running {post_convergence_iterations} post-convergence iterations...")
+                                    print(f"{'='*70}")
+                                    sys.stdout.flush()
+                            else:
+                                # Stop immediately
+                                if verbose:
+                                    print(f"\n{'='*70}")
+                                    print(f"✓ EARLY STOPPING: Converged for {patience} consecutive batches!")
+                                    print(f"  Total iterations: {total_iterations}")
+                                    print(f"  Max GR: {max_gr:.4f} < {convergence_threshold}")
+                                    print(f"{'='*70}")
+                                    sys.stdout.flush()
+                                break
+                    else:
+                        batches_converged = 0  # Reset counter
+                        
+                except Exception as e:
+                    if verbose:
+                        print(f"  GR check failed: {e}")
+                        sys.stdout.flush()
+        
+        # Use batch results
+        if all_sampled_params is None:
+            raise RuntimeError("No samples collected in batch mode")
+        
+        sampled_params = all_sampled_params
+        log_ps = all_log_ps
+        
+    # =========================================================================
+    # NORMAL MODE: Run all iterations at once
+    # =========================================================================
+    else:
+        try:
+            sampled_params, log_ps = pydream_run_dream(
+                parameters=pydream_params,
+                likelihood=likelihood_func,
+                niterations=niterations,
+                nchains=nchains,
+                multitry=multitry,
+                snooker=snooker,
+                nCR=nCR,
+                adapt_crossover=adapt_crossover,
+                adapt_gamma=adapt_gamma,
+                DEpairs=DEpairs,
+                gamma_levels=gamma_levels,
+                p_gamma_unity=p_gamma_unity,
+                history_thin=history_thin,
+                start=start,
+                start_random=start_random,
+                save_history=save_history,
+                model_name=model_name,
+                parallel=parallel,
+                mp_context=mp_context,
+                verbose=verbose,
+                nverbose=nverbose,
+                hardboundaries=hardboundaries,
+                **kwargs
+            )
+        except Exception as e:
+            raise RuntimeError(f"PyDREAM sampling failed: {e}")
+        
+        # Initialize batch-mode variables for consistent return
+        early_stopped = False
+        convergence_iteration = None
+        convergence_history = []
+        total_iterations = niterations
     
     runtime = time.time() - start_time
     
@@ -714,21 +919,37 @@ def run_pydream(
         try:
             gr_values = Gelman_Rubin(sampled_params)
             convergence_diagnostics['gelman_rubin'] = dict(zip(param_names, gr_values))
-            convergence_diagnostics['converged'] = np.all(gr_values < 1.2)
+            convergence_diagnostics['converged'] = np.all(gr_values < convergence_threshold)
+            convergence_diagnostics['max_gr'] = float(np.max(gr_values))
+            convergence_diagnostics['mean_gr'] = float(np.mean(gr_values))
             
             if verbose:
-                print(f"\nGelman-Rubin diagnostics:")
+                print(f"\nGelman-Rubin diagnostics (threshold: {convergence_threshold}):")
                 for name, gr in zip(param_names, gr_values):
-                    status = "✓" if gr < 1.2 else "✗"
+                    status = "✓" if gr < convergence_threshold else "✗"
                     print(f"  {status} {name}: {gr:.4f}")
-                print(f"Converged: {convergence_diagnostics['converged']}")
+                print(f"Converged: {convergence_diagnostics['converged']} (max GR: {convergence_diagnostics['max_gr']:.4f})")
+                if not convergence_diagnostics['converged']:
+                    print(f"  ⚠ Not converged - consider increasing iterations or checking parameter bounds")
         except Exception as e:
             warnings.warn(f"Could not compute Gelman-Rubin: {e}")
             convergence_diagnostics['error'] = str(e)
     
     if verbose:
-        print(f"\nPyDREAM completed in {runtime:.1f} seconds")
+        if use_batch_mode and early_stopped:
+            print(f"\nPyDREAM completed (EARLY STOPPED) in {runtime:.1f} seconds")
+            print(f"  Total iterations: {total_iterations} (max was {niterations})")
+        else:
+            print(f"\nPyDREAM completed in {runtime:.1f} seconds")
         print(f"Best {objective.name}: {best_objective:.6f}")
+        sys.stdout.flush()
+    
+    # Add batch mode info to convergence diagnostics
+    if use_batch_mode:
+        convergence_diagnostics['early_stopped'] = early_stopped
+        convergence_diagnostics['total_iterations'] = total_iterations
+        convergence_diagnostics['convergence_iteration'] = convergence_iteration
+        convergence_diagnostics['convergence_history'] = convergence_history
     
     return {
         'best_parameters': best_params,
@@ -740,6 +961,10 @@ def run_pydream(
         'convergence_diagnostics': convergence_diagnostics,
         'runtime_seconds': runtime,
         'parameter_names': param_names,
+        # Batch mode specific
+        'early_stopped': early_stopped if use_batch_mode else None,
+        'total_iterations': total_iterations,
+        'convergence_history': convergence_history if use_batch_mode else None,
     }
 
 

@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.0
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python (pyrrm)
 #     language: python
@@ -15,6 +15,8 @@
 
 # %% [markdown]
 # # Objective Functions: The Heart of Model Calibration
+#
+# > **⚠️ WORK IN PROGRESS (WIP)** - This notebook is currently under development.
 #
 # ## Purpose
 #
@@ -860,8 +862,8 @@ print("\n" + summary_df.to_string(index=False))
 #
 # ### Next Steps
 #
-# - **Notebook 04**: Compare calibration algorithms (DREAM, PyDREAM, SCE-UA)
-# - **Notebook 05**: Monitor long-running calibrations
+# - **Notebook 06**: Compare calibration algorithms (DREAM, PyDREAM, SCE-UA)
+# - **Notebook 08**: Monitor long-running calibrations
 
 # %%
 print("=" * 70)
@@ -874,5 +876,5 @@ You now understand:
   ✓ Composite objective construction
   ✓ How objective choice affects calibration
   
-Next: Explore algorithm comparison in Notebook 04!
+Next: Explore algorithm comparison in Notebook 06!
 """)

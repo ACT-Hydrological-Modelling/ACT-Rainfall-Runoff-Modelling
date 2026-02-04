@@ -1,0 +1,373 @@
+---
+description: "Version control practices and git workflow guidelines for pyrrm development"
+alwaysApply: true
+---
+
+# Version Control Guidelines
+
+Follow these practices when managing version control for the pyrrm codebase.
+
+## Core Principles
+
+1. **Commit frequently**: Small, logical commits are better than large batches
+2. **Commit working code**: Only commit code that runs without errors
+3. **Write meaningful messages**: Follow the commit message guidelines (see commit-messages.mdc)
+4. **Keep history clean**: Avoid unnecessary merge commits, prefer rebasing when appropriate
+5. **Test before committing**: Ensure code works and tests pass (if applicable)
+
+## Branch Strategy
+
+### Branch Naming Conventions
+
+Use descriptive branch names following these patterns:
+
+- **Feature branches**: `feat/<description>` or `feature/<description>`
+  - Examples: `feat/gr5j-model`, `feat/nonlinear-routing`
+  
+- **Bug fixes**: `fix/<description>` or `bugfix/<description>`
+  - Examples: `fix/sacramento-mass-balance`, `fix/calibration-bounds`
+  
+- **Documentation**: `docs/<description>`
+  - Examples: `docs/api-reference`, `docs/calibration-guide`
+  
+- **Refactoring**: `refactor/<description>`
+  - Examples: `refactor/objective-functions`, `refactor/model-base-class`
+  
+- **Hotfixes**: `hotfix/<description>`
+  - Examples: `hotfix/critical-numerical-error`
+
+### Branch Workflow
+
+1. **Create feature branch** from main/master:
+   ```bash
+   git checkout main
+   git pull origin main
+   git checkout -b feat/new-feature
+   ```
+
+2. **Work on feature** with regular commits
+
+3. **Keep branch updated** with main:
+   ```bash
+   git checkout main
+   git pull origin main
+   git checkout feat/new-feature
+   git rebase main  # or git merge main
+   ```
+
+4. **Push and create PR** when ready for review
+
+## Commit Practices
+
+### When to Commit
+
+Commit when you have:
+- ✅ **Completed a logical unit** of work (e.g., implemented a method, fixed a bug)
+- ✅ **Working code** that runs without errors
+- ✅ **Passing tests** (if tests exist for the change)
+- ✅ **Clear, descriptive commit message** following guidelines
+
+### What to Commit
+
+**DO commit:**
+- Source code changes (`.py` files)
+- Configuration files (`.toml`, `.yaml`, `.json` for config)
+- Documentation (`.md`, docstrings)
+- Test files
+- Notebook Python scripts (`.py` with Jupytext format)
+- Build/CI configuration
+
+**DON'T commit:**
+- Generated files (`.pyc`, `__pycache__/`, `.egg-info/`)
+- Notebook outputs (`.ipynb` files - these are synced from `.py`)
+- Large data files (use git LFS or exclude)
+- IDE-specific files (`.vscode/`, `.idea/` - unless project-specific)
+- Temporary files
+- Environment files (`.env`, `venv/`, `.conda/`)
+
+### Commit Frequency
+
+- **Small, focused commits**: Prefer multiple small commits over one large commit
+- **Logical grouping**: Group related changes together
+- **Before breaks**: Commit before switching to different work
+- **After milestones**: Commit after completing a feature or fixing a bug
+
+## File-Specific Guidelines
+
+### Python Source Files
+
+- Commit immediately after implementing a feature or fix
+- Include related tests in the same commit if they're part of the feature
+- Update docstrings in the same commit as code changes
+
+### Notebooks (Jupytext)
+
+**IMPORTANT**: Follow the jupytext-notebooks.mdc rule:
+
+1. **Edit `.py` scripts**, not `.ipynb` files
+2. **Commit the `.py` script** after making changes
+3. **Sync notebooks** using `jupytext --sync` (user responsibility)
+4. **Commit synced `.ipynb`** separately if needed, with message:
+   ```
+   chore(notebooks): sync notebooks with jupytext
+   ```
+
+### Documentation
+
+- Commit documentation changes with related code changes when possible
+- For standalone doc updates, use `docs` type commits
+- Keep README and API docs in sync with code
+
+### Test Data
+
+- **Small test files**: Commit directly (e.g., CSV files < 1MB)
+- **Large data files**: Use git LFS or exclude from repo
+- **Generated test data**: Don't commit if easily regenerated
+
+## Git Commands Reference
+
+### Common Workflows
+
+**Check status:**
+```bash
+git status
+```
+
+**Stage changes:**
+```bash
+git add <file>              # Stage specific file
+git add .                    # Stage all changes (use carefully)
+git add -p                   # Interactive staging (recommended)
+```
+
+**Commit:**
+```bash
+git commit -m "type(scope): subject"
+git commit                   # Opens editor for multi-line message
+```
+
+**View history:**
+```bash
+git log --oneline            # Compact view
+git log --graph --oneline    # With branch visualization
+git log -p <file>            # Changes to specific file
+```
+
+**Undo changes:**
+```bash
+git restore <file>           # Discard unstaged changes
+git restore --staged <file>  # Unstage file
+git reset HEAD~1             # Undo last commit (keep changes)
+```
+
+**Branch operations:**
+```bash
+git branch                   # List branches
+git branch -d <branch>      # Delete merged branch
+git checkout <branch>       # Switch branch
+git checkout -b <branch>    # Create and switch
+```
+
+## Integration with Commit Messages
+
+Always follow the commit message guidelines (commit-messages.mdc):
+
+1. **Use conventional format**: `type(scope): subject`
+2. **Include body** for complex changes explaining why
+3. **Reference issues** when applicable
+4. **Be specific** and descriptive
+
+Example workflow:
+```bash
+# Make changes to code
+git add pyrrm/models/gr5j.py
+git commit -m "feat(models): add GR5J model implementation
+
+Implement GR5J (Génie Rural à 5 paramètres Journalier) following
+the established model pattern. Includes production store, routing
+store, and unit hydrograph components.
+
+Reference: Le Moine (2008). Le bassin versant vu par le souterrain."
+```
+
+## Handling Conflicts
+
+### During Rebase/Merge
+
+1. **Identify conflict files**: Git will mark conflicts
+2. **Resolve manually**: Edit files to resolve conflicts
+3. **Stage resolved files**: `git add <resolved-file>`
+4. **Continue operation**: `git rebase --continue` or `git merge --continue`
+
+### Prevention
+
+- **Pull frequently**: Keep local branch updated with remote
+- **Small commits**: Easier to resolve conflicts in small chunks
+- **Communicate**: Coordinate with team on shared files
+
+## Pre-Commit Checklist
+
+Before committing, verify:
+
+- [ ] Code runs without errors
+- [ ] No temporary/debug code left in files
+- [ ] Commit message follows guidelines
+- [ ] Related files committed together
+- [ ] No sensitive data (API keys, passwords)
+- [ ] Large files excluded or using git LFS
+- [ ] Notebooks synced if `.ipynb` changed
+
+## Remote Repository Practices
+
+### Pushing Changes
+
+```bash
+# First push of new branch
+git push -u origin <branch-name>
+
+# Subsequent pushes
+git push
+
+# Force push (use with caution, only on feature branches)
+git push --force-with-lease
+```
+
+### Pull Requests
+
+When creating PRs:
+- **Clear title**: Use conventional commit format
+- **Description**: Explain what and why, reference issues
+- **Link related issues**: Use "Closes #123" in PR description
+- **Keep focused**: One logical change per PR
+- **Request review**: Tag relevant team members
+
+## Special Scenarios
+
+### Amending Last Commit
+
+```bash
+# Add forgotten file to last commit
+git add <file>
+git commit --amend --no-edit
+
+# Fix commit message
+git commit --amend
+```
+
+### Splitting Commits
+
+```bash
+# Interactive rebase to split commits
+git rebase -i HEAD~3  # Edit last 3 commits
+# Mark commit as 'edit', then:
+git reset HEAD~1      # Undo commit, keep changes
+git add <files>       # Stage files separately
+git commit -m "..."   # Create separate commits
+git rebase --continue
+```
+
+### Stashing Work
+
+```bash
+# Save uncommitted changes
+git stash
+git stash save "description"
+
+# List stashes
+git stash list
+
+# Apply stash
+git stash apply
+git stash pop  # Apply and remove
+```
+
+## Project-Specific Considerations
+
+### Hydrological Models
+
+- **Verify numerically**: Test against reference implementations before committing
+- **Document parameters**: Include parameter bounds and physical meanings
+- **Reference papers**: Cite relevant literature in commits
+
+### Calibration Code
+
+- **Test with toy problems**: Ensure calibration adapters work before committing
+- **Document algorithm**: Note which algorithm version/implementation used
+- **Parameter validation**: Include bounds checking in commits
+
+### Notebooks
+
+- **Sync before committing**: Ensure `.ipynb` matches `.py` if committing both
+- **Clear outputs**: Consider clearing outputs before committing (optional)
+- **Documentation**: Notebooks should be self-documenting
+
+## Best Practices Summary
+
+1. ✅ **Commit often** with small, logical changes
+2. ✅ **Write clear messages** following conventional format
+3. ✅ **Test before committing** - ensure code works
+4. ✅ **Keep branches focused** - one feature per branch
+5. ✅ **Pull frequently** - stay updated with main
+6. ✅ **Review before pushing** - check what you're committing
+7. ✅ **Use meaningful branch names** - descriptive and consistent
+8. ✅ **Document complex changes** - explain why in commit body
+
+## Anti-Patterns to Avoid
+
+❌ **Don't commit broken code** - fix errors first
+❌ **Don't commit large files** - use git LFS or exclude
+❌ **Don't force push to main** - use feature branches
+❌ **Don't commit secrets** - use environment variables
+❌ **Don't commit generated files** - unless necessary
+❌ **Don't use vague messages** - "fix stuff", "update", "changes"
+❌ **Don't commit unrelated changes** - separate commits
+❌ **Don't ignore merge conflicts** - resolve properly
+
+## Emergency Procedures
+
+### Accidentally Committed Sensitive Data
+
+```bash
+# Remove from history (use with extreme caution)
+git filter-branch --force --index-filter \
+  "git rm --cached --ignore-unmatch <file>" \
+  --prune-empty --tag-name-filter cat -- --all
+
+# Force push (coordinate with team)
+git push --force --all
+```
+
+### Revert Last Commit (Keep Changes)
+
+```bash
+git reset --soft HEAD~1
+```
+
+### Revert Last Commit (Discard Changes)
+
+```bash
+git reset --hard HEAD~1  # ⚠️ Destructive - use carefully
+```
+
+### Undo Pushed Commit
+
+```bash
+# Create revert commit (preferred)
+git revert <commit-hash>
+git push
+
+# Or reset and force push (only on feature branches)
+git reset HEAD~1
+git push --force-with-lease
+```
+
+## Summary
+
+Version control is about **communication** and **history**. Every commit tells a story about how the codebase evolved. Make that story clear, logical, and useful for future developers (including yourself).
+
+Remember:
+- **Small commits** > Large commits
+- **Clear messages** > Vague messages  
+- **Working code** > Broken code
+- **Focused branches** > Everything in main
+- **Frequent pulls** > Merge conflicts

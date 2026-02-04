@@ -1,0 +1,243 @@
+---
+description: "Guidelines for creating meaningful, well-structured commit messages during development"
+alwaysApply: true
+---
+
+# Commit Message Guidelines
+
+When making commits during development, follow these guidelines to create meaningful, maintainable commit history.
+
+## Commit Message Structure
+
+Use the conventional commits format with a clear structure:
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+### Type (Required)
+
+Use one of these types:
+
+- **feat**: New feature (e.g., new model, new calibration method)
+- **fix**: Bug fix (e.g., numerical error, incorrect parameter bounds)
+- **docs**: Documentation changes (e.g., README, docstrings, comments)
+- **refactor**: Code restructuring without changing functionality
+- **test**: Adding or updating tests
+- **perf**: Performance improvements
+- **style**: Code style changes (formatting, whitespace)
+- **chore**: Maintenance tasks (dependencies, build config)
+- **ci**: CI/CD changes
+
+### Scope (Optional but Recommended)
+
+Specify the affected component:
+
+- **models**: Model implementations (Sacramento, GR4J, etc.)
+- **calibration**: Calibration framework (adapters, runner, objectives)
+- **routing**: Routing components
+- **analysis**: Sensitivity analysis, diagnostics
+- **visualization**: Plotting functions
+- **data**: Data handling utilities
+- **notebooks**: Jupyter notebook updates
+- **benchmark**: Benchmarking code
+- **examples**: Example scripts
+
+### Subject (Required)
+
+- **First line**: 50 characters or less
+- **Imperative mood**: "Add feature" not "Added feature" or "Adds feature"
+- **No period** at the end
+- **Capitalize first letter**
+- **Be specific**: Describe what changed, not why (why goes in body)
+
+### Body (Optional but Recommended for Complex Changes)
+
+- **Separate from subject** with blank line
+- **Wrap at 72 characters**
+- **Explain the "what" and "why"**, not the "how"
+- **Reference issues/PRs** if applicable
+- **Include context** about the change
+
+### Footer (Optional)
+
+- **Breaking changes**: Start with `BREAKING CHANGE:` followed by description
+- **Issue references**: `Closes #123`, `Fixes #456`, `Refs #789`
+
+## Examples
+
+### Simple Feature Addition
+
+```
+feat(models): add GR5J model implementation
+
+Implement GR5J (Génie Rural à 5 paramètres Journalier) model following
+the GR4J pattern. Includes production store, routing store, and unit
+hydrograph components.
+
+Reference: Le Moine (2008). Le bassin versant vu par le souterrain.
+```
+
+### Bug Fix
+
+```
+fix(calibration): correct parameter bounds for Sacramento UZTWM
+
+The upper zone tension water maximum (UZTWM) bounds were incorrectly
+set to (0, 50) but should be (1, 300) based on model documentation.
+
+Fixes incorrect calibration results for catchments with high storage.
+```
+
+### Refactoring
+
+```
+refactor(calibration): extract objective function calculation
+
+Move objective function logic from runner.py to dedicated
+objective_functions.py module for better organization and reusability.
+
+No functional changes - only code structure improvements.
+```
+
+### Documentation
+
+```
+docs(models): add detailed docstring to Sacramento.run_timestep
+
+Expand docstring with parameter descriptions, return value details,
+and example usage. Improves API documentation for users.
+```
+
+### Multiple Changes
+
+```
+feat(calibration): add SCE-UA calibration adapter
+
+Implement SCE-UA (Shuffled Complex Evolution) calibration method
+adapter following the established adapter pattern.
+
+- Add sceua_adapter.py with SCE-UA implementation
+- Integrate into CalibrationRunner.run_sceua()
+- Add parameter bounds validation
+- Include example usage in notebooks
+
+Closes #42
+```
+
+### Breaking Change
+
+```
+feat(calibration): change objective function return format
+
+BREAKING CHANGE: Objective functions now return dict with 'value' and
+'metrics' keys instead of single float. This enables access to
+component metrics (NSE, KGE components, etc.).
+
+Migration: Replace `obj_func(sim, obs)` with `obj_func(sim, obs)['value']`
+```
+
+## Commit Frequency
+
+### When to Commit
+
+- **Logical units**: Each commit should represent one logical change
+- **Working state**: Only commit code that runs without errors
+- **Tests pass**: Ensure tests pass before committing (if applicable)
+- **Small, focused**: Prefer multiple small commits over one large commit
+
+### What NOT to Commit
+
+- **WIP commits**: Avoid "work in progress" commits in main branch
+- **Broken code**: Don't commit code that doesn't run
+- **Temporary files**: Exclude `.pyc`, `__pycache__`, `.ipynb_checkpoints`
+- **Large files**: Use git LFS or exclude large data files
+
+## Special Cases
+
+### Notebook Updates
+
+When syncing notebooks with Jupytext:
+
+```
+chore(notebooks): sync notebooks with jupytext
+
+Regenerate .ipynb files from paired .py scripts using jupytext --sync.
+No code changes - only notebook metadata updates.
+```
+
+### Dependency Updates
+
+```
+chore(deps): update spotpy to 1.6.0
+
+Update spotpy dependency to latest version for improved DREAM algorithm
+performance. Tested with existing calibration workflows.
+```
+
+### Benchmarking
+
+```
+test(benchmark): add verification against C# Sacramento implementation
+
+Add benchmark comparison script to verify Python Sacramento model
+outputs match C# reference implementation within numerical tolerance.
+```
+
+## Commit Message Best Practices
+
+1. **Be descriptive**: Future you (and others) will thank you
+2. **Use present tense**: "Add feature" not "Added feature"
+3. **Be specific**: "Fix NSE calculation" not "Fix bug"
+4. **Explain why**: Use body to explain motivation for complex changes
+5. **Reference issues**: Link to related issues or PRs
+6. **Group related changes**: One logical change per commit
+7. **Review before committing**: Read your message before finalizing
+
+## Hydrological Context
+
+When committing model or calibration changes, consider including:
+
+- **Model references**: Cite papers or documentation
+- **Parameter ranges**: Note if bounds changed
+- **Numerical verification**: Mention if verified against reference
+- **Physical meaning**: Explain hydrological significance if relevant
+
+Example:
+```
+feat(models): add Muskingum routing with variable K parameter
+
+Implement nonlinear Muskingum routing allowing time-variable K parameter
+based on flow stage. Enables more accurate routing for flashy catchments.
+
+Reference: Perumal & Sahoo (2008). Variable parameter Muskingum stage
+hydrograph routing method. Journal of Hydrology, 353(1-2), 89-101.
+```
+
+## Automated Checks
+
+Consider using commit message linting tools:
+- `commitlint` with conventional commits config
+- Pre-commit hooks to validate format
+- Git hooks to enforce structure
+
+## Summary
+
+**Good commit message:**
+- Clear type and scope
+- Descriptive subject (50 chars)
+- Detailed body explaining why
+- References issues if applicable
+
+**Bad commit message:**
+- "fix stuff"
+- "update"
+- "changes"
+- "WIP"
+- "asdf"
+
+Remember: Commit messages are documentation. Write them for your future self and collaborators.

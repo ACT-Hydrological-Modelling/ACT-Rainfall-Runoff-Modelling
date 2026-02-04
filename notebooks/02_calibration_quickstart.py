@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.0
+#       jupytext_version: 1.19.1
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -628,7 +628,7 @@ print(f"Warmup period: {WARMUP_DAYS} days")
 # of the Shuffled Complex Evolution algorithm. This is a classic hydrology
 # algorithm that's fast, reliable, and requires no external dependencies.
 #
-# **Note**: See **Notebook 05: Algorithm Comparison** for a detailed
+# **Note**: See **Notebook 06: Algorithm Comparison** for a detailed
 # comparison of all available algorithms.
 
 # %%

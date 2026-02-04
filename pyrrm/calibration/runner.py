@@ -814,7 +814,8 @@ class CalibrationRunner:
         multitry: int = 5,
         snooker: float = 0.1,
         nCR: int = 3,
-        adapt_crossover: bool = True,
+        adapt_crossover: bool = False,  # Disabled by default due to PyDREAM bug
+        adapt_gamma: bool = False,
         DEpairs: int = 1,
         p_gamma_unity: float = 0.2,
         parallel: bool = False,
@@ -826,6 +827,12 @@ class CalibrationRunner:
         nverbose: int = 100,
         checkpoint_dir: Optional[str] = None,
         checkpoint_interval: int = 5000,
+        # Batch mode parameters (optional - enables early stopping)
+        batch_size: Optional[int] = None,
+        min_iterations: int = 300,
+        convergence_threshold: float = 1.05,
+        patience: int = 2,
+        post_convergence_iterations: int = 1000,
         **kwargs
     ) -> CalibrationResult:
         """
@@ -873,7 +880,9 @@ class CalibrationRunner:
             multitry: Number of proposal points per iteration (1=standard DREAM)
             snooker: Probability of snooker update (0 to disable)
             nCR: Number of crossover values
-            adapt_crossover: Whether to adapt crossover probabilities
+            adapt_crossover: Whether to adapt crossover probabilities.
+                           WARNING: Disabled by default due to PyDREAM bug.
+            adapt_gamma: Whether to adapt gamma (step size) levels (recommended: True)
             DEpairs: Number of chain pairs for differential evolution
             p_gamma_unity: Probability of gamma=1 (full step)
             parallel: Enable parallel processing for multi-try evaluations.
@@ -889,10 +898,34 @@ class CalibrationRunner:
                      Jupyter notebooks. Use `dbname` for reliable tracking.
             checkpoint_dir: Directory for automatic checkpoints (None to disable)
             checkpoint_interval: Save checkpoint every N iterations
+            batch_size: If set (>0), enables BATCH MODE with early stopping.
+                       Runs iterations in batches, checking GR convergence after
+                       each batch and stopping early when converged.
+                       If None, runs all iterations without early stopping (normal mode).
+            min_iterations: Minimum iterations before checking convergence (batch mode)
+            convergence_threshold: Gelman-Rubin threshold for convergence (default: 1.05, strict)
+            patience: Consecutive converged batches required to stop (batch mode)
+            post_convergence_iterations: Additional iterations after convergence
+                                        for robust posterior sampling (default: 1000)
             **kwargs: Additional PyDREAM parameters
             
         Returns:
             CalibrationResult with best parameters and MCMC chain
+            
+        Batch Mode Example:
+            Enable batch mode for automatic early stopping when GR converges:
+            
+            ```python
+            result = runner.run_pydream(
+                n_iterations=5000,      # Maximum iterations
+                batch_size=100,          # Check GR every 100 iterations
+                min_iterations=300,      # Don't check before 300 iterations
+                convergence_threshold=1.1,  # Stop when all GR < 1.1
+                patience=2,              # Require 2 consecutive converged batches
+                post_convergence_iterations=200,  # Run 200 more after convergence
+            )
+            # May stop early if GR converges before 5000 iterations!
+            ```
         """
         if not PYDREAM_AVAILABLE:
             raise ImportError(
@@ -916,6 +949,7 @@ class CalibrationRunner:
             snooker=snooker,
             nCR=nCR,
             adapt_crossover=adapt_crossover,
+            adapt_gamma=adapt_gamma,
             DEpairs=DEpairs,
             p_gamma_unity=p_gamma_unity,
             parallel=parallel,
@@ -925,6 +959,12 @@ class CalibrationRunner:
             write_interval=write_interval,
             verbose=verbose,
             nverbose=nverbose,
+            # Batch mode parameters
+            batch_size=batch_size,
+            min_iterations=min_iterations,
+            convergence_threshold=convergence_threshold,
+            patience=patience,
+            post_convergence_iterations=post_convergence_iterations,
             **kwargs
         )
         
@@ -935,9 +975,11 @@ class CalibrationRunner:
                 checkpoint_dir, 
                 checkpoint_interval=checkpoint_interval
             )
+            # Use actual iterations (may differ from n_iterations if early stopped)
+            actual_iterations = result.get('total_iterations', n_iterations)
             manager.save_checkpoint(
                 result, 
-                iteration=n_iterations, 
+                iteration=actual_iterations, 
                 method='PyDREAM (MT-DREAM(ZS))'
             )
             if verbose:
@@ -952,7 +994,15 @@ class CalibrationRunner:
             'sampled_params_by_chain': result.get('sampled_params_by_chain'),
             'log_ps_by_chain': result.get('log_ps_by_chain'),
             'parameter_names': result.get('parameter_names'),
+            'early_stopped': result.get('early_stopped'),
+            'total_iterations': result.get('total_iterations'),
+            'convergence_history': result.get('convergence_history'),
         }
+        
+        # Build method name
+        method_name = 'PyDREAM (MT-DREAM(ZS))'
+        if batch_size is not None and result.get('early_stopped'):
+            method_name += ' [early stopped]'
         
         return CalibrationResult(
             best_parameters=result['best_parameters'],
@@ -960,7 +1010,7 @@ class CalibrationRunner:
             all_samples=result['all_samples'],
             convergence_diagnostics=result['convergence_diagnostics'],
             runtime_seconds=result['runtime_seconds'],
-            method='PyDREAM (MT-DREAM(ZS))',
+            method=method_name,
             objective_name=self.objective.name,
             success=success,
             _raw_result=raw_result,
