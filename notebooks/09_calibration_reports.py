@@ -1,11 +1,12 @@
 # ---
 # jupyter:
 #   jupytext:
+#     formats: py:percent,ipynb
 #     text_representation:
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.4
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: Python (pyrrm)
 #     language: python
@@ -13,7 +14,7 @@
 # ---
 
 # %% [markdown]
-# # Tutorial 09: Working with Calibration Reports
+# # Tutorial 08: Working with Calibration Reports
 #
 # This notebook demonstrates how to work with saved `CalibrationReport` objects.
 # These reports contain everything needed for visualization, analysis, and re-simulation

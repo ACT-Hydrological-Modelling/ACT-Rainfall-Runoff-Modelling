@@ -1,6 +1,6 @@
 # Sacramento Model Parameter Bounds - Custom Adjusted
 # Manual adjustment: lower bounds of lzfpm, lzpk, uztwm, uzk × 0.5
-# Date: 2026-02-04 15:21:42
+# Date: 2026-02-05 10:19:25
 #
 # Format: parameter_name lower_bound upper_bound
 #

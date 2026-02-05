@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -347,46 +347,30 @@ for obj_name, transform in LIKELIHOOD_TRANSFORM_MAPPING.items():
 # For production use, increase iterations significantly (5000-10000+).
 
 # %%
-# PyDREAM configuration - OPTIMIZED FOR FAST CONVERGENCE
-# Key optimizations:
-# - Fewer chains (3-4) for faster convergence while maintaining GR diagnostics
-# - DEpairs=2 for better exploration with fewer chains
-# - Adaptive gamma for better step size adaptation
-# - Reduced iterations for synthetic test (converges faster on clean data)
-# - Convergence threshold: GR < 1.2 (standard MCMC criterion)
+# PyDREAM configuration - MATCHING SYNTHETIC TEST SETTINGS
+# Settings chosen to avoid PyDREAM NumPy bugs:
+# - adapt_crossover=False (causes NumPy errors)
+# - adapt_gamma=False (causes NumPy errors)
+# - multitry=1 (standard DREAM, no multi-try)
+# Same hyperparameters as synthetic test for consistency
 
-DEMO_MODE = True  # Set to False for full production runs
+PYDREAM_ITERATIONS = 500     # Iterations per chain
+PYDREAM_CHAINS = 3           # 3 chains (minimum for DEpairs=1: 2*1+1=3)
+PYDREAM_MULTITRY = 1         # Standard DREAM (no multi-try)
+PYDREAM_DEPAIRS = 1          # 1 DE pair
+PYDREAM_SNOOKER = 0.10       # 10% snooker probability
+PYDREAM_ADAPT_GAMMA = False  # Disabled - causes PyDREAM NumPy bugs
+PYDREAM_ADAPT_CROSSOVER = False  # Disabled - causes PyDREAM NumPy bugs
+PYDREAM_CONVERGENCE_THRESHOLD = 1.05  # Stricter R-hat threshold
 
-if DEMO_MODE:
-    # Optimized for fast convergence on synthetic/validation data
-    PYDREAM_ITERATIONS = 1500   # Per chain (sufficient for synthetic test)
-    PYDREAM_CHAINS = 5          # 5 chains (minimum for DEpairs=2)
-    PYDREAM_MULTITRY = 3        # Multi-try for better mixing
-    PYDREAM_DEPAIRS = 2         # DE pairs for better exploration
-    PYDREAM_SNOOKER = 0.15      # Snooker probability for mode jumping
-    PYDREAM_ADAPT_GAMMA = False # Disabled due to PyDREAM bug
-    print("⚠ DEMO MODE: Optimized for fast convergence")
-    print("  Set DEMO_MODE = False for production-quality results")
-else:
-    # Production settings with more chains for robust convergence
-    PYDREAM_ITERATIONS = 5000   # Per chain (sufficient for convergence)
-    PYDREAM_CHAINS = 5          # 5 chains for robust Gelman-Rubin
-    PYDREAM_MULTITRY = 4        # Multi-try for better mixing
-    PYDREAM_DEPAIRS = 2         # DE pairs for exploration
-    PYDREAM_SNOOKER = 0.15      # Snooker probability
-    PYDREAM_ADAPT_GAMMA = False # Disabled due to PyDREAM bug
-    print("PRODUCTION MODE: Full iterations with parallel chains")
-
-# Convergence settings
-PYDREAM_CONVERGENCE_THRESHOLD = 1.1  # Gelman-Rubin threshold (strict: 1.1)
-
-print(f"\nPyDREAM Configuration (Optimized for Convergence):")
+print("PyDREAM Configuration (Matching Synthetic Test):")
 print(f"  Iterations per chain: {PYDREAM_ITERATIONS}")
 print(f"  Number of chains: {PYDREAM_CHAINS} (min: {2*PYDREAM_DEPAIRS+1} for DEpairs={PYDREAM_DEPAIRS})")
 print(f"  Multi-try samples: {PYDREAM_MULTITRY}")
-print(f"  DE pairs: {PYDREAM_DEPAIRS} (for better exploration)")
-print(f"  Snooker probability: {PYDREAM_SNOOKER:.1%}")
+print(f"  DE pairs: {PYDREAM_DEPAIRS}")
+print(f"  Snooker probability: {PYDREAM_SNOOKER:.0%}")
 print(f"  Adaptive gamma: {PYDREAM_ADAPT_GAMMA}")
+print(f"  Adaptive crossover: {PYDREAM_ADAPT_CROSSOVER}")
 print(f"  Convergence threshold: GR < {PYDREAM_CONVERGENCE_THRESHOLD}")
 print(f"  Total samples: ~{PYDREAM_ITERATIONS * PYDREAM_CHAINS:,}")
 
@@ -832,26 +816,27 @@ print("TEST 2: PYDREAM ON SYNTHETIC HYDROGRAPH")
 print("=" * 70)
 
 if PYDREAM_AVAILABLE:
-    # PyDREAM hyperparameters - BATCH MODE (with early stopping)
-    SYNTHETIC_ITERATIONS = 1000      # Max iterations per chain (may stop early)
+    # PyDREAM hyperparameters - MATCHING REAL DATA SETTINGS
+    # Same settings used for both synthetic and real data for consistency
+    SYNTHETIC_ITERATIONS = 500       # Iterations per chain
     SYNTHETIC_CHAINS = 3             # 3 chains (minimum for DEpairs=1: 2*1+1=3)
-    SYNTHETIC_MULTITRY = 1           # Standard DREAM (no multi-try for speed)
-    SYNTHETIC_DEPAIRS = 1            # DE pairs
-    SYNTHETIC_SNOOKER = 0.10         # Snooker probability (10% default)
+    SYNTHETIC_MULTITRY = 1           # Standard DREAM (no multi-try)
+    SYNTHETIC_DEPAIRS = 1            # 1 DE pair
+    SYNTHETIC_SNOOKER = 0.10         # 10% snooker probability
     SYNTHETIC_CONVERGENCE = 1.05     # Stricter R-hat threshold
-    SYNTHETIC_BATCH_SIZE = 500       # Check convergence every 500 iterations
-    SYNTHETIC_MIN_ITER = 500         # Minimum before checking convergence
-    SYNTHETIC_PATIENCE = 2           # Stop after 2 consecutive converged batches
+    SYNTHETIC_ADAPT_GAMMA = False    # Disabled - PyDREAM NumPy bug
+    SYNTHETIC_ADAPT_CROSSOVER = False  # Disabled - PyDREAM NumPy bug
     
-    print(f"\nRunning PyDREAM (BATCH MODE with early stopping) with {len(CALIBRATION_PARAMS)} parameters...")
-    print(f"  Max iterations per chain: {SYNTHETIC_ITERATIONS}")
+    print(f"\nRunning PyDREAM (STANDARD MODE) with {len(CALIBRATION_PARAMS)} parameters...")
+    print(f"  Iterations per chain: {SYNTHETIC_ITERATIONS}")
     print(f"  Number of chains: {SYNTHETIC_CHAINS} (parallel)")
     print(f"  Multi-try samples: {SYNTHETIC_MULTITRY}")
     print(f"  DE pairs: {SYNTHETIC_DEPAIRS}")
-    print(f"  Snooker probability: {SYNTHETIC_SNOOKER:.1%}")
+    print(f"  Snooker probability: {SYNTHETIC_SNOOKER:.0%}")
+    print(f"  Adaptive gamma: {SYNTHETIC_ADAPT_GAMMA}")
+    print(f"  Adaptive crossover: {SYNTHETIC_ADAPT_CROSSOVER}")
     print(f"  Convergence threshold: GR < {SYNTHETIC_CONVERGENCE}")
-    print(f"  Batch size: {SYNTHETIC_BATCH_SIZE} | Min iter: {SYNTHETIC_MIN_ITER} | Patience: {SYNTHETIC_PATIENCE}")
-    print("  Using CalibrationRunner.run_pydream() with early stopping")
+    print(f"  Total samples: ~{SYNTHETIC_ITERATIONS * SYNTHETIC_CHAINS:,}")
     
     start_time = time.time()
     
@@ -873,21 +858,19 @@ if PYDREAM_AVAILABLE:
     print("-" * 60)
     sys.stdout.flush()
     
-    # Run PyDREAM in BATCH MODE (with early stopping)
+    # Run PyDREAM in STANDARD MODE (no batches, no adaptive features)
     pydream_result = synthetic_runner_pydream.run_pydream(
         n_iterations=SYNTHETIC_ITERATIONS,
         n_chains=SYNTHETIC_CHAINS,
         multitry=SYNTHETIC_MULTITRY,
         snooker=SYNTHETIC_SNOOKER,
         DEpairs=SYNTHETIC_DEPAIRS,
+        adapt_crossover=SYNTHETIC_ADAPT_CROSSOVER,  # Disabled - PyDREAM bug
+        adapt_gamma=SYNTHETIC_ADAPT_GAMMA,          # Disabled - PyDREAM bug
         convergence_threshold=SYNTHETIC_CONVERGENCE,
-        # Batch mode settings for early stopping
-        batch_size=SYNTHETIC_BATCH_SIZE,
-        min_iterations=SYNTHETIC_MIN_ITER,
-        patience=SYNTHETIC_PATIENCE,
-        post_convergence_iterations=500,  # Extra samples after convergence
-        parallel=True,            # Use multiprocessing for parallel chains
-        dbname=str(pydream_progress_file),  # CSV progress tracking
+        parallel=True,
+        dbname=str(pydream_progress_file),
+        hardboundaries=True,
         verbose=True,
     )
     
@@ -1106,135 +1089,428 @@ PYDREAM_RESULTS_DIR.mkdir(exist_ok=True)
 pydream_results = {}
 pydream_reports = {}
 
-# Check if we should run calibrations or load existing results
-RUN_CALIBRATIONS = True  # Set to False to only load existing results
-
-if not PYDREAM_AVAILABLE:
-    print("=" * 70)
-    print("PYDREAM NOT AVAILABLE - SKIPPING CALIBRATIONS")
-    print("=" * 70)
-    print("\nInstall PyDREAM with: pip install pydream")
-    RUN_CALIBRATIONS = False
+print(f"PyDREAM results directory: {PYDREAM_RESULTS_DIR}")
 
 # %%
-if RUN_CALIBRATIONS and PYDREAM_AVAILABLE:
-    print("=" * 70)
-    print("RUNNING PYDREAM CALIBRATIONS")
-    print("=" * 70)
-    print(f"\nThis will run {len(objectives)} calibrations...")
-    print("Estimated time: 1-2 hours (demo mode) or 4-8 hours (production)")
-    print("\n" + "-" * 70)
+# =============================================================================
+# GELMAN-RUBIN R-HAT IMPLEMENTATION
+# =============================================================================
+# Same implementation as Notebook 08 (Calibration Monitor) for consistency.
+# Uses PyDREAM's Gelman_Rubin function when available, with proper chain handling.
+
+try:
+    from pydream.convergence import Gelman_Rubin as pydream_gelman_rubin
+    PYDREAM_GR_AVAILABLE = True
+except ImportError:
+    PYDREAM_GR_AVAILABLE = False
+
+# Minimum samples per chain for reliable R-hat (after 50% burn-in removal)
+MIN_SAMPLES_PER_CHAIN_RELIABLE = 100
+MIN_SAMPLES_PER_CHAIN_MARGINAL = 50
+MIN_SAMPLES_PER_CHAIN_MINIMUM = 20
+
+
+def _compute_gelman_rubin_fallback(chains: list, param_names: list) -> dict:
+    """
+    Fallback Gelman-Rubin implementation matching PyDREAM's formula.
     
-    total_start = time.time()
+    Uses 50% burn-in removal and standard Gelman-Rubin formula.
+    Reference: Gelman & Rubin (1992). Statistical Science, 7(4), 457-472.
+    """
+    nchains = len(chains)
+    nsamples = len(chains[0])
+    nburnin = nsamples // 2
     
-    for i, (name, objective) in enumerate(objectives.items(), 1):
-        print(f"\n[{i}/{len(objectives)}] {name}")
-        print("=" * 50)
+    r_hat_values = {}
+    
+    for i, param in enumerate(param_names):
+        # Extract parameter values for all chains, after burn-in
+        param_chains = [chain[nburnin:, i] for chain in chains]
         
-        # Check if result already exists
-        result_file = PYDREAM_RESULTS_DIR / f'410734_pydream_{name.lower()}.pkl'
+        # Within-chain variance
+        chain_vars = [np.var(c, ddof=1) for c in param_chains]
+        W = np.mean(chain_vars)
         
-        if result_file.exists():
-            print(f"  Loading existing result: {result_file.name}")
-            report = CalibrationReport.load(str(result_file))
-            pydream_reports[name] = report
-            pydream_results[name] = report.result
-            print(f"  ✓ Loaded (Best objective: {report.result.best_objective:.4f})")
-            continue
+        # Between-chain variance
+        chain_means = [np.mean(c) for c in param_chains]
+        B = np.var(chain_means, ddof=1)
         
-        # Get the equivalent likelihood transform for this objective
-        # This ensures PyDREAM uses the same flow emphasis as the objective function
-        likelihood_transform = LIKELIHOOD_TRANSFORM_MAPPING.get(name, 'sqrt')
-        likelihood = TransformedGaussianLikelihood(likelihood_transform)
+        # Variance estimate
+        n_post_burnin = nsamples - nburnin
+        var_est = W * (1 - 1./n_post_burnin) + B
         
-        print(f"  Objective: {name}")
-        print(f"  Likelihood: TransformedGaussianLikelihood('{likelihood_transform}') - {likelihood.flow_emphasis} emphasis")
+        # R-hat
+        if W > 1e-10:
+            r_hat = np.sqrt(var_est / W)
+        else:
+            r_hat = np.nan
         
-        # Create CalibrationRunner with proper log-likelihood for MCMC
-        runner = CalibrationRunner(
-            model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
-            inputs=cal_inputs,
-            observed=cal_observed,
-            objective=likelihood,  # Use proper log-likelihood, not the efficiency metric
-            warmup_period=WARMUP_DAYS
+        r_hat_values[param] = r_hat
+    
+    return r_hat_values
+
+
+def compute_gelman_rubin_from_progress(progress_file: Path, param_names: list, n_chains: int = 3) -> dict:
+    """
+    Compute Gelman-Rubin R-hat from PyDREAM progress CSV file.
+    
+    Same implementation as Notebook 08 for consistency.
+    
+    Args:
+        progress_file: Path to progress CSV (without .csv extension)
+        param_names: List of parameter names
+        n_chains: Number of chains (default 3)
+        
+    Returns:
+        Dictionary with r_hat values, reliability info, etc.
+    """
+    csv_path = Path(str(progress_file) + '.csv')
+    
+    if not csv_path.exists():
+        return {'r_hat': {p: np.nan for p in param_names}, 'reliability': 'no_file'}
+    
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as e:
+        return {'r_hat': {p: np.nan for p in param_names}, 'reliability': 'read_error', 'error': str(e)}
+    
+    # Check for chain column (PyDREAM adapter adds this)
+    if 'chain' in df.columns:
+        chain_groups = df.groupby('chain')
+        n_chains = len(chain_groups)
+        chains = []
+        for chain_id in sorted(df['chain'].unique()):
+            chain_df = df[df['chain'] == chain_id]
+            chain_data = chain_df[param_names].values
+            chains.append(chain_data)
+        min_len = min(len(c) for c in chains)
+        chains = [c[:min_len] for c in chains]
+        samples_per_chain = min_len
+    else:
+        # Interleaved format
+        values = df[param_names].values
+        n_total = len(values)
+        samples_per_chain = n_total // n_chains
+        chains = []
+        for chain_idx in range(n_chains):
+            chain_data = values[chain_idx::n_chains][:samples_per_chain]
+            chains.append(chain_data)
+    
+    # PyDREAM uses 50% burn-in
+    effective_samples = samples_per_chain // 2
+    
+    # Determine reliability
+    if effective_samples < MIN_SAMPLES_PER_CHAIN_MINIMUM:
+        reliability = 'insufficient'
+    elif effective_samples < MIN_SAMPLES_PER_CHAIN_MARGINAL:
+        reliability = 'unreliable'
+    elif effective_samples < MIN_SAMPLES_PER_CHAIN_RELIABLE:
+        reliability = 'marginal'
+    else:
+        reliability = 'reliable'
+    
+    # Compute R-hat
+    r_hat_values = {}
+    method = 'unknown'
+    
+    if PYDREAM_GR_AVAILABLE and reliability != 'insufficient':
+        try:
+            gr_array = pydream_gelman_rubin(chains)
+            for i, param in enumerate(param_names):
+                r_hat_values[param] = float(gr_array[i])
+            method = 'pydream'
+        except Exception as e:
+            method = 'fallback'
+            r_hat_values = _compute_gelman_rubin_fallback(chains, param_names)
+    elif reliability == 'insufficient':
+        for param in param_names:
+            r_hat_values[param] = np.nan
+        method = 'insufficient_samples'
+    else:
+        method = 'fallback'
+        r_hat_values = _compute_gelman_rubin_fallback(chains, param_names)
+    
+    return {
+        'r_hat': r_hat_values,
+        'n_chains': n_chains,
+        'samples_per_chain': samples_per_chain,
+        'effective_samples': effective_samples,
+        'reliability': reliability,
+        'method': method
+    }
+
+
+def print_rhat_summary(gr_result: dict, threshold: float = 1.05):
+    """Print R-hat summary with interpretation."""
+    r_hat = gr_result['r_hat']
+    reliability = gr_result.get('reliability', 'unknown')
+    method = gr_result.get('method', 'unknown')
+    
+    if reliability in ['no_file', 'read_error']:
+        print(f"  R-hat: Cannot compute ({reliability})")
+        return False
+    
+    if reliability == 'insufficient':
+        effective = gr_result.get('effective_samples', 0)
+        print(f"  R-hat: Insufficient samples ({effective} < {MIN_SAMPLES_PER_CHAIN_MINIMUM})")
+        return False
+    
+    # Compute summary statistics
+    valid_rhats = [v for v in r_hat.values() if not np.isnan(v)]
+    if not valid_rhats:
+        print(f"  R-hat: No valid values")
+        return False
+    
+    max_rhat = max(valid_rhats)
+    n_converged = sum(1 for v in valid_rhats if v < threshold)
+    n_total = len(valid_rhats)
+    
+    # Determine status
+    if max_rhat < 1.01:
+        status = "✓✓ Excellent"
+    elif max_rhat < 1.05:
+        status = "✓ Good"
+    elif max_rhat < 1.1:
+        status = "~ Acceptable"
+    elif max_rhat < 1.2:
+        status = "⚠ Borderline"
+    else:
+        status = "✗ Not converged"
+    
+    print(f"  R-hat ({method}): max={max_rhat:.3f} {status}")
+    print(f"  Converged: {n_converged}/{n_total} parameters (R-hat < {threshold})")
+    
+    if reliability == 'marginal':
+        print(f"  ⚠ Marginal sample size - R-hat estimates may be noisy")
+    
+    return max_rhat < threshold
+
+# %%
+# Helper function to run a single PyDREAM calibration
+def run_pydream_calibration(obj_name, objective_func):
+    """
+    Run PyDREAM calibration for a single objective function.
+    
+    Returns the result and report, or loads from disk if already exists.
+    """
+    result_file = PYDREAM_RESULTS_DIR / f'410734_pydream_{obj_name.lower()}.pkl'
+    progress_file = PYDREAM_RESULTS_DIR / f'progress_{obj_name.lower()}'
+    
+    print("=" * 60)
+    print(f"PyDREAM CALIBRATION: {obj_name}")
+    print("=" * 60)
+    
+    # Check if already exists
+    if result_file.exists():
+        print(f"Loading existing result: {result_file.name}")
+        report = CalibrationReport.load(str(result_file))
+        result = report.result
+        print(f"✓ Loaded (Best objective: {result.best_objective:.4f})")
+        if hasattr(result, 'actual_objective_value'):
+            print(f"  Actual {obj_name}: {result.actual_objective_value:.4f}")
+        
+        # Compute R-hat from progress file if it exists
+        param_names = list(result.best_parameters.keys())
+        gr_result = compute_gelman_rubin_from_progress(progress_file, param_names, PYDREAM_CHAINS)
+        print_rhat_summary(gr_result, PYDREAM_CONVERGENCE_THRESHOLD)
+        
+        return result, report
+    
+    if not PYDREAM_AVAILABLE:
+        print("✗ PyDREAM not available!")
+        return None, None
+    
+    # Get likelihood transform
+    likelihood_transform = LIKELIHOOD_TRANSFORM_MAPPING.get(obj_name, 'sqrt')
+    likelihood = TransformedGaussianLikelihood(likelihood_transform)
+    
+    print(f"Objective: {obj_name}")
+    print(f"Likelihood: TransformedGaussianLikelihood('{likelihood_transform}')")
+    print(f"Flow emphasis: {likelihood.flow_emphasis}")
+    print(f"Config: {PYDREAM_ITERATIONS} iter × {PYDREAM_CHAINS} chains")
+    print(f"Monitor: tail -f {progress_file}.csv")
+    print("-" * 60)
+    
+    # Create runner
+    runner = CalibrationRunner(
+        model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
+        inputs=cal_inputs,
+        observed=cal_observed,
+        objective=likelihood,
+        warmup_period=WARMUP_DAYS
+    )
+    
+    start_time = time.time()
+    
+    try:
+        result = runner.run_pydream(
+            n_iterations=PYDREAM_ITERATIONS,
+            n_chains=PYDREAM_CHAINS,
+            multitry=PYDREAM_MULTITRY,
+            snooker=PYDREAM_SNOOKER,
+            DEpairs=PYDREAM_DEPAIRS,
+            parallel=True,
+            adapt_crossover=PYDREAM_ADAPT_CROSSOVER,
+            adapt_gamma=PYDREAM_ADAPT_GAMMA,
+            verbose=True,
+            nverbose=100,
+            dbname=str(progress_file),
+            hardboundaries=True,
+            convergence_check=True,
+            convergence_threshold=PYDREAM_CONVERGENCE_THRESHOLD
         )
         
-        # Run PyDREAM calibration
-        # Progress file for external monitoring: tail -f <progress_file>.csv
-        progress_file = PYDREAM_RESULTS_DIR / f'progress_{name.lower()}'
-        print(f"  Config: {PYDREAM_ITERATIONS} iter × {PYDREAM_CHAINS} chains (parallel)")
-        print(f"  Progress file: {progress_file}.csv")
-        print(f"  Monitor with: tail -f {progress_file}.csv")
-        start_time = time.time()
+        elapsed = time.time() - start_time
+        print("-" * 60)
+        print(f"✓ Completed in {elapsed:.1f}s")
+        print(f"Best log-likelihood: {result.best_objective:.4f}")
         
-        try:
-            result = runner.run_pydream(
-                n_iterations=PYDREAM_ITERATIONS,
-                n_chains=PYDREAM_CHAINS,
-                multitry=PYDREAM_MULTITRY,
-                snooker=PYDREAM_SNOOKER,  # Snooker probability for mode jumping
-                parallel=True,            # Enable multiprocessing for parallel chains
-                adapt_crossover=False,    # Disabled due to PyDREAM bug
-                adapt_gamma=PYDREAM_ADAPT_GAMMA,  # Adaptive gamma for step size
-                DEpairs=PYDREAM_DEPAIRS, # DE pairs for exploration
-                verbose=True,
-                nverbose=100,             # Print progress every 100 iterations
-                dbname=str(progress_file),  # CSV progress tracking
-                hardboundaries=True,      # Enforce parameter bounds
-                convergence_check=True,   # Calculate Gelman-Rubin diagnostics
-                convergence_threshold=PYDREAM_CONVERGENCE_THRESHOLD  # GR < 1.2
-            )
-            
-            elapsed = time.time() - start_time
-            print(f"  ✓ Completed in {elapsed:.1f}s")
-            print(f"  Best log-likelihood: {result.best_objective:.4f}")
-            
-            # Calculate the actual objective function value (NSE/KGE/etc.) for the best parameters
-            # This allows fair comparison with SCE-UA results
-            eval_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-            eval_model.set_parameters(result.best_parameters)
-            eval_model.reset()
-            sim_output = eval_model.run(cal_inputs)
-            sim_values = sim_output['runoff'].values[WARMUP_DAYS:]
-            obs_values = cal_observed[WARMUP_DAYS:]
-            
-            # Evaluate with the original objective function
-            actual_obj_value = objective(obs_values, sim_values)
-            print(f"  Actual {name}: {actual_obj_value:.4f}")
-            
-            # Store the actual objective value in result for comparison
-            result.actual_objective_value = actual_obj_value
-            result.objective_name = name
-            
-            # Check convergence
-            if 'gelman_rubin' in result.convergence_diagnostics:
-                gr_vals = result.convergence_diagnostics['gelman_rubin']
-                max_gr = max(gr_vals.values())
-                converged = result.convergence_diagnostics.get('converged', False)
-                status = "✓ Converged" if converged else f"⚠ Max R-hat: {max_gr:.3f}"
-                print(f"  Convergence: {status}")
-            
-            # Save result
-            report = runner.create_report(result, catchment_info={
-                'name': 'Queanbeyan River', 
-                'gauge_id': '410734', 
-                'area_km2': CATCHMENT_AREA_KM2
-            })
-            report.save(str(result_file.with_suffix('')))
-            
-            pydream_results[name] = result
-            pydream_reports[name] = report
-            
-        except Exception as e:
-            print(f"  ✗ Failed: {e}")
-            continue
-    
-    total_elapsed = time.time() - total_start
-    print("\n" + "=" * 70)
-    print(f"ALL CALIBRATIONS COMPLETE")
-    print(f"Total time: {total_elapsed/60:.1f} minutes")
-    print(f"Successful: {len(pydream_results)}/{len(objectives)}")
-    print("=" * 70)
+        # Calculate actual objective value
+        eval_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+        eval_model.set_parameters(result.best_parameters)
+        eval_model.reset()
+        sim_output = eval_model.run(cal_inputs)
+        sim_values = sim_output['runoff'].values[WARMUP_DAYS:]
+        obs_values = cal_observed[WARMUP_DAYS:]
+        
+        actual_obj_value = objective_func(obs_values, sim_values)
+        print(f"Actual {obj_name}: {actual_obj_value:.4f}")
+        
+        result.actual_objective_value = actual_obj_value
+        result.objective_name = obj_name
+        
+        # Compute R-hat using same implementation as Notebook 08
+        param_names = list(result.best_parameters.keys())
+        gr_result = compute_gelman_rubin_from_progress(progress_file, param_names, PYDREAM_CHAINS)
+        print_rhat_summary(gr_result, PYDREAM_CONVERGENCE_THRESHOLD)
+        
+        # Store R-hat in result for later analysis
+        result.gelman_rubin_results = gr_result
+        
+        # Save
+        report = runner.create_report(result, catchment_info={
+            'name': 'Queanbeyan River', 
+            'gauge_id': '410734', 
+            'area_km2': CATCHMENT_AREA_KM2
+        })
+        report.save(str(result_file.with_suffix('')))
+        print(f"✓ Saved to: {result_file}")
+        
+        return result, report
+        
+    except Exception as e:
+        print(f"✗ Failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None
+
+# %% [markdown]
+# ### Calibration 1/13: NSE (High-flow emphasis)
+
+# %%
+result, report = run_pydream_calibration('NSE', objectives['NSE'])
+if result: pydream_results['NSE'] = result; pydream_reports['NSE'] = report
+
+# %% [markdown]
+# ### Calibration 2/13: LogNSE (Low-flow emphasis)
+
+# %%
+result, report = run_pydream_calibration('LogNSE', objectives['LogNSE'])
+if result: pydream_results['LogNSE'] = result; pydream_reports['LogNSE'] = report
+
+# %% [markdown]
+# ### Calibration 3/13: InvNSE (Very low-flow emphasis)
+
+# %%
+result, report = run_pydream_calibration('InvNSE', objectives['InvNSE'])
+if result: pydream_results['InvNSE'] = result; pydream_reports['InvNSE'] = report
+
+# %% [markdown]
+# ### Calibration 4/13: SqrtNSE (Balanced emphasis)
+
+# %%
+result, report = run_pydream_calibration('SqrtNSE', objectives['SqrtNSE'])
+if result: pydream_results['SqrtNSE'] = result; pydream_reports['SqrtNSE'] = report
+
+# %% [markdown]
+# ### Calibration 5/13: SDEB (Balanced + FDC)
+
+# %%
+result, report = run_pydream_calibration('SDEB', objectives['SDEB'])
+if result: pydream_results['SDEB'] = result; pydream_reports['SDEB'] = report
+
+# %% [markdown]
+# ### Calibration 6/13: KGE (High-flow emphasis)
+
+# %%
+result, report = run_pydream_calibration('KGE', objectives['KGE'])
+if result: pydream_results['KGE'] = result; pydream_reports['KGE'] = report
+
+# %% [markdown]
+# ### Calibration 7/13: KGE_inv (Very low-flow emphasis)
+
+# %%
+result, report = run_pydream_calibration('KGE_inv', objectives['KGE_inv'])
+if result: pydream_results['KGE_inv'] = result; pydream_reports['KGE_inv'] = report
+
+# %% [markdown]
+# ### Calibration 8/13: KGE_sqrt (Balanced emphasis)
+
+# %%
+result, report = run_pydream_calibration('KGE_sqrt', objectives['KGE_sqrt'])
+if result: pydream_results['KGE_sqrt'] = result; pydream_reports['KGE_sqrt'] = report
+
+# %% [markdown]
+# ### Calibration 9/13: KGE_log (Low-flow emphasis)
+
+# %%
+result, report = run_pydream_calibration('KGE_log', objectives['KGE_log'])
+if result: pydream_results['KGE_log'] = result; pydream_reports['KGE_log'] = report
+
+# %% [markdown]
+# ### Calibration 10/13: KGE_np (Robust high-flow)
+
+# %%
+result, report = run_pydream_calibration('KGE_np', objectives['KGE_np'])
+if result: pydream_results['KGE_np'] = result; pydream_reports['KGE_np'] = report
+
+# %% [markdown]
+# ### Calibration 11/13: KGE_np_inv (Robust very low-flow)
+
+# %%
+result, report = run_pydream_calibration('KGE_np_inv', objectives['KGE_np_inv'])
+if result: pydream_results['KGE_np_inv'] = result; pydream_reports['KGE_np_inv'] = report
+
+# %% [markdown]
+# ### Calibration 12/13: KGE_np_sqrt (Robust balanced)
+
+# %%
+result, report = run_pydream_calibration('KGE_np_sqrt', objectives['KGE_np_sqrt'])
+if result: pydream_results['KGE_np_sqrt'] = result; pydream_reports['KGE_np_sqrt'] = report
+
+# %% [markdown]
+# ### Calibration 13/13: KGE_np_log (Robust low-flow)
+
+# %%
+result, report = run_pydream_calibration('KGE_np_log', objectives['KGE_np_log'])
+if result: pydream_results['KGE_np_log'] = result; pydream_reports['KGE_np_log'] = report
+
+# %% [markdown]
+# ### Calibration Summary
+
+# %%
+print("=" * 60)
+print("PYDREAM CALIBRATION SUMMARY")
+print("=" * 60)
+print(f"\nCompleted: {len(pydream_results)}/13 calibrations")
+print("\nResults:")
+for name in objectives.keys():
+    if name in pydream_results:
+        result = pydream_results[name]
+        actual = getattr(result, 'actual_objective_value', result.best_objective)
+        print(f"  ✓ {name:<12}: {actual:.4f}")
+    else:
+        print(f"  - {name:<12}: Not available")
 
 # %% [markdown]
 # ---
