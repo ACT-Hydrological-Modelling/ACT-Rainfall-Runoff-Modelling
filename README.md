@@ -55,14 +55,21 @@ Whether you're forecasting floods, managing water supply systems, assessing clim
 
 - **Bayesian MCMC** — DREAM algorithm via SPOTPY, MT-DREAM(ZS) via PyDREAM
 - **Global Optimization** — SCE-UA, Differential Evolution, Dual Annealing
-- **Multiple Objectives** — NSE, KGE (2009/2012/2021), RMSE, MAE, PBIAS, FDC metrics
+- **Multiple Objectives** — NSE, KGE (2009/2012/2021), RMSE, MAE, PBIAS, FDC metrics, APEX
 - **Flow Transformations** — sqrt, log, inverse transforms for low-flow emphasis
 - **Composite Objectives** — Weighted combinations for multi-objective calibration
+
+### Channel Routing
+
+- **Nonlinear Muskingum** — Storage-discharge routing with configurable sub-reaches
+- **RoutedModel Wrapper** — Seamlessly combines RR models with routing for calibration
+- **Automatic Parameter Integration** — Routing parameters included in calibration bounds
 
 ### Objective Functions Module (`pyrrm.objectives`)
 
 - **Traditional Metrics** — NSE, RMSE, MAE, PBIAS, SDEB
 - **KGE Variants** — 2009, 2012, 2021 formulations; non-parametric options
+- **APEX** — Novel adaptive process-explicit objective extending SDEB with dynamics and lag multipliers
 - **Flow Transformations** — sqrt, log, inverse for low-flow emphasis
 - **Composite Objectives** — Weighted combinations, factory functions
 - **FDC Metrics** — Flow duration curve segment-based evaluation
@@ -204,6 +211,31 @@ sensitivity = analysis.run(n_samples=1024)
 print(sensitivity.summary())
 ```
 
+### Adding Channel Routing
+
+```python
+from pyrrm.models import Sacramento
+from pyrrm.routing import NonlinearMuskingumRouter, RoutedModel
+from pyrrm.calibration import CalibrationRunner
+from pyrrm.objectives import NSE
+
+# Create rainfall-runoff model
+rr_model = Sacramento()
+
+# Create router with initial parameters
+router = NonlinearMuskingumRouter(K=5.0, m=0.8, n_subreaches=3)
+
+# Combine into routed model
+model = RoutedModel(rr_model, router)
+
+# Run simulation (routing applied automatically)
+results = model.run(inputs)
+
+# Calibrate with routing - parameters are automatically combined
+runner = CalibrationRunner(model, inputs, observed, objective=NSE())
+result = runner.run_differential_evolution()  # Calibrates both RR and routing params
+```
+
 ### Visualization
 
 ```python
@@ -233,7 +265,7 @@ fig.savefig('hydrograph.png', dpi=300, bbox_inches='tight')
 The **Sacramento** model is a complex, process-based conceptual model developed by the U.S. National Weather Service. It represents the catchment as a series of interconnected soil moisture zones, each with distinct hydrological behavior.
 
 **Key Characteristics:**
-- 17+ calibratable parameters
+- 22 calibratable parameters (can be reduced with fixed parameters)
 - Upper and lower soil zones with tension and free water components
 - Explicit representation of impervious area runoff
 - Separate fast (interflow) and slow (baseflow) response pathways
@@ -375,6 +407,31 @@ pyrrm includes a comprehensive `objectives` module with traditional metrics, KGE
 | `KGE` | Kling-Gupta Efficiency | 2009, 2012, 2021 |
 | `KGENonParametric` | Non-parametric KGE (Spearman) | - |
 
+**APEX (Adaptive Process-Explicit):**
+
+A novel objective function that extends SDEB with dynamics and lag penalty multipliers:
+
+```python
+from pyrrm.objectives import APEX
+
+# APEX with dynamics multiplier (penalizes gradient mismatch)
+apex = APEX(
+    alpha=0.1,              # Weight for chronological term
+    dynamics_strength=0.5,  # κ: strength of dynamics penalty
+    regime_emphasis='uniform'  # Flow regime weighting
+)
+
+# Use in calibration
+runner = CalibrationRunner(model, inputs, observed, objective=apex)
+```
+
+APEX formula: `APEX = [α × E_chron + (1-α) × E_ranked] × BiasMultiplier × DynamicsMultiplier × [LagMultiplier]`
+
+Novel contributions:
+- **Dynamics Multiplier**: Penalizes mismatch in gradient/rate-of-change patterns
+- **Lag Multiplier** (optional): Penalizes systematic timing offsets
+- **Regime-weighted ranked term**: Continuous flow-regime weighting
+
 **Flow Transformations:**
 
 Apply transformations to shift emphasis between high and low flows:
@@ -454,6 +511,10 @@ pyrrm/
 │   └── utils/                 # Shared utilities
 │       ├── unit_hydrograph.py # Unit hydrograph convolution
 │       └── s_curves.py        # S-curve interpolation
+├── routing/                   # Channel routing methods
+│   ├── base.py                # BaseRouter abstract class
+│   ├── muskingum.py           # NonlinearMuskingumRouter
+│   └── routed_model.py        # RoutedModel wrapper for RR + routing
 ├── objectives/                # Comprehensive objective functions library
 │   ├── core/                  # Base classes and utilities
 │   │   ├── base.py            # ObjectiveFunction abstract class
@@ -462,6 +523,7 @@ pyrrm/
 │   ├── metrics/               # Traditional and KGE metrics
 │   │   ├── traditional.py     # NSE, RMSE, MAE, PBIAS, SDEB
 │   │   ├── kge.py             # KGE (2009/2012/2021), KGENonParametric
+│   │   ├── apex.py            # APEX adaptive process-explicit objective
 │   │   └── correlation.py     # Pearson, Spearman correlation
 │   ├── transformations/       # Flow transformations
 │   │   └── flow_transforms.py # sqrt, log, inverse, power, boxcox
@@ -477,9 +539,11 @@ pyrrm/
 │       └── factories.py       # kge_hilo, comprehensive_objective
 ├── calibration/               # Calibration framework
 │   ├── runner.py              # Unified CalibrationRunner interface
+│   ├── report.py              # CalibrationReport for saving/loading results
 │   ├── spotpy_adapter.py      # SPOTPY DREAM/SCE-UA adapter
 │   ├── pydream_adapter.py     # PyDREAM MT-DREAM(ZS) adapter
 │   ├── scipy_adapter.py       # SciPy optimization adapter
+│   ├── sceua_adapter.py       # Direct SCE-UA implementation
 │   └── objective_functions.py # Legacy compatibility layer
 ├── analysis/                  # Post-calibration analysis
 │   ├── sensitivity.py         # Sobol global sensitivity analysis
@@ -487,6 +551,7 @@ pyrrm/
 ├── visualization/             # Plotting functions
 │   ├── model_plots.py         # Hydrographs, FDC, scatter plots
 │   ├── calibration_plots.py   # Parameter traces, posteriors
+│   ├── report_plots.py        # Calibration report visualizations
 │   └── sensitivity_plots.py   # Sobol indices visualization
 ├── data/                      # Data handling utilities
 │   ├── input_handler.py       # Input data loading and validation
@@ -523,31 +588,38 @@ See [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) for detailed verificati
 
 ### Tutorial Notebooks
 
-The `notebooks/` directory contains a series of educational notebooks that guide you through pyrrm's capabilities:
+The `notebooks/` directory contains a comprehensive series of educational notebooks that guide you through pyrrm's capabilities:
 
-| Notebook | Description | Best For |
-|----------|-------------|----------|
-| [01_sacramento_verification](notebooks/01_sacramento_verification.ipynb) | Verification of the Sacramento model against C# and SOURCE benchmarks | Understanding implementation correctness |
-| [02_calibration_quickstart](notebooks/02_calibration_quickstart.ipynb) | Beginner-friendly introduction to loading data and calibrating a model | **New users start here** |
-| [03_objective_functions](notebooks/03_objective_functions.ipynb) | Deep dive into objective functions and their impact on calibration | Understanding what to optimize |
-| [04_algorithm_comparison](notebooks/04_algorithm_comparison.ipynb) | Compare MCMC vs optimization algorithms (DREAM, PyDREAM, SCE-UA, SciPy) | Choosing the right algorithm |
-| [05_calibration_monitor](notebooks/05_calibration_monitor.ipynb) | Real-time monitoring of ongoing calibrations | Long-running MCMC jobs |
-| [06_model_comparison](notebooks/06_model_comparison.ipynb) | Compare Sacramento, GR4J, GR5J, GR6J model structures | Choosing the right model |
+| # | Notebook | Description | Best For |
+|---|----------|-------------|----------|
+| 01 | [sacramento_verification](notebooks/01_sacramento_verification.ipynb) | Verification against C# and SOURCE benchmarks | Implementation correctness |
+| 02 | [calibration_quickstart](notebooks/02_calibration_quickstart.ipynb) | **Start here!** Loading data and calibrating models | **New users** |
+| 03 | [routing_quickstart](notebooks/03_routing_quickstart.ipynb) | Channel routing with Nonlinear Muskingum | Adding routing to models |
+| 04 | [objective_functions](notebooks/04_objective_functions.ipynb) | Deep dive into 13 objective functions | Understanding what to optimize |
+| 05 | [apex_complete_guide](notebooks/05_apex_complete_guide.ipynb) | APEX objective function research & evaluation | Advanced calibration |
+| 06 | [algorithm_comparison](notebooks/06_algorithm_comparison.ipynb) | DREAM, PyDREAM, SCE-UA, SciPy comparison | Choosing algorithms |
+| 07 | [model_comparison](notebooks/07_model_comparison.ipynb) | GR4J, GR5J, GR6J vs Sacramento (13 objectives) | Choosing models |
+| 08 | [calibration_monitor](notebooks/08_calibration_monitor.ipynb) | Real-time monitoring of MCMC calibrations | Long-running jobs |
+| 09 | [calibration_reports](notebooks/09_calibration_reports.ipynb) | Working with saved CalibrationReport objects | Post-processing |
 
 #### Learning Paths
 
-**Quick Start (1 hour):**
+**Quick Start (1-2 hours):**
 1. [02_calibration_quickstart](notebooks/02_calibration_quickstart.ipynb) - Get a working calibration
 
-**Complete Understanding (4-6 hours):**
+**Complete Understanding (6-8 hours):**
 1. [02_calibration_quickstart](notebooks/02_calibration_quickstart.ipynb) - Fundamentals
-2. [03_objective_functions](notebooks/03_objective_functions.ipynb) - What to optimize
-3. [04_algorithm_comparison](notebooks/04_algorithm_comparison.ipynb) - How to optimize
-4. [06_model_comparison](notebooks/06_model_comparison.ipynb) - Which model to use
-5. [05_calibration_monitor](notebooks/05_calibration_monitor.ipynb) - Monitor long runs
+2. [04_objective_functions](notebooks/04_objective_functions.ipynb) - What to optimize
+3. [06_algorithm_comparison](notebooks/06_algorithm_comparison.ipynb) - How to optimize
+4. [07_model_comparison](notebooks/07_model_comparison.ipynb) - Which model to use
+5. [03_routing_quickstart](notebooks/03_routing_quickstart.ipynb) - Adding channel routing
+6. [08_calibration_monitor](notebooks/08_calibration_monitor.ipynb) - Monitor long runs
 
 **Model Selection:**
-- [06_model_comparison](notebooks/06_model_comparison.ipynb) - Compare GR4J, GR5J, GR6J, Sacramento
+- [07_model_comparison](notebooks/07_model_comparison.ipynb) - Compare GR4J, GR5J, GR6J, Sacramento across 13 objectives
+
+**Advanced Calibration:**
+- [05_apex_complete_guide](notebooks/05_apex_complete_guide.ipynb) - Research-focused APEX evaluation with 6 research questions
 
 **Verification/Validation:**
 - [01_sacramento_verification](notebooks/01_sacramento_verification.ipynb) - Implementation correctness
