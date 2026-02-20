@@ -56,5 +56,11 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Generated figures
+figures/
+
+# Test data (calibration reports, network test outputs, etc.)
+test_data/
+
 # Benchmark outputs (if regenerated)
 benchmark/*.cache
