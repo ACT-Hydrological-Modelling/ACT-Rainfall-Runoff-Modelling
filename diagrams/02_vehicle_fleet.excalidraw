@@ -1,0 +1,160 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "pyrrm-executive-summary",
+  "elements": [
+    {
+      "type": "text",
+      "x": 200,
+      "y": 20,
+      "text": "THE MODEL FLEET",
+      "fontSize": 28,
+      "fontFamily": 1,
+      "strokeColor": "#495057",
+      "id": "title"
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 80,
+      "width": 200,
+      "height": 200,
+      "strokeColor": "#1971c2",
+      "backgroundColor": "#d0ebff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "gr4j_box"
+    },
+    {
+      "type": "text",
+      "x": 70,
+      "y": 90,
+      "text": "GR4J\n━━━━━━━━━━━\n4 parameters\n\nCompact Sedan\n\n• Production store\n• Routing store\n• 2 unit hydrographs",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#1971c2",
+      "id": "gr4j_text"
+    },
+    {
+      "type": "rectangle",
+      "x": 280,
+      "y": 80,
+      "width": 200,
+      "height": 200,
+      "strokeColor": "#2f9e44",
+      "backgroundColor": "#b2f2bb",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "gr5j_box"
+    },
+    {
+      "type": "text",
+      "x": 300,
+      "y": 90,
+      "text": "GR5J\n━━━━━━━━━━━\n5 parameters\n\nSUV\n\n• GR4J base\n• + Exchange\n  threshold (X5)",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#2f9e44",
+      "id": "gr5j_text"
+    },
+    {
+      "type": "rectangle",
+      "x": 510,
+      "y": 80,
+      "width": 200,
+      "height": 200,
+      "strokeColor": "#e8590c",
+      "backgroundColor": "#ffd8a8",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "gr6j_box"
+    },
+    {
+      "type": "text",
+      "x": 530,
+      "y": 90,
+      "text": "GR6J\n━━━━━━━━━━━\n6 parameters\n\nPickup Truck\n\n• GR5J base\n• + Exponential\n  store (X6)",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#e8590c",
+      "id": "gr6j_text"
+    },
+    {
+      "type": "rectangle",
+      "x": 740,
+      "y": 80,
+      "width": 200,
+      "height": 200,
+      "strokeColor": "#862e9c",
+      "backgroundColor": "#e5dbff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "sac_box"
+    },
+    {
+      "type": "text",
+      "x": 760,
+      "y": 90,
+      "text": "Sacramento\n━━━━━━━━━━━\n22 parameters\n\nArticulated Truck\n\n• Upper zone (3)\n• Lower zone (4)\n• Percolation (3)\n• + 12 more",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#862e9c",
+      "id": "sac_text"
+    },
+    {
+      "type": "arrow",
+      "x": 250,
+      "y": 180,
+      "width": 30,
+      "height": 0,
+      "strokeColor": "#495057",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "arrow_4_5",
+      "points": [[0, 0], [30, 0]]
+    },
+    {
+      "type": "arrow",
+      "x": 480,
+      "y": 180,
+      "width": 30,
+      "height": 0,
+      "strokeColor": "#495057",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "arrow_5_6",
+      "points": [[0, 0], [30, 0]]
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 310,
+      "text": "← Simpler, faster, fewer data needed                    More detail, harder to calibrate →",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "strokeColor": "#868e96",
+      "id": "spectrum_label"
+    },
+    {
+      "type": "line",
+      "x": 50,
+      "y": 300,
+      "width": 890,
+      "height": 0,
+      "strokeColor": "#868e96",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "spectrum_line",
+      "points": [[0, 0], [890, 0]]
+    }
+  ],
+  "appState": {
+    "gridSize": null,
+    "viewBackgroundColor": "#ffffff"
+  },
+  "files": {}
+}

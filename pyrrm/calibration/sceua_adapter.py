@@ -1,12 +1,10 @@
 """
-Direct SCE-UA (Shuffled Complex Evolution - University of Arizona) adapter for pyrrm.
+SCE-UA (Shuffled Complex Evolution - University of Arizona) adapter for pyrrm.
 
-This module provides calibration using a standalone SCE-UA implementation,
-offering an alternative to the SpotPy-based SCE-UA in spotpy_adapter.py.
-
-Key advantages over SpotPy SCE-UA:
-- No external dependency (algorithm is vendored)
-- More configuration options (PCA recovery, multiple convergence criteria)
+This module provides calibration using a vendored SCE-UA implementation:
+- No external dependency (algorithm is fully vendored)
+- PCA recovery for lost dimensions (Chu et al., 2010)
+- Multiple convergence criteria
 - Parallel evaluation via ThreadPoolExecutor
 - Initial parameter sets support (x0)
 - All evaluations tracked automatically (xv, funv arrays)
@@ -268,10 +266,10 @@ def run_sceua_direct(
     """
     Run SCE-UA calibration using the direct implementation.
     
-    This is an alternative to the SpotPy-based SCE-UA (run_sceua in spotpy_adapter).
-    Key advantages:
-    - No SpotPy dependency required
-    - More configuration options (PCA recovery, convergence criteria)
+    Key features:
+    - No external dependency (vendored implementation)
+    - PCA recovery for lost dimensions
+    - Multiple convergence criteria
     - Parallel evaluation support via ThreadPoolExecutor
     - Initial parameter sets can be provided
     

@@ -174,7 +174,7 @@
 # │
 # ├── calibration/         ← Optimization algorithms
 # │   ├── runner.py        ← CalibrationRunner (unified interface)
-# │   └── ...              ← SpotPy, PyDREAM, SciPy adapters
+# │   └── ...              ← PyDREAM, SCE-UA, SciPy adapters
 # │
 # ├── objectives/          ← How to measure "goodness of fit"
 # │   ├── metrics/         ← NSE, KGE, RMSE, etc.
@@ -225,7 +225,7 @@ print("\nLibraries loaded successfully!")
 # %%
 # Import pyrrm components
 from pyrrm.models.sacramento import Sacramento
-from pyrrm.calibration import CalibrationRunner, SPOTPY_AVAILABLE, PYDREAM_AVAILABLE
+from pyrrm.calibration import CalibrationRunner, PYDREAM_AVAILABLE
 
 # Reload modules to pick up any code changes (useful during development)
 import importlib
@@ -240,8 +240,8 @@ print(f"  - Sacramento model")
 print(f"  - CalibrationRunner")
 print(f"  - Objective functions (NSE, KGE)")
 print(f"\nAvailable calibration backends:")
-print(f"  - SpotPy (DREAM, SCE-UA): {SPOTPY_AVAILABLE}")
-print(f"  - PyDREAM: {PYDREAM_AVAILABLE}")
+print(f"  - SCE-UA (direct, vendored): always available")
+print(f"  - PyDREAM (MT-DREAM(ZS)): {PYDREAM_AVAILABLE}")
 
 # %% [markdown]
 # ---
@@ -621,8 +621,7 @@ print(f"Warmup period: {WARMUP_DAYS} days")
 # |-----------|------|-------|--------------|----------|
 # | **SCE-UA Direct** | Optimization | Fast | No | Quick calibration (recommended) |
 # | **SciPy DE** | Optimization | Fast | No | Simple cases |
-# | **SpotPy DREAM** | MCMC | Slow | Yes | Full uncertainty |
-# | **PyDREAM** | MCMC | Slow | Yes | Complex problems |
+# | **PyDREAM** | MCMC | Slow | Yes | Full uncertainty, complex problems |
 #
 # For this quickstart, we'll use **SCE-UA Direct** - a vendored implementation
 # of the Shuffled Complex Evolution algorithm. This is a classic hydrology

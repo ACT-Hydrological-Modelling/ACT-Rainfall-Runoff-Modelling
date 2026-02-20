@@ -112,14 +112,18 @@ class ObjectiveFunction(ABC):
         """Allow calling instance directly."""
         return self.calculate(simulated, observed)
     
-    def for_spotpy(self, simulated: np.ndarray, observed: np.ndarray) -> float:
+    def for_calibration_legacy(self, simulated: np.ndarray, observed: np.ndarray) -> float:
         """
-        Return value suitable for SPOTPY (always maximize).
+        Return value oriented for maximisation-based calibration.
         
-        SPOTPY always maximizes, so we negate minimization objectives.
+        Maximisation objectives return the value as-is; minimisation
+        objectives are negated so that all optimisers can maximise.
         """
         value = self.calculate(simulated, observed)
         return value if self.maximize else -value
+
+    # Backward-compatible alias
+    for_spotpy = for_calibration_legacy
 
 
 # =============================================================================
@@ -330,7 +334,7 @@ class GaussianLikelihood(ObjectiveFunction):
     Gaussian likelihood with measurement error integrated out.
     
     This is the recommended likelihood function for DREAM calibration.
-    Based on SpotPy's gaussianLikelihoodMeasErrorOut:
+    Implements the Gaussian likelihood with measurement error integrated out:
     
         p = -n/2 * log(sum(e_t(x)^2))
     
@@ -374,13 +378,11 @@ class GaussianLikelihood(ObjectiveFunction):
         n = len(obs)
         return -n / 2.0 * np.log(sum_squared_error)
     
-    def for_spotpy(self, simulated: np.ndarray, observed: np.ndarray) -> float:
-        """
-        Return value suitable for SPOTPY DREAM.
-        
-        Already in log-likelihood form, directly usable by DREAM.
-        """
+    def for_calibration_legacy(self, simulated: np.ndarray, observed: np.ndarray) -> float:
+        """Already in log-likelihood form, directly usable by DREAM."""
         return self.calculate(simulated, observed)
+
+    for_spotpy = for_calibration_legacy
 
 
 class TransformedGaussianLikelihood(ObjectiveFunction):
@@ -388,7 +390,7 @@ class TransformedGaussianLikelihood(ObjectiveFunction):
     Gaussian likelihood with flow transformation for balanced/low-flow emphasis.
     
     This class applies a flow transformation before computing the Gaussian
-    log-likelihood, allowing MCMC calibration (PyDREAM, SpotPy DREAM) to
+    log-likelihood, allowing MCMC calibration (PyDREAM) to
     emphasize different flow regimes - analogous to transformed NSE/KGE.
     
     Formula
@@ -624,13 +626,11 @@ class TransformedGaussianLikelihood(ObjectiveFunction):
         n = len(obs)
         return -n / 2.0 * np.log(sum_squared_error)
     
-    def for_spotpy(self, simulated: np.ndarray, observed: np.ndarray) -> float:
-        """
-        Return value suitable for SPOTPY DREAM.
-        
-        Already in log-likelihood form, directly usable by DREAM.
-        """
+    def for_calibration_legacy(self, simulated: np.ndarray, observed: np.ndarray) -> float:
+        """Already in log-likelihood form, directly usable by DREAM."""
         return self.calculate(simulated, observed)
+
+    for_spotpy = for_calibration_legacy
     
     def __getstate__(self):
         """Support pickling for multiprocessing."""
@@ -959,9 +959,9 @@ def is_new_interface(objective) -> bool:
     - direction attribute ('maximize' or 'minimize')
     - for_calibration(simulated, observed) method
     
-    The old interface has:
+    The legacy interface has:
     - maximize property (bool)
-    - for_spotpy(simulated, observed) method
+    - for_calibration_legacy(simulated, observed) method
     
     Args:
         objective: Objective function to check
@@ -997,7 +997,7 @@ def get_calibration_value(objective, simulated: np.ndarray, observed: np.ndarray
     Get calibration-ready value from either old or new interface.
     
     This utility function handles both interfaces, returning a value
-    suitable for maximization-based optimization (like SPOTPY).
+    suitable for maximisation-based optimisation.
     
     Args:
         objective: Objective function (old or new interface)
@@ -1005,14 +1005,12 @@ def get_calibration_value(objective, simulated: np.ndarray, observed: np.ndarray
         observed: Observed values
         
     Returns:
-        Objective value suitable for maximization
+        Objective value suitable for maximisation
     """
     if is_new_interface(objective):
-        # New interface: for_calibration(simulated, observed) returns maximize-ready value
         return objective.for_calibration(simulated, observed)
     else:
-        # Old interface: for_spotpy(simulated, observed)
-        return objective.for_spotpy(simulated, observed)
+        return objective.for_calibration_legacy(simulated, observed)
 
 
 # =============================================================================

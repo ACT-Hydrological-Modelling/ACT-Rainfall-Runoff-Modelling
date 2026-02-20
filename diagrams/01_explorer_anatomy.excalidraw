@@ -1,0 +1,224 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "pyrrm-executive-summary",
+  "elements": [
+    {
+      "type": "ellipse",
+      "x": 300,
+      "y": 50,
+      "width": 300,
+      "height": 400,
+      "strokeColor": "#495057",
+      "backgroundColor": "#e9ecef",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "explorer_body"
+    },
+    {
+      "type": "text",
+      "x": 350,
+      "y": 30,
+      "text": "THE CALIBRATION EXPLORER",
+      "fontSize": 20,
+      "fontFamily": 1,
+      "strokeColor": "#495057",
+      "id": "title"
+    },
+    {
+      "type": "rectangle",
+      "x": 340,
+      "y": 80,
+      "width": 220,
+      "height": 80,
+      "strokeColor": "#e8590c",
+      "backgroundColor": "#ffd8a8",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "brain_box"
+    },
+    {
+      "type": "text",
+      "x": 360,
+      "y": 90,
+      "text": "BRAIN\n(Optimisation Algorithm)",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "strokeColor": "#e8590c",
+      "id": "brain_label"
+    },
+    {
+      "type": "rectangle",
+      "x": 340,
+      "y": 180,
+      "width": 220,
+      "height": 80,
+      "strokeColor": "#2f9e44",
+      "backgroundColor": "#b2f2bb",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "eyes_box"
+    },
+    {
+      "type": "text",
+      "x": 360,
+      "y": 190,
+      "text": "EYES\n(Objective Function)",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "strokeColor": "#2f9e44",
+      "id": "eyes_label"
+    },
+    {
+      "type": "rectangle",
+      "x": 340,
+      "y": 280,
+      "width": 220,
+      "height": 80,
+      "strokeColor": "#1971c2",
+      "backgroundColor": "#d0ebff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "vehicle_box"
+    },
+    {
+      "type": "text",
+      "x": 360,
+      "y": 290,
+      "text": "VEHICLE\n(Rainfall-Runoff Model)",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "strokeColor": "#1971c2",
+      "id": "vehicle_label"
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 180,
+      "width": 200,
+      "height": 80,
+      "strokeColor": "#862e9c",
+      "backgroundColor": "#e5dbff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "terrain_box"
+    },
+    {
+      "type": "text",
+      "x": 70,
+      "y": 190,
+      "text": "TERRAIN\n(Parameter Space)",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "strokeColor": "#862e9c",
+      "id": "terrain_label"
+    },
+    {
+      "type": "rectangle",
+      "x": 650,
+      "y": 180,
+      "width": 200,
+      "height": 80,
+      "strokeColor": "#c92a2a",
+      "backgroundColor": "#ffc9c9",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "scorecard_box"
+    },
+    {
+      "type": "text",
+      "x": 670,
+      "y": 190,
+      "text": "SCORECARD\n(Diagnostic Metrics)",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "strokeColor": "#c92a2a",
+      "id": "scorecard_label"
+    },
+    {
+      "type": "arrow",
+      "x": 250,
+      "y": 220,
+      "width": 90,
+      "height": 0,
+      "strokeColor": "#862e9c",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "arrow_terrain",
+      "points": [[0, 0], [90, 0]]
+    },
+    {
+      "type": "arrow",
+      "x": 560,
+      "y": 220,
+      "width": 90,
+      "height": 0,
+      "strokeColor": "#c92a2a",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "arrow_scorecard",
+      "points": [[0, 0], [90, 0]]
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 280,
+      "text": "More parameters =\nMore dimensions\nto search",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#862e9c",
+      "id": "terrain_note"
+    },
+    {
+      "type": "text",
+      "x": 650,
+      "y": 280,
+      "text": "25 independent judges\neach focused on a\ndifferent flow regime",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#c92a2a",
+      "id": "scorecard_note"
+    },
+    {
+      "type": "text",
+      "x": 620,
+      "y": 90,
+      "text": "SCE-UA = Hill-climber\nPyDREAM = Cartographer",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#e8590c",
+      "id": "brain_note"
+    },
+    {
+      "type": "text",
+      "x": 620,
+      "y": 145,
+      "text": "NSE eyes = peaks\nLog eyes = baseflow\nKGE eyes = trifocals",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#2f9e44",
+      "id": "eyes_note"
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 80,
+      "text": "GR4J = Sedan (4 gears)\nGR6J = Pickup (6 gears)\nSacramento = Truck (22)",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#1971c2",
+      "id": "vehicle_note"
+    }
+  ],
+  "appState": {
+    "gridSize": null,
+    "viewBackgroundColor": "#ffffff"
+  },
+  "files": {}
+}

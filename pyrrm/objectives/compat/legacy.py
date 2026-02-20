@@ -69,13 +69,12 @@ class LegacyObjectiveAdapter(ObjectiveFunction):
         return self._legacy.calculate(sim, obs)
     
     def for_calibration(self, simulated: np.ndarray, observed: np.ndarray) -> float:
-        """
-        Bridge to legacy for_spotpy method if available.
-        """
+        """Bridge to legacy calibration value method."""
+        if hasattr(self._legacy, 'for_calibration_legacy'):
+            return self._legacy.for_calibration_legacy(simulated, observed)
         if hasattr(self._legacy, 'for_spotpy'):
             return self._legacy.for_spotpy(simulated, observed)
         
-        # Fall back to default behavior
         value = self._legacy.calculate(simulated, observed)
         return value if self.direction == 'maximize' else -value
 

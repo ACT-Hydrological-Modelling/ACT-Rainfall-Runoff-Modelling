@@ -53,8 +53,8 @@ Whether you're forecasting floods, managing water supply systems, assessing clim
 
 ### Calibration Framework
 
-- **Bayesian MCMC** — DREAM algorithm via SPOTPY, MT-DREAM(ZS) via PyDREAM
-- **Global Optimization** — SCE-UA, Differential Evolution, Dual Annealing
+- **Bayesian MCMC** — MT-DREAM(ZS) via PyDREAM with multi-try sampling and snooker updates
+- **Global Optimization** — SCE-UA (vendored), Differential Evolution, Dual Annealing
 - **Multiple Objectives** — NSE, KGE (2009/2012/2021), RMSE, MAE, PBIAS, FDC metrics, APEX
 - **Flow Transformations** — sqrt, log, inverse transforms for low-flow emphasis
 - **Composite Objectives** — Weighted combinations for multi-objective calibration
@@ -109,7 +109,7 @@ conda activate pyrrm
 
 # Install dependencies
 pip install numpy pandas scipy matplotlib seaborn plotly
-pip install spotpy pydream SALib  # Optional: calibration libraries
+pip install pydream SALib  # Optional: calibration libraries
 pip install jupytext ipykernel    # Optional: notebook support
 
 # Install pyrrm
@@ -125,7 +125,6 @@ python -m ipykernel install --user --name pyrrm --display-name "Python (pyrrm)"
 |----------|----------|---------|
 | **Core** | numpy, pandas, scipy, matplotlib | Essential functionality |
 | **Visualization** | seaborn, plotly | Enhanced and interactive plotting |
-| **Calibration** | spotpy | DREAM MCMC, SCE-UA optimization |
 | **Calibration** | pydream | MT-DREAM(ZS) advanced MCMC |
 | **Sensitivity** | SALib | Sobol analysis |
 | **Notebooks** | jupytext | Paired notebook workflow |
@@ -380,9 +379,8 @@ pyrrm provides a unified `CalibrationRunner` interface that abstracts away the c
 
 | Method | Algorithm | Library | Strengths |
 |--------|-----------|---------|-----------|
-| `run_dream()` | DREAM MCMC | SPOTPY | Full posterior distributions, uncertainty bounds |
-| `run_pydream()` | MT-DREAM(ZS) | PyDREAM | Multi-try proposals, snooker updates, advanced MCMC |
-| `run_sceua()` | SCE-UA | SPOTPY | Fast global convergence, industry standard |
+| `run_dream()` | MT-DREAM(ZS) | PyDREAM | Full posterior distributions, multi-try proposals, snooker updates |
+| `run_sceua_direct()` | SCE-UA | vendored | Fast global convergence, no external deps, PCA recovery |
 | `run_scipy()` | Differential Evolution | SciPy | Robust, no external dependencies |
 | `run_scipy(method='dual_annealing')` | Dual Annealing | SciPy | Escapes local minima, rugged landscapes |
 
@@ -540,7 +538,6 @@ pyrrm/
 ├── calibration/               # Calibration framework
 │   ├── runner.py              # Unified CalibrationRunner interface
 │   ├── report.py              # CalibrationReport for saving/loading results
-│   ├── spotpy_adapter.py      # SPOTPY DREAM/SCE-UA adapter
 │   ├── pydream_adapter.py     # PyDREAM MT-DREAM(ZS) adapter
 │   ├── scipy_adapter.py       # SciPy optimization adapter
 │   ├── sceua_adapter.py       # Direct SCE-UA implementation
@@ -651,9 +648,6 @@ help(GR4J.run)
 > Le Moine, N. (2008). *Le bassin versant de surface vu par le souterrain: une voie d'amélioration des performances et du réalisme des modèles pluie-débit?* PhD Thesis, Université Pierre et Marie Curie, Paris.
 
 ### Software
-
-**SPOTPY:**
-> Houska, T., Kraft, P., Chamorro-Chavez, A., & Breuer, L. (2015). SPOTting model parameters using a ready-made python package. *PLoS ONE*, 10(12), e0145180. https://doi.org/10.1371/journal.pone.0145180
 
 **SALib:**
 > Herman, J., & Usher, W. (2017). SALib: An open-source Python library for sensitivity analysis. *Journal of Open Source Software*, 2(9), 97. https://doi.org/10.21105/joss.00097

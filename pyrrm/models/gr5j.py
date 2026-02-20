@@ -180,11 +180,11 @@ class GR5J(BaseRainfallRunoffModel):
         X1: Production store capacity [mm] (typical range: 100-1200)
         X2: Groundwater exchange coefficient [mm/d] (typical range: -5 to 3)
         X3: Routing store capacity [mm] (typical range: 20-300)
-        X4: Unit hydrograph time base [d] (typical range: 1.1-2.9)
-        X5: Groundwater exchange threshold [-] (typical range: -4 to 4)
+        X4: Unit hydrograph time base [d] (typical range: 0.5-4.0, effective UH2 base is 2*X4)
+        X5: Groundwater exchange threshold [-] (range: 0-1, per airGR/Le Moine 2008)
     
     Example:
-        >>> model = GR5J({'X1': 350, 'X2': 0, 'X3': 90, 'X4': 1.7, 'X5': 0.1})
+        >>> model = GR5J({'X1': 350, 'X2': 0, 'X3': 90, 'X4': 1.7, 'X5': 0.5})
         >>> results = model.run(input_data)
     """
     
@@ -258,15 +258,15 @@ class GR5J(BaseRainfallRunoffModel):
                 name='X4',
                 default=1.7,
                 min_bound=0.5,
-                max_bound=10.0,
+                max_bound=4.0,
                 description='Unit hydrograph time base',
                 unit='d'
             ),
             ModelParameter(
                 name='X5',
-                default=0.0,
-                min_bound=-4.0,
-                max_bound=4.0,
+                default=0.5,
+                min_bound=0.0,
+                max_bound=1.0,
                 description='Groundwater exchange threshold',
                 unit='-'
             ),

@@ -6,37 +6,34 @@ alwaysApply: false
 
 # SCE-UA Calibration Configuration
 
-When configuring SpotPy's SCE-UA (Shuffled Complex Evolution) algorithm, follow the recommendations from Duan et al. (1994).
+When configuring the vendored SCE-UA (Shuffled Complex Evolution) algorithm (`run_sceua_direct`), follow the recommendations from Duan et al. (1994).
 
-## Key Rule: Number of Complexes (ngs)
+## Key Rule: Number of Complexes (n_complexes)
 
-**Always set `ngs = 2n + 1`** where `n` is the number of parameters being calibrated.
+**Always set `n_complexes = 2n + 1`** where `n` is the number of parameters being calibrated.
 
 ```python
-# ✅ CORRECT: Compute ngs based on parameter count
+# ✅ CORRECT: Compute n_complexes based on parameter count
 n_params = len(parameter_bounds)
-ngs = 2 * n_params + 1
+n_complexes = 2 * n_params + 1
 
-result = runner.run_sceua(
-    n_iterations=10000,
-    ngs=ngs,
-    kstop=5,
-    pcento=0.01
+result = runner.run_sceua_direct(
+    max_evals=10000,
+    n_complexes=n_complexes,
+    seed=42,
 )
 
-# ❌ WRONG: Hardcoded ngs that doesn't scale with parameters
-result = runner.run_sceua(
-    n_iterations=5000,
-    ngs=7,  # Too small for >3 parameters!
-    kstop=3,
-    pcento=0.01
+# ❌ WRONG: Hardcoded n_complexes that doesn't scale with parameters
+result = runner.run_sceua_direct(
+    max_evals=5000,
+    n_complexes=7,  # Too small for >3 parameters!
 )
 ```
 
 ## Reference Values by Model
 
-| Model | Parameters (n) | ngs (2n+1) | Recommended iterations |
-|-------|----------------|------------|------------------------|
+| Model | Parameters (n) | n_complexes (2n+1) | Recommended max_evals |
+|-------|----------------|--------------------|-----------------------|
 | GR4J | 4 | 9 | 5,000 |
 | GR5J | 5 | 11 | 5,000 |
 | GR6J | 6 | 13 | 6,000 |
@@ -45,17 +42,17 @@ result = runner.run_sceua(
 
 ## Why This Matters
 
-- **ngs** controls how many "complexes" (sub-populations) explore the parameter space
+- **n_complexes** controls how many "complexes" (sub-populations) explore the parameter space
 - Too few complexes → algorithm gets trapped in local optima
-- With 25 parameters and ngs=7, only 357 points explore a 25-dimensional space
-- With ngs=51, 2,601 points provide much better coverage
+- With 25 parameters and n_complexes=7, only 357 points explore a 25-dimensional space
+- With n_complexes=51, 2,601 points provide much better coverage
 
-## SpotPy Internal Calculations
+## Internal Calculations
 
-SpotPy automatically computes (you don't control these):
-- `npg` (points per complex) = 2n + 1
-- `nps` (points per simplex) = n + 1
-- `npt` (total population) = npg × ngs
+The vendored SCE-UA implementation automatically computes:
+- `n_points_complex` (points per complex) = 2 * n_complexes + 1 (if not specified)
+- PCA recovery for lost dimensions (Chu et al., 2010)
+- Convergence criteria: max_evals, tolerance, x_tolerance, max_tolerant_iter
 
 ## Reference
 

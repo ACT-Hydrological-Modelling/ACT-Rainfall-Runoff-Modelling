@@ -42,7 +42,7 @@ The `pyrrm` conda environment contains all required dependencies:
 
 - **Python**: 3.11
 - **Core**: numpy, pandas, scipy, matplotlib, seaborn
-- **Calibration**: spotpy, pydream, scikit-learn
+- **Calibration**: pydream, scikit-learn
 - **Sensitivity**: SALib
 - **Notebooks**: jupytext
 - **pyrrm**: Installed in editable mode
@@ -57,7 +57,7 @@ conda create -n pyrrm python=3.11 -y
 # Activate and install dependencies
 conda activate pyrrm
 pip install numpy pandas scipy matplotlib seaborn
-pip install spotpy pydream SALib scikit-learn jupytext
+pip install pydream SALib scikit-learn jupytext
 pip install ipykernel
 
 # Register kernel for Jupyter/Cursor notebooks
@@ -74,7 +74,6 @@ To verify the environment is correctly set up:
 ```bash
 conda activate pyrrm
 python -c "import pyrrm; print('pyrrm imported successfully')"
-python -c "import spotpy; print('spotpy available')"
 python -c "import pydream; print('pydream available')"
 ```
 

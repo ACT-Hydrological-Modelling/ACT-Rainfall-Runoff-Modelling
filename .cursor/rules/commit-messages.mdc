@@ -173,9 +173,9 @@ No code changes - only notebook metadata updates.
 ### Dependency Updates
 
 ```
-chore(deps): update spotpy to 1.6.0
+chore(deps): update pydream to 2.0.0
 
-Update spotpy dependency to latest version for improved DREAM algorithm
+Update pydream dependency to latest version for improved MT-DREAM(ZS)
 performance. Tested with existing calibration workflows.
 ```
 

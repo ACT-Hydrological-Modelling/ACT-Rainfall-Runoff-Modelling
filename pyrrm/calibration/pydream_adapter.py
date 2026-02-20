@@ -10,7 +10,7 @@ PyDREAM Reference:
     of hydrologic models using multiple-try DREAM(ZS) and high-performance
     computing. Water Resources Research, 48, W01526.
 
-Key features of PyDREAM vs SpotPy DREAM:
+Key features of PyDREAM (MT-DREAM(ZS)):
 - Multi-try sampling for better mixing
 - Snooker updates for jumping between modes
 - Parallel tempering support
@@ -68,7 +68,7 @@ class PyDREAMProgressWriter:
     Process-safe CSV writer for tracking PyDREAM calibration progress.
     
     This class enables real-time monitoring of PyDREAM calibrations by writing
-    each likelihood evaluation to a CSV file, similar to SpotPy's output format.
+    each likelihood evaluation to a CSV file.
     Uses file locking for process-safe writes when running with multiple chains.
     """
     
@@ -507,8 +507,8 @@ def run_pydream(
     Progress Monitoring:
         Set `dbname` to enable real-time progress tracking. Each likelihood
         evaluation will be written to `{dbname}.csv` in a format compatible
-        with SpotPy, allowing you to monitor calibration progress using the
-        same tools (e.g., calibration_monitor notebook).
+        allowing you to monitor calibration progress using the
+        calibration_monitor notebook.
         
         Example:
             result = run_pydream(..., dbname='pydream_calib')
@@ -561,7 +561,7 @@ def run_pydream(
         model_name: Prefix for saved files
         dbname: Database name for progress tracking. If provided, writes
                 progress to {dbname}.csv for real-time monitoring.
-        dbformat: Output format ('csv' only for now, for SpotPy compatibility)
+        dbformat: Output format ('csv' only for now)
         write_interval: Write every N evaluations (1 = all, 10 = every 10th)
         parallel: Whether to use parallel processing for multi-try evaluations.
                   When True and multitry > 1, proposal points are evaluated

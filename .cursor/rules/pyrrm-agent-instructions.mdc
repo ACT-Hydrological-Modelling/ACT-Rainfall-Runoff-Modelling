@@ -12,7 +12,7 @@ This document provides high-level guidance for AI agents working on the `pyrrm` 
 
 `pyrrm` is a comprehensive rainfall-runoff modeling library providing:
 - Multiple hydrological models (Sacramento, GR4J, GR5J, GR6J)
-- Flexible calibration framework (SpotPy, PyDREAM, SciPy)
+- Flexible calibration framework (PyDREAM, SCE-UA, SciPy)
 - Sensitivity analysis using Sobol methods
 - Visualization tools for model outputs and calibration results
 
@@ -68,6 +68,6 @@ import pyrrm
 ## Dependencies
 
 Core: numpy, pandas, scipy, matplotlib
-Optional: spotpy, pydream, SALib, seaborn
+Optional: pydream, SALib, seaborn
 
 Handle optional dependencies gracefully - the library should work with only core dependencies installed.

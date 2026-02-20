@@ -8,7 +8,7 @@ alwaysApply: true
 
 This project is a Python rainfall-runoff modeling library (`pyrrm`) that provides:
 - Multiple rainfall-runoff models (Sacramento, GR4J, GR5J, GR6J)
-- Flexible calibration framework (SpotPy DREAM, PyDREAM, SciPy)
+- Flexible calibration framework (PyDREAM, SCE-UA, SciPy)
 - Sensitivity analysis using Sobol methods
 - Comprehensive visualization tools
 
@@ -23,8 +23,8 @@ pyrrm/
 │   └── utils/        # Shared utilities (unit hydrographs, S-curves)
 ├── calibration/      # Calibration framework
 │   ├── runner.py           # CalibrationRunner unified interface
-│   ├── spotpy_adapter.py   # SpotPy DREAM/SCE-UA adapter
 │   ├── pydream_adapter.py  # PyDREAM MT-DREAM(ZS) adapter
+│   ├── sceua_adapter.py    # Vendored SCE-UA implementation
 │   ├── scipy_adapter.py    # SciPy optimization adapter
 │   └── objective_functions.py  # NSE, KGE, RMSE, etc.
 ├── analysis/         # Post-calibration analysis
@@ -75,22 +75,21 @@ def calculate_nse(simulated: np.ndarray, observed: np.ndarray) -> float:
 Handle optional dependencies gracefully:
 ```python
 try:
-    import spotpy
-    SPOTPY_AVAILABLE = True
+    from pyrrm.calibration.pydream_adapter import PYDREAM_AVAILABLE
 except ImportError:
-    SPOTPY_AVAILABLE = False
+    PYDREAM_AVAILABLE = False
 
 # Later in code
-if not SPOTPY_AVAILABLE:
-    raise ImportError("SpotPy required. Install with: pip install spotpy")
+if not PYDREAM_AVAILABLE:
+    raise ImportError("PyDREAM required. Install with: pip install pydream")
 ```
 
 ### 4. Error Messages
 Provide helpful, actionable error messages:
 ```python
 raise ValueError(
-    f"Unknown implementation: '{impl}'. "
-    f"Choose from: 'spotpy', 'pydream'."
+    f"Unknown calibration method: '{method}'. "
+    f"Choose from: 'sceua_direct', 'dream', 'differential_evolution'."
 )
 ```
 

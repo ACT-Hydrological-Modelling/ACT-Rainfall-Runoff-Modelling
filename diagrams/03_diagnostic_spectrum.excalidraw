@@ -1,0 +1,189 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "pyrrm-executive-summary",
+  "elements": [
+    {
+      "type": "text",
+      "x": 150,
+      "y": 20,
+      "text": "DIAGNOSTIC METRICS — Flow Regime Spectrum",
+      "fontSize": 24,
+      "fontFamily": 1,
+      "strokeColor": "#495057",
+      "id": "title"
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 60,
+      "text": "Each metric is a judge that focuses on a different part of the flow duration curve",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#868e96",
+      "id": "subtitle"
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 100,
+      "width": 160,
+      "height": 250,
+      "strokeColor": "#1565C0",
+      "backgroundColor": "#bbdefb",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "vhigh_box"
+    },
+    {
+      "type": "text",
+      "x": 60,
+      "y": 105,
+      "text": "VERY HIGH FLOWS\n(0-2% exceedance)\n━━━━━━━━━━━━\n★ NSE\n★ Pearson r\n▦ FDC Peak\n✎ Q5 error",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#1565C0",
+      "id": "vhigh_text"
+    },
+    {
+      "type": "rectangle",
+      "x": 230,
+      "y": 100,
+      "width": 160,
+      "height": 250,
+      "strokeColor": "#1976D2",
+      "backgroundColor": "#90caf9",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "high_box"
+    },
+    {
+      "type": "text",
+      "x": 240,
+      "y": 105,
+      "text": "HIGH FLOWS\n(2-10%)\n━━━━━━━━━━━━\n★ KGE\n★ KGE-np\n▦ FDC High\n⚡ Flashiness",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#1976D2",
+      "id": "high_text"
+    },
+    {
+      "type": "rectangle",
+      "x": 410,
+      "y": 100,
+      "width": 180,
+      "height": 250,
+      "strokeColor": "#388E3C",
+      "backgroundColor": "#c8e6c9",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "mid_box"
+    },
+    {
+      "type": "text",
+      "x": 420,
+      "y": 105,
+      "text": "MID FLOWS\n(20-70%)\n━━━━━━━━━━━━\n★ Sqrt-NSE\n★ KGE-sqrt\n★ Spearman ρ\n✎ Q50 error\n▦ FDC Mid\n◆ SDEB",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#388E3C",
+      "id": "mid_text"
+    },
+    {
+      "type": "rectangle",
+      "x": 610,
+      "y": 100,
+      "width": 160,
+      "height": 250,
+      "strokeColor": "#F57C00",
+      "backgroundColor": "#ffe0b2",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "low_box"
+    },
+    {
+      "type": "text",
+      "x": 620,
+      "y": 105,
+      "text": "LOW FLOWS\n(70-90%)\n━━━━━━━━━━━━\n★ Log-NSE\n★ KGE-log\n✎ Q95 error\n⚘ BFI error\n▦ FDC Low",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#F57C00",
+      "id": "low_text"
+    },
+    {
+      "type": "rectangle",
+      "x": 790,
+      "y": 100,
+      "width": 160,
+      "height": 250,
+      "strokeColor": "#D32F2F",
+      "backgroundColor": "#ffcdd2",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "id": "vlow_box"
+    },
+    {
+      "type": "text",
+      "x": 800,
+      "y": 105,
+      "text": "VERY LOW FLOWS\n(90-100%)\n━━━━━━━━━━━━\n★ Inv-NSE\n★ KGE-inv\n▦ FDC VeryLow",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#D32F2F",
+      "id": "vlow_text"
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 370,
+      "text": "LEGEND:  ★ Efficiency score (higher = better)   ▦ FDC segment (closer to 0 = better)   ✎ Signature error (closer to 0 = better)   ◆ Composite   ⚡ Dynamics",
+      "fontSize": 13,
+      "fontFamily": 1,
+      "strokeColor": "#868e96",
+      "id": "legend"
+    },
+    {
+      "type": "line",
+      "x": 50,
+      "y": 400,
+      "width": 900,
+      "height": 0,
+      "strokeColor": "#495057",
+      "strokeWidth": 3,
+      "roughness": 0,
+      "id": "fdc_line",
+      "points": [[0, 0], [900, 0]]
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 410,
+      "text": "← Flood peaks                                 Flow Duration Curve                                Drought →",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "strokeColor": "#495057",
+      "id": "fdc_label"
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 435,
+      "text": "0%              10%              30%              50%              70%              90%             100%",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#868e96",
+      "id": "exceedance_label"
+    }
+  ],
+  "appState": {
+    "gridSize": null,
+    "viewBackgroundColor": "#ffffff"
+  },
+  "files": {}
+}

@@ -299,8 +299,8 @@ class GR6J(BaseRainfallRunoffModel):
             ModelParameter(
                 name='X5',
                 default=0.0,
-                min_bound=-4.0,
-                max_bound=4.0,
+                min_bound=-2.0,
+                max_bound=2.0,
                 description='Groundwater exchange threshold',
                 unit='-'
             ),

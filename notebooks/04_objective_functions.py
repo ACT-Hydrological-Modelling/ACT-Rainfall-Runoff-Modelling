@@ -138,7 +138,7 @@ from pyrrm.objectives import (
 
 # Import calibration tools
 from pyrrm.models.sacramento import Sacramento
-from pyrrm.calibration import CalibrationRunner, SPOTPY_AVAILABLE
+from pyrrm.calibration import CalibrationRunner
 from pyrrm.calibration.objective_functions import calculate_metrics
 
 print("\npyrrm.objectives imported successfully!")
@@ -573,13 +573,10 @@ for obj_name, objective in calibration_objectives.items():
         warmup_period=WARMUP_DAYS
     )
     
-    result = runner.run_sceua(
-        n_iterations=N_ITERATIONS,
-        ngs=NGS,
-        kstop=5,
-        pcento=0.01,
-        dbname=f'obj_comparison_{obj_name.lower()}',
-        dbformat='csv'
+    result = runner.run_sceua_direct(
+        max_evals=N_ITERATIONS,
+        n_complexes=NGS,
+        seed=42,
     )
     
     calibration_results[obj_name] = result

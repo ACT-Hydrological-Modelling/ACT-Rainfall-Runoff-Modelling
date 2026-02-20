@@ -103,13 +103,13 @@
 # Each calibration method writes slightly different CSV formats. This section
 # documents what to expect from each.
 #
-# ### SpotPy DREAM / SCE-UA
+# ### PyDREAM
 #
-# **File location:** Same directory as your script, named via `dbname` parameter
+# **File location:** Specified via `dbname` parameter in `run_pydream()`
 #
 # **Columns:**
 # ```
-# like1,paruztwm,paruzfwm,parlztwm,parlzfpm,...
+# like1,paruztwm,paruzfwm,parlztwm,...
 # -0.234,45.23,32.11,125.67,55.89,...
 # -0.198,48.67,35.22,130.45,58.12,...
 # ```
@@ -118,18 +118,6 @@
 # |--------|-------------|
 # | `like1` | Objective function value (likelihood/NSE) |
 # | `parXXX` | Parameter value (prefixed with "par") |
-# | `simulation_0`, etc. | Simulated values (if saved) |
-#
-# ### PyDREAM
-#
-# **File location:** Specified via `dbname` parameter in `run_pydream()`
-#
-# **Columns:**
-# ```
-# like1,paruztwm,paruzfwm,parlztwm,...
-# ```
-#
-# Same format as SpotPy, with `like1` for likelihood and `parXXX` for parameters.
 #
 # ### SciPy Differential Evolution
 #
@@ -188,7 +176,7 @@ print("Using Plotly for interactive visualizations")
 # ## Configuration
 #
 # Set the path to the calibration CSV output file you want to monitor.
-# This notebook supports both SpotPy and PyDREAM calibrations.
+# This notebook supports PyDREAM calibrations.
 #
 # ### Current Target: PyDREAM from Notebook 06
 #
@@ -215,7 +203,6 @@ print("Using Plotly for interactive visualizations")
 # Options:
 #   'pydream_synthetic'   - Synthetic hydrograph test from Notebook 06
 #   'pydream_realdata'    - Real data calibrations from Notebook 06 (13 objectives)
-#   'spotpy'              - SpotPy DREAM or SCE-UA calibration
 #   'custom'              - Custom path (edit CSV_FILE below)
 
 CALIBRATION_SOURCE = 'pydream_synthetic'  # <-- CHANGE THIS
@@ -239,10 +226,6 @@ elif CALIBRATION_SOURCE == 'pydream_realdata':
     # Real data calibrations from Notebook 06 (13 objective functions)
     CSV_FILE = PYDREAM_DIR / f'progress_{PYDREAM_OBJECTIVE.lower()}.csv'
     
-elif CALIBRATION_SOURCE == 'spotpy':
-    # SpotPy DREAM or SCE-UA calibration
-    CSV_FILE = Path('spotpy_dream_calib.csv')
-    
 elif CALIBRATION_SOURCE == 'custom':
     # Custom path - edit directly
     CSV_FILE = Path('your_calibration_file.csv')
@@ -252,7 +235,7 @@ else:
 # ------------------------------------------------------------------------------
 # Display Options
 # ------------------------------------------------------------------------------
-MAX_PARAMS_TO_SHOW = 18  # Maximum parameters to display in plots
+MAX_PARAMS_TO_SHOW = None  # Show all parameters (set to int to limit, e.g., 18)
 DOTTY_SAMPLE_SIZE = 5000  # Downsample for dotty plots if >this many samples
 DARK_THEME = True  # Use dark theme for plots
 
@@ -409,7 +392,7 @@ if CALIBRATION_SOURCE == 'pydream_realdata' and PYDREAM_DIR.exists():
 # %%
 def load_calibration_data(csv_path: Path, verbose: bool = True) -> pd.DataFrame:
     """
-    Load SpotPy/PyDREAM calibration CSV file.
+    Load PyDREAM calibration CSV file.
     
     Handles:
     - Incomplete files (still being written)
@@ -471,7 +454,7 @@ def load_calibration_data(csv_path: Path, verbose: bool = True) -> pd.DataFrame:
 
 def extract_parameters(df: pd.DataFrame) -> tuple:
     """
-    Extract parameter names and objective column from SpotPy DataFrame.
+    Extract parameter names and objective column from calibration DataFrame.
     
     Returns:
         Tuple of (param_names, objective_col, param_df)
@@ -803,7 +786,7 @@ if calib_df is not None:
 
 # %%
 def plot_dotty_plots(df: pd.DataFrame, params: list = None, 
-                     max_params: int = MAX_PARAMS_TO_SHOW,
+                     max_params: int = None,
                      sample_size: int = DOTTY_SAMPLE_SIZE,
                      height_per_row: int = 220):
     """
@@ -832,7 +815,8 @@ def plot_dotty_plots(df: pd.DataFrame, params: list = None,
         params = [col for col in df.columns 
                   if col not in ['iteration', 'likelihood']]
     
-    params = params[:max_params]
+    if max_params is not None:
+        params = params[:max_params]
     n_params = len(params)
     
     if n_params == 0:
@@ -944,7 +928,7 @@ if calib_df is not None:
 
 # %%
 def plot_parameter_traces(df: pd.DataFrame, params: list = None,
-                          max_params: int = 8, height_per_param: int = 120,
+                          max_params: int = None, height_per_param: int = 120,
                           n_chains: int = 1, show_individual_chains: bool = False):
     """
     Plot parameter traces over iterations using Plotly.
@@ -962,7 +946,7 @@ def plot_parameter_traces(df: pd.DataFrame, params: list = None,
         params: List of parameter names to plot (default: all)
         max_params: Maximum number of parameters to show
         height_per_param: Height in pixels per parameter subplot
-        n_chains: Number of parallel MCMC chains (for SpotPy/PyDREAM DREAM)
+        n_chains: Number of parallel MCMC chains (for PyDREAM DREAM)
         show_individual_chains: If True and n_chains > 1, plot each chain 
             with a different color to assess chain mixing and convergence.
     
@@ -984,7 +968,8 @@ def plot_parameter_traces(df: pd.DataFrame, params: list = None,
         params = [col for col in df.columns 
                   if col not in ['iteration', 'likelihood']]
     
-    params = params[:max_params]
+    if max_params is not None:
+        params = params[:max_params]
     n_params = len(params)
     
     if n_params == 0:
@@ -1154,14 +1139,14 @@ def plot_parameter_traces(df: pd.DataFrame, params: list = None,
 
 
 if calib_df is not None:
-    params_to_show = param_names[:8] if len(param_names) > 8 else param_names
-    plot_parameter_traces(calib_df, params=params_to_show)
+    # Show all parameters in trace plots
+    plot_parameter_traces(calib_df, params=param_names)
 
 # %% [markdown]
 # ---
 # ## 3b. Individual Chain Traces
 #
-# When using MCMC methods (SpotPy DREAM, PyDREAM), multiple chains run in parallel.
+# When using MCMC methods (PyDREAM), multiple chains run in parallel.
 # Visualizing individual chains helps assess:
 # - **Chain mixing**: Are all chains exploring the same regions?
 # - **Convergence**: Have all chains settled to similar values?
@@ -1172,24 +1157,23 @@ if calib_df is not None:
 # - Not show persistent trends
 # - Not be stuck at constant values
 #
-# **Note**: SpotPy/PyDREAM DREAM typically uses 3-5 chains. The default assumption
+# **Note**: PyDREAM typically uses 3-5 chains. The default assumption
 # is interleaved samples (chain1-sample1, chain2-sample1, ..., chainN-sample1, etc.)
 
 # %%
 # Number of MCMC chains (adjust based on your calibration settings)
-# SpotPy DREAM default: 3 chains
 # PyDREAM default: typically 3-5 chains
 N_CHAINS = 3
 
 if calib_df is not None:
-    params_to_show = param_names[:6] if len(param_names) > 6 else param_names
+    # Show all parameters in individual chain traces
     print(f"Showing individual chain traces (assuming {N_CHAINS} chains)")
     print("Each color represents a different parallel MCMC chain")
     print("Good mixing: chains overlap and explore same regions")
     print("Poor mixing: chains stuck at different values or showing trends\n")
     plot_parameter_traces(
         calib_df, 
-        params=params_to_show,
+        params=param_names,
         n_chains=N_CHAINS,
         show_individual_chains=True
     )
@@ -1206,7 +1190,7 @@ if calib_df is not None:
 # %%
 def plot_posterior_distributions(df: pd.DataFrame, params: list = None,
                                   burnin: float = DEFAULT_BURNIN,
-                                  max_params: int = MAX_PARAMS_TO_SHOW,
+                                  max_params: int = None,
                                   height_per_row: int = 220):
     """
     Plot posterior parameter distributions using Plotly.
@@ -1243,7 +1227,8 @@ def plot_posterior_distributions(df: pd.DataFrame, params: list = None,
         params = [col for col in df.columns 
                   if col not in ['iteration', 'likelihood']]
     
-    params = params[:max_params]
+    if max_params is not None:
+        params = params[:max_params]
     n_params = len(params)
     
     if n_params == 0:
@@ -1396,7 +1381,7 @@ else:
 #
 # **Chain Detection**: 
 # - If your CSV has a `chain` column (PyDREAM output), chains are detected automatically
-# - Otherwise, assumes interleaved format (SpotPy style)
+# - Otherwise, assumes interleaved format
 #
 # ### Interpretation
 #
@@ -1476,13 +1461,13 @@ def _extract_chains_from_dataframe(df: pd.DataFrame, param_names: list) -> tuple
         samples_per_chain = min_len
         
     else:
-        # No chain column - this is likely SpotPy format or interleaved
-        # SpotPy DREAM writes samples interleaved: c1s1, c2s1, c3s1, c1s2, c2s2, c3s2, ...
-        # Default assumption: try to detect or use 3 chains (SpotPy default)
+        # No chain column - assume interleaved format
+        # DREAM writes samples interleaved: c1s1, c2s1, c3s1, c1s2, c2s2, c3s2, ...
+        # Default assumption: try to detect or use 3 chains
         
         # Try to infer number of chains from data patterns
         # For now, use a reasonable default
-        n_chains = 3  # SpotPy DREAM default
+        n_chains = 3  # Reasonable DREAM default
         
         values = df[param_names].values
         n_total = len(values)
@@ -1639,7 +1624,7 @@ def print_convergence_diagnostics(df: pd.DataFrame, params: list = None,
         df: DataFrame with parameter columns
         params: List of parameter names (default: auto-detect)
         n_chains: Ignored if 'chain' column present in df (auto-detected).
-                  Otherwise used for SpotPy interleaved format.
+                  Otherwise used for interleaved format.
     """
     if df is None:
         print("No data available")
@@ -1699,7 +1684,8 @@ def print_convergence_diagnostics(df: pd.DataFrame, params: list = None,
     good_convergence = 0
     excellent_convergence = 0
     
-    for param in params[:MAX_PARAMS_TO_SHOW]:
+    # Show all parameters in convergence diagnostics
+    for param in params:
         r_hat = r_hat_dict.get(param, np.nan)
         
         # Determine status based on R-hat value
@@ -1730,7 +1716,7 @@ def print_convergence_diagnostics(df: pd.DataFrame, params: list = None,
     
     print(f"{'─'*70}")
     
-    n_params = len(params[:MAX_PARAMS_TO_SHOW])
+    n_params = len(params)
     
     if reliability in ['reliable', 'marginal']:
         print(f"\nSummary:")
@@ -1890,8 +1876,8 @@ def refresh_and_plot(show_all: bool = True):
         print("\n" + "="*70)
         print("3. PARAMETER TRACES")
         print("="*70)
-        params_to_show = param_names[:8] if len(param_names) > 8 else param_names
-        plot_parameter_traces(calib_df, params=params_to_show)
+        # Show all parameters in trace plots
+        plot_parameter_traces(calib_df, params=param_names)
         
         print("\n" + "="*70)
         print("4. POSTERIOR DISTRIBUTIONS")

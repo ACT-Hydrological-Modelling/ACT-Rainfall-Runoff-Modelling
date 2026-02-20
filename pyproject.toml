@@ -42,9 +42,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# SpotPy calibration (standard DREAM, SCE-UA, MCMC)
 calibration = [
-    "spotpy>=1.5",
+    "pydream>=1.0",
 ]
 # PyDREAM calibration (MT-DREAM(ZS) with multi-try and snooker updates)
 # Note: pydream may need to be installed from source
@@ -52,16 +51,13 @@ calibration = [
 pydream = [
     "pydream>=1.0",
 ]
-# All calibration methods
 calibration-all = [
-    "spotpy>=1.5",
     "pydream>=1.0",
 ]
 sensitivity = [
     "SALib>=1.4",
 ]
 full = [
-    "spotpy>=1.5",
     "pydream>=1.0",
     "SALib>=1.4",
     "seaborn>=0.11",

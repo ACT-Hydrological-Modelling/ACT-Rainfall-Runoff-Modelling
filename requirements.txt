@@ -6,11 +6,8 @@ scipy>=1.7
 matplotlib>=3.4
 
 # Calibration (optional)
-# SpotPy: Standard DREAM, SCE-UA, and other MCMC methods
-spotpy>=1.5
-
 # PyDREAM: MT-DREAM(ZS) with multi-try sampling and snooker updates
-# Provides advanced features for multi-modal posteriors
+# Provides advanced Bayesian MCMC for multi-modal posteriors
 # Install from: https://github.com/LoLab-VU/PyDREAM
 # pip install pydream
 pydream>=1.0

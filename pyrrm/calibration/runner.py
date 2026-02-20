@@ -2,12 +2,10 @@
 Unified calibration runner for pyrrm models.
 
 This module provides the CalibrationRunner class, which offers a unified
-interface for calibrating models using various algorithms from SPOTPY,
-PyDREAM, and scipy.optimize.
-
-Supported DREAM implementations:
-- SpotPy DREAM: Standard DREAM algorithm with built-in convergence checking
-- PyDREAM (MT-DREAM(ZS)): Advanced DREAM with multi-try sampling and snooker updates
+interface for calibrating models using various algorithms:
+- PyDREAM (MT-DREAM(ZS)): Bayesian MCMC with multi-try sampling and snooker updates
+- SCE-UA (direct): Shuffled Complex Evolution (vendored, no external dependencies)
+- SciPy optimizers: Differential Evolution, Dual Annealing, Basin-hopping
 """
 
 from dataclasses import dataclass, field
@@ -37,16 +35,10 @@ from pyrrm.calibration.objective_functions import (
     get_calibration_value,
 )
 
-# Check for optional dependencies
 try:
     from pyrrm.calibration.pydream_adapter import PYDREAM_AVAILABLE
 except ImportError:
     PYDREAM_AVAILABLE = False
-
-try:
-    from pyrrm.calibration.spotpy_adapter import SPOTPY_AVAILABLE
-except ImportError:
-    SPOTPY_AVAILABLE = False
 
 
 @dataclass
@@ -358,23 +350,11 @@ class CalibrationRunner:
     Unified interface for model calibration.
     
     Supports multiple calibration methods:
-    - DREAM (Bayesian MCMC via SPOTPY or PyDREAM)
-    - SCE-UA (Shuffled Complex Evolution via SPOTPY)
+    - DREAM (Bayesian MCMC via PyDREAM MT-DREAM(ZS))
+    - SCE-UA (Shuffled Complex Evolution, vendored -- no external dependencies)
     - Differential Evolution (scipy)
     - Dual Annealing (scipy)
     - Basin-hopping (scipy)
-    
-    DREAM Implementation Comparison:
-        SpotPy DREAM:
-            - Standard DREAM algorithm
-            - Built-in convergence checking
-            - Database storage options (CSV, RAM, SQL)
-            
-        PyDREAM (MT-DREAM(ZS)):
-            - Multi-try sampling for better mixing
-            - Snooker updates for mode jumping
-            - Parallel tempering support
-            - Better for multi-modal posteriors
     
     Example:
         >>> from pyrrm.models import GR4J
@@ -384,18 +364,13 @@ class CalibrationRunner:
         >>> model = GR4J()
         >>> runner = CalibrationRunner(model, inputs, observed, objective=NSE())
         >>> 
-        >>> # Run DREAM with SpotPy (simpler, built-in convergence)
-        >>> result = runner.run_dream(implementation='spotpy', n_iterations=10000)
+        >>> # SCE-UA global optimisation (fast, no external deps)
+        >>> result = runner.run_sceua_direct(max_evals=20000, seed=42)
         >>> 
-        >>> # Run DREAM with PyDREAM (advanced features)
-        >>> result = runner.run_dream(
-        ...     implementation='pydream',
-        ...     n_iterations=10000,
-        ...     multitry=5,       # Multi-try sampling
-        ...     snooker=0.1       # Snooker update probability
-        ... )
+        >>> # Bayesian MCMC with PyDREAM
+        >>> result = runner.run_dream(n_iterations=10000, multitry=5)
         >>> 
-        >>> # Or use scipy differential evolution
+        >>> # SciPy differential evolution
         >>> result = runner.run_scipy(method='differential_evolution')
     """
     
@@ -454,66 +429,38 @@ class CalibrationRunner:
     
     def run_dream(
         self,
-        implementation: str = 'spotpy',
         n_iterations: int = 10000,
         n_chains: int = 5,
-        # SpotPy-specific options
-        convergence_threshold: float = 1.01,
-        dbname: str = 'dream_results',
-        dbformat: str = 'csv',
-        parallel: str = 'seq',
-        # PyDREAM-specific options
         multitry: int = 5,
         snooker: float = 0.1,
-        # Checkpoint options
         checkpoint_dir: Optional[str] = None,
         checkpoint_interval: int = 5000,
         resume_from: Optional[str] = None,
         **kwargs
     ) -> CalibrationResult:
         """
-        Run DREAM algorithm with choice of implementation.
+        Run DREAM algorithm using PyDREAM (MT-DREAM(ZS)).
         
         DREAM (DiffeRential Evolution Adaptive Metropolis) is a Bayesian MCMC 
         algorithm suitable for high-dimensional parameter estimation with 
-        complex posterior distributions.
-        
-        Two implementations are available:
-        - 'spotpy': Standard DREAM with built-in convergence checking and MPI support
-        - 'pydream': MT-DREAM(ZS) with multi-try sampling and snooker updates
+        complex posterior distributions.  This method uses PyDREAM which
+        implements Multi-Try DREAM with snooker updates.
         
         Args:
-            implementation: 'spotpy' for SpotPy DREAM or 'pydream' for PyDREAM
             n_iterations: Number of MCMC iterations
             n_chains: Number of parallel chains
-            
-            SpotPy-specific args:
-                convergence_threshold: Gelman-Rubin convergence threshold
-                dbname: Database name for results
-                dbformat: Output format ('csv', 'sql')
-                parallel: Parallelization mode:
-                    - 'seq': Sequential (single core)
-                    - 'mpi': MPI parallel (for HPC clusters)
-                    - 'mpc': Multiprocessing ordered (local cores)
-                    - 'umpc': Multiprocessing unordered (local cores, faster)
-                
-            PyDREAM-specific args:
-                multitry: Number of proposal points per iteration (1=standard DREAM)
-                snooker: Probability of snooker update (0 to disable)
-            
-            Checkpoint args:
-                checkpoint_dir: Directory for automatic checkpoints (None to disable)
-                checkpoint_interval: Save checkpoint every N iterations
-                resume_from: Path to checkpoint or CalibrationResult to resume from
-                
-            **kwargs: Additional implementation-specific parameters
+            multitry: Number of proposal points per iteration (1=standard DREAM)
+            snooker: Probability of snooker update (0 to disable)
+            checkpoint_dir: Directory for automatic checkpoints (None to disable)
+            checkpoint_interval: Save checkpoint every N iterations
+            resume_from: Path to checkpoint or CalibrationResult to resume from
+            **kwargs: Additional PyDREAM parameters (passed to ``run_pydream``)
             
         Returns:
             CalibrationResult with best parameters and MCMC chain
             
         Example with checkpointing:
             >>> result = runner.run_dream(
-            ...     implementation='pydream',
             ...     n_iterations=100000,
             ...     checkpoint_dir='./checkpoints',
             ...     checkpoint_interval=5000
@@ -521,18 +468,13 @@ class CalibrationRunner:
             
         Example resuming from checkpoint:
             >>> result = runner.run_dream(
-            ...     implementation='pydream',
-            ...     n_iterations=50000,  # Additional iterations
-            ...     resume_from='./checkpoints'  # Load latest from dir
+            ...     n_iterations=50000,
+            ...     resume_from='./checkpoints'
             ... )
         """
-        implementation = implementation.lower()
-        
-        # Handle resume_from
         if resume_from is not None:
             return self._resume_dream(
                 resume_from=resume_from,
-                implementation=implementation,
                 n_iterations=n_iterations,
                 n_chains=n_chains,
                 checkpoint_dir=checkpoint_dir,
@@ -540,36 +482,19 @@ class CalibrationRunner:
                 **kwargs
             )
         
-        if implementation == 'spotpy':
-            return self.run_spotpy_dream(
-                n_iterations=n_iterations,
-                n_chains=n_chains,
-                convergence_threshold=convergence_threshold,
-                dbname=dbname,
-                dbformat=dbformat,
-                parallel=parallel,
-                **kwargs
-            )
-        elif implementation == 'pydream':
-            return self.run_pydream(
-                n_iterations=n_iterations,
-                n_chains=n_chains,
-                multitry=multitry,
-                snooker=snooker,
-                checkpoint_dir=checkpoint_dir,
-                checkpoint_interval=checkpoint_interval,
-                **kwargs
-            )
-        else:
-            raise ValueError(
-                f"Unknown DREAM implementation: '{implementation}'. "
-                f"Choose 'spotpy' or 'pydream'."
-            )
+        return self.run_pydream(
+            n_iterations=n_iterations,
+            n_chains=n_chains,
+            multitry=multitry,
+            snooker=snooker,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_interval=checkpoint_interval,
+            **kwargs
+        )
     
     def _resume_dream(
         self,
         resume_from: str,
-        implementation: str,
         n_iterations: int,
         n_chains: int,
         checkpoint_dir: Optional[str] = None,
@@ -577,11 +502,10 @@ class CalibrationRunner:
         **kwargs
     ) -> CalibrationResult:
         """
-        Resume DREAM calibration from checkpoint or saved result.
+        Resume PyDREAM calibration from checkpoint or saved result.
         
         Args:
             resume_from: Path to checkpoint directory, checkpoint file, or saved result
-            implementation: DREAM implementation to use
             n_iterations: Additional iterations to run
             n_chains: Number of chains
             checkpoint_dir: Directory for new checkpoints
@@ -593,19 +517,15 @@ class CalibrationRunner:
         """
         from pyrrm.calibration.checkpoint import CheckpointManager
         
-        # Determine what we're resuming from
         resume_path = Path(resume_from)
         
         if resume_path.is_dir():
-            # Load from checkpoint directory
             manager = CheckpointManager(str(resume_path))
             previous_result = manager.load_latest_checkpoint()
             if previous_result is None:
                 raise ValueError(f"No checkpoints found in {resume_from}")
         elif resume_path.suffix == '.json' or (resume_path.parent / (resume_path.name + '.json')).exists():
-            # Load from specific checkpoint or CalibrationResult
             try:
-                # Try loading as CalibrationResult
                 prev_calib_result = CalibrationResult.load(str(resume_path))
                 previous_result = prev_calib_result._raw_result or {}
                 previous_result.update({
@@ -616,7 +536,6 @@ class CalibrationRunner:
                     'runtime_seconds': prev_calib_result.runtime_seconds,
                 })
             except FileNotFoundError:
-                # Try loading as checkpoint
                 manager = CheckpointManager(str(resume_path.parent))
                 previous_result = manager.load_checkpoint(
                     str(resume_path).replace('.json', '')
@@ -629,171 +548,34 @@ class CalibrationRunner:
                 f"Provide a checkpoint directory, checkpoint file, or saved CalibrationResult."
             )
         
-        # Continue based on implementation
-        if implementation == 'pydream':
-            if 'sampled_params_by_chain' not in previous_result:
-                raise ValueError(
-                    "Cannot resume PyDREAM: previous result does not contain chain data. "
-                    "Use SpotPy DREAM or start fresh."
-                )
-            
-            from pyrrm.calibration.pydream_adapter import continue_pydream
-            
-            result = continue_pydream(
-                model=self.model,
-                inputs=self.inputs,
-                observed=self.observed,
-                objective=self.objective,
-                previous_result=previous_result,
-                parameter_bounds=self._param_bounds,
-                warmup_period=self.warmup_period,
-                niterations=n_iterations,
-                **kwargs
-            )
-            
-            # Store raw result for potential continuation
-            raw_result = {
-                'sampled_params_by_chain': result.get('sampled_params_by_chain'),
-                'log_ps_by_chain': result.get('log_ps_by_chain'),
-                'parameter_names': result.get('parameter_names'),
-            }
-            
-            converged = result.get('convergence_diagnostics', {}).get('converged', None)
-            success = converged if converged is not None else True
-            
-            return CalibrationResult(
-                best_parameters=result['best_parameters'],
-                best_objective=result['best_objective'],
-                all_samples=result['all_samples'],
-                convergence_diagnostics=result['convergence_diagnostics'],
-                runtime_seconds=result['runtime_seconds'],
-                method='PyDREAM (MT-DREAM(ZS)) [resumed]',
-                objective_name=self.objective.name,
-                success=success,
-                _raw_result=raw_result,
+        if 'sampled_params_by_chain' not in previous_result:
+            raise ValueError(
+                "Cannot resume: previous result does not contain chain data. "
+                "Start a fresh PyDREAM run instead."
             )
         
-        else:  # SpotPy
-            from pyrrm.calibration.spotpy_adapter import continue_spotpy_dream
-            
-            result = continue_spotpy_dream(
-                model=self.model,
-                inputs=self.inputs,
-                observed=self.observed,
-                objective=self.objective,
-                previous_result=previous_result,
-                parameter_bounds=self._param_bounds,
-                warmup_period=self.warmup_period,
-                n_iterations=n_iterations,
-                n_chains=n_chains,
-                **kwargs
-            )
-            
-            return CalibrationResult(
-                best_parameters=result['best_parameters'],
-                best_objective=result['best_objective'],
-                all_samples=result['all_samples'],
-                convergence_diagnostics=result['convergence_diagnostics'],
-                runtime_seconds=result['runtime_seconds'],
-                method='SpotPy-DREAM [resumed]',
-                objective_name=self.objective.name,
-                success=True,
-                _raw_result=result,
-            )
-    
-    def run_spotpy_dream(
-        self,
-        n_iterations: int = 10000,
-        n_chains: int = 5,
-        convergence_threshold: float = 1.01,
-        dbname: str = 'dream_results',
-        dbformat: str = 'csv',
-        parallel: str = 'seq',
-        **kwargs
-    ) -> CalibrationResult:
-        """
-        Run DREAM algorithm using SpotPy implementation.
+        from pyrrm.calibration.pydream_adapter import continue_pydream
         
-        SpotPy DREAM provides:
-        - Standard DREAM algorithm
-        - Built-in Gelman-Rubin convergence checking
-        - Multiple database storage formats
-        - MPI parallel support for HPC clusters
-        
-        Args:
-            n_iterations: Number of MCMC iterations
-            n_chains: Number of parallel chains. For MPI, use n_chains = n_processes - 1
-            convergence_threshold: Gelman-Rubin convergence threshold
-            dbname: Database name for results
-            dbformat: Output format ('csv', 'sql'). Note: 'ram' is converted to 'csv'
-            parallel: Parallelization mode:
-                - 'seq': Sequential (default) - runs on single core
-                - 'mpi': MPI parallel - requires mpi4py, run with mpirun
-                - 'mpc': Multiprocessing ordered - uses local CPU cores
-                - 'umpc': Multiprocessing unordered - faster, uses local cores
-            **kwargs: Additional DREAM parameters (nCr, delta, c, eps)
-            
-        Returns:
-            CalibrationResult with best parameters and MCMC chain
-            
-        MPI Parallel Example:
-            To run calibration on a cluster with MPI:
-            
-            1. Create calibration script (calibrate.py):
-               ```python
-               runner = CalibrationRunner(model, inputs, observed)
-               result = runner.run_spotpy_dream(
-                   n_iterations=50000,
-                   n_chains=20,
-                   parallel='mpi',
-                   dbname='mpi_dream_results'
-               )
-               if result:  # Only master process returns result
-                   print(result.summary())
-               ```
-            
-            2. Run with MPI (21 processes = 1 master + 20 workers):
-               ```bash
-               mpirun -n 21 python calibrate.py
-               ```
-            
-            Speedup scales approximately linearly with number of chains.
-        """
-        if not SPOTPY_AVAILABLE:
-            raise ImportError(
-                "SpotPy is required for this calibration method. "
-                "Install with: pip install spotpy"
-            )
-        
-        from pyrrm.calibration.spotpy_adapter import SPOTPYModelSetup, run_dream
-        
-        setup = SPOTPYModelSetup(
-            self.model,
-            self.inputs,
-            self.observed,
-            self.objective,
-            self._param_bounds,
-            self.warmup_period
-        )
-        
-        result = run_dream(
-            setup,
-            n_iterations=n_iterations,
-            n_chains=n_chains,
-            convergence_threshold=convergence_threshold,
-            dbname=dbname,
-            dbformat=dbformat,
-            parallel=parallel,
+        result = continue_pydream(
+            model=self.model,
+            inputs=self.inputs,
+            observed=self.observed,
+            objective=self.objective,
+            previous_result=previous_result,
+            parameter_bounds=self._param_bounds,
+            warmup_period=self.warmup_period,
+            niterations=n_iterations,
             **kwargs
         )
         
-        # Store raw result for potential continuation
         raw_result = {
-            'dbname': dbname,
-            'dbformat': dbformat,
-            'n_chains': n_chains,
-            'raw_results': result.get('raw_results'),
+            'sampled_params_by_chain': result.get('sampled_params_by_chain'),
+            'log_ps_by_chain': result.get('log_ps_by_chain'),
+            'parameter_names': result.get('parameter_names'),
         }
+        
+        converged = result.get('convergence_diagnostics', {}).get('converged', None)
+        success = converged if converged is not None else True
         
         return CalibrationResult(
             best_parameters=result['best_parameters'],
@@ -801,9 +583,9 @@ class CalibrationRunner:
             all_samples=result['all_samples'],
             convergence_diagnostics=result['convergence_diagnostics'],
             runtime_seconds=result['runtime_seconds'],
-            method='SpotPy-DREAM',
+            method='PyDREAM (MT-DREAM(ZS)) [resumed]',
             objective_name=self.objective.name,
-            success=True,
+            success=success,
             _raw_result=raw_result,
         )
     
@@ -848,7 +630,7 @@ class CalibrationRunner:
         
         Progress Monitoring:
             Set `dbname` to enable progress tracking. Each evaluation is
-            written to `{dbname}.csv` in SpotPy-compatible format.
+            written to `{dbname}.csv`.
             
             Example:
                 result = runner.run_pydream(
@@ -890,7 +672,7 @@ class CalibrationRunner:
             mp_context: Multiprocessing context ('fork', 'spawn', 'forkserver').
                        None uses system default. 'spawn' is safest, 'fork' fastest.
             dbname: Database name for progress tracking. Writes to {dbname}.csv.
-            dbformat: Output format ('csv' only, for SpotPy compatibility)
+            dbformat: Output format ('csv' only)
             write_interval: Write every N evaluations (1=all, 10=every 10th)
             verbose: Whether to print progress
             nverbose: Print progress every N iterations (default: 100).
@@ -1016,91 +798,6 @@ class CalibrationRunner:
             _raw_result=raw_result,
         )
     
-    def run_sceua(
-        self,
-        n_iterations: int = 10000,
-        ngs: int = 7,
-        kstop: int = 3,
-        pcento: float = 0.1,
-        peps: float = 0.001,
-        dbname: str = 'sceua_results',
-        dbformat: str = 'csv',
-        parallel: str = 'seq',
-        **kwargs
-    ) -> CalibrationResult:
-        """
-        Run SCE-UA (Shuffled Complex Evolution - University of Arizona).
-        
-        SCE-UA is a global optimization algorithm that combines simplex,
-        random search, and evolution strategies. Highly effective for
-        hydrological model calibration.
-        
-        Args:
-            n_iterations: Maximum iterations
-            ngs: Number of complexes. For MPI parallel, this determines
-                 the degree of parallelism (each complex on separate process)
-            kstop: Shuffle loops for convergence
-            pcento: Percent change threshold
-            peps: Parameter convergence threshold
-            dbname: Database name
-            dbformat: Output format ('csv', 'sql')
-            parallel: Parallelization mode:
-                - 'seq': Sequential (single core)
-                - 'mpi': MPI parallel (complexes in parallel)
-                - 'mpc': Multiprocessing ordered
-                - 'umpc': Multiprocessing unordered
-            **kwargs: Additional parameters
-            
-        Returns:
-            CalibrationResult
-            
-        MPI Parallel Example:
-            SCE-UA runs its complexes (ngs) in parallel.
-            
-            ```bash
-            mpirun -n 8 python script.py  # 1 master + 7 workers
-            ```
-            
-            In script, set ngs to match worker count:
-            ```python
-            result = runner.run_sceua(ngs=7, parallel='mpi')
-            ```
-        """
-        from pyrrm.calibration.spotpy_adapter import SPOTPYModelSetup, run_sceua
-        
-        setup = SPOTPYModelSetup(
-            self.model,
-            self.inputs,
-            self.observed,
-            self.objective,
-            self._param_bounds,
-            self.warmup_period
-        )
-        
-        result = run_sceua(
-            setup,
-            n_iterations=n_iterations,
-            ngs=ngs,
-            kstop=kstop,
-            pcento=pcento,
-            peps=peps,
-            dbname=dbname,
-            dbformat=dbformat,
-            parallel=parallel,
-            **kwargs
-        )
-        
-        return CalibrationResult(
-            best_parameters=result['best_parameters'],
-            best_objective=result['best_objective'],
-            all_samples=result['all_samples'],
-            convergence_diagnostics=result['convergence_diagnostics'],
-            runtime_seconds=result['runtime_seconds'],
-            method='SCE-UA',
-            objective_name=self.objective.name,
-            success=True
-        )
-    
     def run_scipy(
         self,
         method: str = 'differential_evolution',
@@ -1178,18 +875,17 @@ class CalibrationRunner:
         progress_bar: bool = True,
     ) -> CalibrationResult:
         """
-        Run SCE-UA using the direct (vendored) implementation.
+        Run SCE-UA (Shuffled Complex Evolution - University of Arizona).
         
-        This is an alternative to run_sceua() which uses SpotPy. Key advantages:
-        - No SpotPy dependency required
-        - More configuration options (PCA recovery, convergence criteria)
+        A vendored, dependency-free implementation with:
+        - PCA recovery for lost dimensions (Chu et al., 2010)
+        - Multiple convergence criteria
         - Parallel evaluation via ThreadPoolExecutor
         - Initial parameter sets can be provided via x0
         - All evaluations tracked automatically
         
-        The SCE-UA (Shuffled Complex Evolution - University of Arizona) algorithm
-        is a global optimization method developed specifically for calibrating
-        hydrological models.
+        SCE-UA is a global optimization method developed specifically for
+        calibrating hydrological models.
         
         Args:
             n_complexes: Number of complexes. If None, automatically determined
@@ -1238,9 +934,6 @@ class CalibrationRunner:
             This implementation includes enhancements from the literature:
             - PCA recovery for lost dimensions (Chu et al., 2010)
             - Adaptive smoothing parameter (Muttil & Jayawardena, 2008)
-            
-        See Also:
-            run_sceua: SpotPy-based SCE-UA implementation
         """
         from pyrrm.calibration.sceua_adapter import run_sceua_direct
         
@@ -1351,7 +1044,6 @@ class CalibrationRunner:
         observed: np.ndarray,
         objective: Optional['ObjectiveFunction'] = None,
         additional_iterations: int = 10000,
-        implementation: str = 'pydream',
         parameter_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
         warmup_period: int = 365,
         checkpoint_dir: Optional[str] = None,
@@ -1359,7 +1051,7 @@ class CalibrationRunner:
         **kwargs
     ) -> CalibrationResult:
         """
-        Resume calibration from a saved checkpoint or CalibrationResult.
+        Resume PyDREAM calibration from a saved checkpoint or CalibrationResult.
         
         This is a high-level convenience method that:
         1. Loads the checkpoint/result
@@ -1375,18 +1067,16 @@ class CalibrationRunner:
             observed: Observed flow values
             objective: Objective function (if None, uses NSE)
             additional_iterations: Number of additional iterations to run
-            implementation: DREAM implementation ('spotpy' or 'pydream')
             parameter_bounds: Parameter bounds (if None, uses model defaults)
             warmup_period: Warmup timesteps excluded from objective
             checkpoint_dir: Directory for new checkpoints (optional)
             checkpoint_interval: Checkpoint save interval
-            **kwargs: Additional implementation-specific parameters
+            **kwargs: Additional PyDREAM parameters
             
         Returns:
             CalibrationResult combining previous and new results
             
         Example:
-            >>> # Resume from checkpoint directory
             >>> result = CalibrationRunner.resume(
             ...     checkpoint_path='./checkpoints',
             ...     model=model,
@@ -1394,17 +1084,7 @@ class CalibrationRunner:
             ...     observed=observed,
             ...     additional_iterations=50000
             ... )
-            
-            >>> # Resume from saved CalibrationResult
-            >>> result = CalibrationRunner.resume(
-            ...     checkpoint_path='calibrations/run1',  # loads run1_meta.json
-            ...     model=model,
-            ...     inputs=inputs,
-            ...     observed=observed,
-            ...     additional_iterations=20000
-            ... )
         """
-        # Create runner
         runner = cls(
             model=model,
             inputs=inputs,
@@ -1414,9 +1094,7 @@ class CalibrationRunner:
             warmup_period=warmup_period
         )
         
-        # Use the run_dream method with resume_from
         return runner.run_dream(
-            implementation=implementation,
             n_iterations=additional_iterations,
             resume_from=checkpoint_path,
             checkpoint_dir=checkpoint_dir,
