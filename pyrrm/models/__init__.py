@@ -18,6 +18,9 @@ __all__ = [
     "GR4J",
     "GR5J",
     "GR6J",
+    "gr4j_run_jax",
+    "sacramento_run_jax",
+    "JAX_AVAILABLE",
 ]
 
 # Lazy imports
@@ -34,4 +37,16 @@ def __getattr__(name):
     elif name == "GR6J":
         from pyrrm.models.gr6j import GR6J
         return GR6J
+    elif name == "gr4j_run_jax":
+        from pyrrm.models.gr4j_jax import gr4j_run_jax
+        return gr4j_run_jax
+    elif name == "sacramento_run_jax":
+        from pyrrm.models.sacramento_jax import sacramento_run_jax
+        return sacramento_run_jax
+    elif name == "JAX_AVAILABLE":
+        try:
+            import jax
+            return True
+        except ImportError:
+            return False
     raise AttributeError(f"module 'pyrrm.models' has no attribute '{name}'")

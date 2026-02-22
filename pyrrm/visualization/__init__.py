@@ -86,4 +86,21 @@ __all__ = [
     "plot_fdc_plotly",
     "plot_scatter_plotly",
     "plot_parameter_bounds_plotly",
+    # MCMC plots (if ArviZ available)
+    "plot_mcmc_traces_nuts",
+    "plot_mcmc_rank",
+    "plot_posterior_pairs",
+    "plot_hydrograph_with_uncertainty",
+    "plot_mcmc_diagnostics_nuts",
 ]
+
+try:
+    from pyrrm.visualization.mcmc_plots import (
+        plot_mcmc_traces as plot_mcmc_traces_nuts,
+        plot_mcmc_rank,
+        plot_posterior_pairs,
+        plot_hydrograph_with_uncertainty,
+        plot_mcmc_diagnostics as plot_mcmc_diagnostics_nuts,
+    )
+except ImportError:
+    pass
