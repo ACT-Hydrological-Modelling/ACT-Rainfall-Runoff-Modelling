@@ -158,8 +158,8 @@ class TestFactoryFunctions:
         obj = kge_hilo(kge_weight=0.7)
         
         # First objective should have 70% weight
-        assert obj.objectives[0][1] == 0.7
-        assert obj.objectives[1][1] == 0.3
+        assert obj.objectives[0][1] == pytest.approx(0.7)
+        assert obj.objectives[1][1] == pytest.approx(0.3)
     
     def test_fdc_multisegment(self):
         """fdc_multisegment should create multi-segment FDC objective."""
@@ -264,10 +264,10 @@ class TestFactoryFunctions:
     def test_apex_custom_weights(self):
         """APEX with custom weights should work."""
         apex_custom = apex_objective(
-            kge_weight=0.30,
-            kge_sqrt_weight=0.20,
+            core_metric_1_weight=0.30,
+            core_metric_2_weight=0.20,
             fdc_low_weight=0.15,
-            baseflow_index_weight=0.15
+            baseflow_index_weight=0.15,
         )
         
         obs, sim = generate_test_data(n=500)
