@@ -57,10 +57,20 @@ calibration-all = [
 sensitivity = [
     "SALib>=1.4",
 ]
+jax = [
+    "jax>=0.4.20",
+    "jaxlib>=0.4.20",
+    "numpyro>=0.15.0",
+    "arviz>=0.18.0",
+]
 full = [
     "pydream>=1.0",
     "SALib>=1.4",
     "seaborn>=0.11",
+    "jax>=0.4.20",
+    "jaxlib>=0.4.20",
+    "numpyro>=0.15.0",
+    "arviz>=0.18.0",
 ]
 dev = [
     "pytest>=7.0",
@@ -116,9 +126,12 @@ ignore = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "pyrrm"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
 
 [tool.mypy]
 python_version = "3.9"
