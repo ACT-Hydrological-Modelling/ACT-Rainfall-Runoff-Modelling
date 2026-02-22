@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.0
+#       jupytext_version: 1.19.1
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -83,7 +83,6 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 from pathlib import Path
 import warnings
 import time
@@ -114,6 +113,7 @@ from pyrrm.calibration import (
     CalibrationRunner, 
     CalibrationResult,
     CalibrationReport,
+    SPOTPY_AVAILABLE,
     PYDREAM_AVAILABLE
 )
 from pyrrm.calibration.objective_functions import calculate_metrics, GaussianLikelihood, TransformedGaussianLikelihood
@@ -123,8 +123,8 @@ from pyrrm.objectives import (
 
 print("\npyrrm components imported!")
 print(f"\nAvailable calibration backends:")
-print(f"  SCE-UA (direct, vendored): always available")
-print(f"  PyDREAM (MT-DREAM(ZS)): {PYDREAM_AVAILABLE}")
+print(f"  SpotPy (DREAM, SCE-UA): {SPOTPY_AVAILABLE}")
+print(f"  PyDREAM: {PYDREAM_AVAILABLE}")
 
 if not PYDREAM_AVAILABLE:
     print("\nWARNING: PyDREAM not installed!")
@@ -149,19 +149,19 @@ REPORTS_DIR = Path('../test_data/reports')
 
 # Map of objective function names to report files
 SCEUA_REPORTS = {
-    'NSE': '410734_nse.pkl',
-    'LogNSE': '410734_lognse.pkl',
-    'InvNSE': '410734_invnse.pkl',
-    'SqrtNSE': '410734_sqrtnse.pkl',
-    'SDEB': '410734_sdeb.pkl',
-    'KGE': '410734_kge.pkl',
-    'KGE_inv': '410734_kge_inv.pkl',
-    'KGE_sqrt': '410734_kge_sqrt.pkl',
-    'KGE_log': '410734_kge_log.pkl',
-    'KGE_np': '410734_kge_np.pkl',
-    'KGE_np_inv': '410734_kge_np_inv.pkl',
-    'KGE_np_sqrt': '410734_kge_np_sqrt.pkl',
-    'KGE_np_log': '410734_kge_np_log.pkl',
+    'NSE': '410734_sacramento_nse_sceua.pkl',
+    'LogNSE': '410734_sacramento_nse_sceua_log.pkl',
+    'InvNSE': '410734_sacramento_nse_sceua_inverse.pkl',
+    'SqrtNSE': '410734_sacramento_nse_sceua_sqrt.pkl',
+    'SDEB': '410734_sacramento_sdeb_sceua.pkl',
+    'KGE': '410734_sacramento_kge_sceua.pkl',
+    'KGE_inv': '410734_sacramento_kge_sceua_inverse.pkl',
+    'KGE_sqrt': '410734_sacramento_kge_sceua_sqrt.pkl',
+    'KGE_log': '410734_sacramento_kge_sceua_log.pkl',
+    'KGE_np': '410734_sacramento_kgenp_sceua.pkl',
+    'KGE_np_inv': '410734_sacramento_kgenp_sceua_inverse.pkl',
+    'KGE_np_sqrt': '410734_sacramento_kgenp_sceua_sqrt.pkl',
+    'KGE_np_log': '410734_sacramento_kgenp_sceua_log.pkl',
 }
 
 # Load all SCE-UA reports
@@ -347,30 +347,46 @@ for obj_name, transform in LIKELIHOOD_TRANSFORM_MAPPING.items():
 # For production use, increase iterations significantly (5000-10000+).
 
 # %%
-# PyDREAM configuration - MATCHING SYNTHETIC TEST SETTINGS
-# Settings chosen to avoid PyDREAM NumPy bugs:
-# - adapt_crossover=False (causes NumPy errors)
-# - adapt_gamma=False (causes NumPy errors)
-# - multitry=1 (standard DREAM, no multi-try)
-# Same hyperparameters as synthetic test for consistency
+# PyDREAM configuration - OPTIMIZED FOR FAST CONVERGENCE
+# Key optimizations:
+# - Fewer chains (3-4) for faster convergence while maintaining GR diagnostics
+# - DEpairs=2 for better exploration with fewer chains
+# - Adaptive gamma for better step size adaptation
+# - Reduced iterations for synthetic test (converges faster on clean data)
+# - Convergence threshold: GR < 1.2 (standard MCMC criterion)
 
-PYDREAM_ITERATIONS = 1500    # Iterations per chain (increased for better convergence)
-PYDREAM_CHAINS = 3           # 3 chains (minimum for DEpairs=1: 2*1+1=3)
-PYDREAM_MULTITRY = 1         # Standard DREAM (no multi-try)
-PYDREAM_DEPAIRS = 1          # 1 DE pair
-PYDREAM_SNOOKER = 0.10       # 10% snooker probability
-PYDREAM_ADAPT_GAMMA = False  # Disabled - causes PyDREAM NumPy bugs
-PYDREAM_ADAPT_CROSSOVER = False  # Disabled - causes PyDREAM NumPy bugs
-PYDREAM_CONVERGENCE_THRESHOLD = 1.05  # Stricter R-hat threshold
+DEMO_MODE = True  # Set to False for full production runs
 
-print("PyDREAM Configuration (Matching Synthetic Test):")
+if DEMO_MODE:
+    # Optimized for fast convergence on synthetic/validation data
+    PYDREAM_ITERATIONS = 1500   # Per chain (sufficient for synthetic test)
+    PYDREAM_CHAINS = 5          # 5 chains (minimum for DEpairs=2)
+    PYDREAM_MULTITRY = 3        # Multi-try for better mixing
+    PYDREAM_DEPAIRS = 2         # DE pairs for better exploration
+    PYDREAM_SNOOKER = 0.15      # Snooker probability for mode jumping
+    PYDREAM_ADAPT_GAMMA = False # Disabled due to PyDREAM bug
+    print("⚠ DEMO MODE: Optimized for fast convergence")
+    print("  Set DEMO_MODE = False for production-quality results")
+else:
+    # Production settings with more chains for robust convergence
+    PYDREAM_ITERATIONS = 5000   # Per chain (sufficient for convergence)
+    PYDREAM_CHAINS = 5          # 5 chains for robust Gelman-Rubin
+    PYDREAM_MULTITRY = 4        # Multi-try for better mixing
+    PYDREAM_DEPAIRS = 2         # DE pairs for exploration
+    PYDREAM_SNOOKER = 0.15      # Snooker probability
+    PYDREAM_ADAPT_GAMMA = False # Disabled due to PyDREAM bug
+    print("PRODUCTION MODE: Full iterations with parallel chains")
+
+# Convergence settings
+PYDREAM_CONVERGENCE_THRESHOLD = 1.1  # Gelman-Rubin threshold (strict: 1.1)
+
+print(f"\nPyDREAM Configuration (Optimized for Convergence):")
 print(f"  Iterations per chain: {PYDREAM_ITERATIONS}")
 print(f"  Number of chains: {PYDREAM_CHAINS} (min: {2*PYDREAM_DEPAIRS+1} for DEpairs={PYDREAM_DEPAIRS})")
 print(f"  Multi-try samples: {PYDREAM_MULTITRY}")
-print(f"  DE pairs: {PYDREAM_DEPAIRS}")
-print(f"  Snooker probability: {PYDREAM_SNOOKER:.0%}")
+print(f"  DE pairs: {PYDREAM_DEPAIRS} (for better exploration)")
+print(f"  Snooker probability: {PYDREAM_SNOOKER:.1%}")
 print(f"  Adaptive gamma: {PYDREAM_ADAPT_GAMMA}")
-print(f"  Adaptive crossover: {PYDREAM_ADAPT_CROSSOVER}")
 print(f"  Convergence threshold: GR < {PYDREAM_CONVERGENCE_THRESHOLD}")
 print(f"  Total samples: ~{PYDREAM_ITERATIONS * PYDREAM_CHAINS:,}")
 
@@ -816,27 +832,26 @@ print("TEST 2: PYDREAM ON SYNTHETIC HYDROGRAPH")
 print("=" * 70)
 
 if PYDREAM_AVAILABLE:
-    # PyDREAM hyperparameters - MATCHING REAL DATA SETTINGS
-    # Same settings used for both synthetic and real data for consistency
-    SYNTHETIC_ITERATIONS = 500       # Iterations per chain
+    # PyDREAM hyperparameters - BATCH MODE (with early stopping)
+    SYNTHETIC_ITERATIONS = 1000      # Max iterations per chain (may stop early)
     SYNTHETIC_CHAINS = 3             # 3 chains (minimum for DEpairs=1: 2*1+1=3)
-    SYNTHETIC_MULTITRY = 1           # Standard DREAM (no multi-try)
-    SYNTHETIC_DEPAIRS = 1            # 1 DE pair
-    SYNTHETIC_SNOOKER = 0.10         # 10% snooker probability
+    SYNTHETIC_MULTITRY = 1           # Standard DREAM (no multi-try for speed)
+    SYNTHETIC_DEPAIRS = 1            # DE pairs
+    SYNTHETIC_SNOOKER = 0.10         # Snooker probability (10% default)
     SYNTHETIC_CONVERGENCE = 1.05     # Stricter R-hat threshold
-    SYNTHETIC_ADAPT_GAMMA = False    # Disabled - PyDREAM NumPy bug
-    SYNTHETIC_ADAPT_CROSSOVER = False  # Disabled - PyDREAM NumPy bug
+    SYNTHETIC_BATCH_SIZE = 500       # Check convergence every 500 iterations
+    SYNTHETIC_MIN_ITER = 500         # Minimum before checking convergence
+    SYNTHETIC_PATIENCE = 2           # Stop after 2 consecutive converged batches
     
-    print(f"\nRunning PyDREAM (STANDARD MODE) with {len(CALIBRATION_PARAMS)} parameters...")
-    print(f"  Iterations per chain: {SYNTHETIC_ITERATIONS}")
+    print(f"\nRunning PyDREAM (BATCH MODE with early stopping) with {len(CALIBRATION_PARAMS)} parameters...")
+    print(f"  Max iterations per chain: {SYNTHETIC_ITERATIONS}")
     print(f"  Number of chains: {SYNTHETIC_CHAINS} (parallel)")
     print(f"  Multi-try samples: {SYNTHETIC_MULTITRY}")
     print(f"  DE pairs: {SYNTHETIC_DEPAIRS}")
-    print(f"  Snooker probability: {SYNTHETIC_SNOOKER:.0%}")
-    print(f"  Adaptive gamma: {SYNTHETIC_ADAPT_GAMMA}")
-    print(f"  Adaptive crossover: {SYNTHETIC_ADAPT_CROSSOVER}")
+    print(f"  Snooker probability: {SYNTHETIC_SNOOKER:.1%}")
     print(f"  Convergence threshold: GR < {SYNTHETIC_CONVERGENCE}")
-    print(f"  Total samples: ~{SYNTHETIC_ITERATIONS * SYNTHETIC_CHAINS:,}")
+    print(f"  Batch size: {SYNTHETIC_BATCH_SIZE} | Min iter: {SYNTHETIC_MIN_ITER} | Patience: {SYNTHETIC_PATIENCE}")
+    print("  Using CalibrationRunner.run_pydream() with early stopping")
     
     start_time = time.time()
     
@@ -858,19 +873,21 @@ if PYDREAM_AVAILABLE:
     print("-" * 60)
     sys.stdout.flush()
     
-    # Run PyDREAM in STANDARD MODE (no batches, no adaptive features)
+    # Run PyDREAM in BATCH MODE (with early stopping)
     pydream_result = synthetic_runner_pydream.run_pydream(
         n_iterations=SYNTHETIC_ITERATIONS,
         n_chains=SYNTHETIC_CHAINS,
         multitry=SYNTHETIC_MULTITRY,
         snooker=SYNTHETIC_SNOOKER,
         DEpairs=SYNTHETIC_DEPAIRS,
-        adapt_crossover=SYNTHETIC_ADAPT_CROSSOVER,  # Disabled - PyDREAM bug
-        adapt_gamma=SYNTHETIC_ADAPT_GAMMA,          # Disabled - PyDREAM bug
         convergence_threshold=SYNTHETIC_CONVERGENCE,
-        parallel=True,
-        dbname=str(pydream_progress_file),
-        hardboundaries=True,
+        # Batch mode settings for early stopping
+        batch_size=SYNTHETIC_BATCH_SIZE,
+        min_iterations=SYNTHETIC_MIN_ITER,
+        patience=SYNTHETIC_PATIENCE,
+        post_convergence_iterations=500,  # Extra samples after convergence
+        parallel=True,            # Use multiprocessing for parallel chains
+        dbname=str(pydream_progress_file),  # CSV progress tracking
         verbose=True,
     )
     
@@ -1085,452 +1102,156 @@ print(f"\nFigure saved: {figures_dir / '05_synthetic_validation.png'}")
 PYDREAM_RESULTS_DIR = REPORTS_DIR / 'pydream'
 PYDREAM_RESULTS_DIR.mkdir(exist_ok=True)
 
+PYDREAM_FILENAMES = {
+    'NSE': '410734_sacramento_nse_dream',
+    'LogNSE': '410734_sacramento_nse_dream_log',
+    'InvNSE': '410734_sacramento_nse_dream_inverse',
+    'SqrtNSE': '410734_sacramento_nse_dream_sqrt',
+    'SDEB': '410734_sacramento_sdeb_dream',
+    'KGE': '410734_sacramento_kge_dream',
+    'KGE_inv': '410734_sacramento_kge_dream_inverse',
+    'KGE_sqrt': '410734_sacramento_kge_dream_sqrt',
+    'KGE_log': '410734_sacramento_kge_dream_log',
+    'KGE_np': '410734_sacramento_kgenp_dream',
+    'KGE_np_inv': '410734_sacramento_kgenp_dream_inverse',
+    'KGE_np_sqrt': '410734_sacramento_kgenp_dream_sqrt',
+    'KGE_np_log': '410734_sacramento_kgenp_dream_log',
+}
+
 # Storage for PyDREAM results
 pydream_results = {}
 pydream_reports = {}
 
-print(f"PyDREAM results directory: {PYDREAM_RESULTS_DIR}")
+# Check if we should run calibrations or load existing results
+RUN_CALIBRATIONS = True  # Set to False to only load existing results
+
+if not PYDREAM_AVAILABLE:
+    print("=" * 70)
+    print("PYDREAM NOT AVAILABLE - SKIPPING CALIBRATIONS")
+    print("=" * 70)
+    print("\nInstall PyDREAM with: pip install pydream")
+    RUN_CALIBRATIONS = False
 
 # %%
-# =============================================================================
-# GELMAN-RUBIN R-HAT IMPLEMENTATION
-# =============================================================================
-# Same implementation as Notebook 08 (Calibration Monitor) for consistency.
-# Uses PyDREAM's Gelman_Rubin function when available, with proper chain handling.
-
-try:
-    from pydream.convergence import Gelman_Rubin as pydream_gelman_rubin
-    PYDREAM_GR_AVAILABLE = True
-except ImportError:
-    PYDREAM_GR_AVAILABLE = False
-
-# Minimum samples per chain for reliable R-hat (after 50% burn-in removal)
-MIN_SAMPLES_PER_CHAIN_RELIABLE = 100
-MIN_SAMPLES_PER_CHAIN_MARGINAL = 50
-MIN_SAMPLES_PER_CHAIN_MINIMUM = 20
-
-
-def _compute_gelman_rubin_fallback(chains: list, param_names: list) -> dict:
-    """
-    Fallback Gelman-Rubin implementation matching PyDREAM's formula.
+if RUN_CALIBRATIONS and PYDREAM_AVAILABLE:
+    print("=" * 70)
+    print("RUNNING PYDREAM CALIBRATIONS")
+    print("=" * 70)
+    print(f"\nThis will run {len(objectives)} calibrations...")
+    print("Estimated time: 1-2 hours (demo mode) or 4-8 hours (production)")
+    print("\n" + "-" * 70)
     
-    Uses 50% burn-in removal and standard Gelman-Rubin formula.
-    Reference: Gelman & Rubin (1992). Statistical Science, 7(4), 457-472.
-    """
-    nchains = len(chains)
-    nsamples = len(chains[0])
-    nburnin = nsamples // 2
+    total_start = time.time()
     
-    r_hat_values = {}
-    
-    for i, param in enumerate(param_names):
-        # Extract parameter values for all chains, after burn-in
-        param_chains = [chain[nburnin:, i] for chain in chains]
+    for i, (name, objective) in enumerate(objectives.items(), 1):
+        print(f"\n[{i}/{len(objectives)}] {name}")
+        print("=" * 50)
         
-        # Within-chain variance
-        chain_vars = [np.var(c, ddof=1) for c in param_chains]
-        W = np.mean(chain_vars)
+        # Check if result already exists
+        _pkl_name = PYDREAM_FILENAMES[name]
+        result_file = PYDREAM_RESULTS_DIR / f'{_pkl_name}.pkl'
         
-        # Between-chain variance
-        chain_means = [np.mean(c) for c in param_chains]
-        B = np.var(chain_means, ddof=1)
+        if result_file.exists():
+            print(f"  Loading existing result: {result_file.name}")
+            report = CalibrationReport.load(str(result_file))
+            pydream_reports[name] = report
+            pydream_results[name] = report.result
+            print(f"  ✓ Loaded (Best objective: {report.result.best_objective:.4f})")
+            continue
         
-        # Variance estimate
-        n_post_burnin = nsamples - nburnin
-        var_est = W * (1 - 1./n_post_burnin) + B
+        # Get the equivalent likelihood transform for this objective
+        # This ensures PyDREAM uses the same flow emphasis as the objective function
+        likelihood_transform = LIKELIHOOD_TRANSFORM_MAPPING.get(name, 'sqrt')
+        likelihood = TransformedGaussianLikelihood(likelihood_transform)
         
-        # R-hat
-        if W > 1e-10:
-            r_hat = np.sqrt(var_est / W)
-        else:
-            r_hat = np.nan
+        print(f"  Objective: {name}")
+        print(f"  Likelihood: TransformedGaussianLikelihood('{likelihood_transform}') - {likelihood.flow_emphasis} emphasis")
         
-        r_hat_values[param] = r_hat
-    
-    return r_hat_values
-
-
-def compute_gelman_rubin_from_progress(progress_file: Path, param_names: list, n_chains: int = 3) -> dict:
-    """
-    Compute Gelman-Rubin R-hat from PyDREAM progress CSV file.
-    
-    Same implementation as Notebook 08 for consistency.
-    
-    Args:
-        progress_file: Path to progress CSV (without .csv extension)
-        param_names: List of parameter names
-        n_chains: Number of chains (default 3)
-        
-    Returns:
-        Dictionary with r_hat values, reliability info, etc.
-    """
-    csv_path = Path(str(progress_file) + '.csv')
-    
-    if not csv_path.exists():
-        return {'r_hat': {p: np.nan for p in param_names}, 'reliability': 'no_file'}
-    
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception as e:
-        return {'r_hat': {p: np.nan for p in param_names}, 'reliability': 'read_error', 'error': str(e)}
-    
-    # Map parameter names to actual column names in the CSV
-    # PyDREAM progress files use 'par' prefix (e.g., 'paruztwm' instead of 'uztwm')
-    csv_columns = df.columns.tolist()
-    col_mapping = {}
-    for param in param_names:
-        if param in csv_columns:
-            col_mapping[param] = param
-        elif f'par{param}' in csv_columns:
-            col_mapping[param] = f'par{param}'
-        else:
-            # Parameter not found in CSV - skip R-hat calculation
-            return {
-                'r_hat': {p: np.nan for p in param_names},
-                'reliability': 'column_mismatch',
-                'error': f"Parameter '{param}' not found in CSV columns: {csv_columns[:10]}..."
-            }
-    
-    # Get the actual column names to use
-    actual_columns = [col_mapping[p] for p in param_names]
-    
-    # Check for chain column (PyDREAM adapter adds this)
-    if 'chain' in df.columns:
-        chain_groups = df.groupby('chain')
-        n_chains = len(chain_groups)
-        chains = []
-        for chain_id in sorted(df['chain'].unique()):
-            chain_df = df[df['chain'] == chain_id]
-            chain_data = chain_df[actual_columns].values
-            chains.append(chain_data)
-        min_len = min(len(c) for c in chains)
-        chains = [c[:min_len] for c in chains]
-        samples_per_chain = min_len
-    else:
-        # Interleaved format
-        values = df[actual_columns].values
-        n_total = len(values)
-        samples_per_chain = n_total // n_chains
-        chains = []
-        for chain_idx in range(n_chains):
-            chain_data = values[chain_idx::n_chains][:samples_per_chain]
-            chains.append(chain_data)
-    
-    # PyDREAM uses 50% burn-in
-    effective_samples = samples_per_chain // 2
-    
-    # Determine reliability
-    if effective_samples < MIN_SAMPLES_PER_CHAIN_MINIMUM:
-        reliability = 'insufficient'
-    elif effective_samples < MIN_SAMPLES_PER_CHAIN_MARGINAL:
-        reliability = 'unreliable'
-    elif effective_samples < MIN_SAMPLES_PER_CHAIN_RELIABLE:
-        reliability = 'marginal'
-    else:
-        reliability = 'reliable'
-    
-    # Compute R-hat
-    r_hat_values = {}
-    method = 'unknown'
-    
-    if PYDREAM_GR_AVAILABLE and reliability != 'insufficient':
-        try:
-            gr_array = pydream_gelman_rubin(chains)
-            for i, param in enumerate(param_names):
-                r_hat_values[param] = float(gr_array[i])
-            method = 'pydream'
-        except Exception as e:
-            method = 'fallback'
-            r_hat_values = _compute_gelman_rubin_fallback(chains, param_names)
-    elif reliability == 'insufficient':
-        for param in param_names:
-            r_hat_values[param] = np.nan
-        method = 'insufficient_samples'
-    else:
-        method = 'fallback'
-        r_hat_values = _compute_gelman_rubin_fallback(chains, param_names)
-    
-    return {
-        'r_hat': r_hat_values,
-        'n_chains': n_chains,
-        'samples_per_chain': samples_per_chain,
-        'effective_samples': effective_samples,
-        'reliability': reliability,
-        'method': method
-    }
-
-
-def print_rhat_summary(gr_result: dict, threshold: float = 1.05):
-    """Print R-hat summary with interpretation."""
-    r_hat = gr_result['r_hat']
-    reliability = gr_result.get('reliability', 'unknown')
-    method = gr_result.get('method', 'unknown')
-    
-    if reliability in ['no_file', 'read_error']:
-        print(f"  R-hat: Cannot compute ({reliability})")
-        return False
-    
-    if reliability == 'insufficient':
-        effective = gr_result.get('effective_samples', 0)
-        print(f"  R-hat: Insufficient samples ({effective} < {MIN_SAMPLES_PER_CHAIN_MINIMUM})")
-        return False
-    
-    # Compute summary statistics
-    valid_rhats = [v for v in r_hat.values() if not np.isnan(v)]
-    if not valid_rhats:
-        print(f"  R-hat: No valid values")
-        return False
-    
-    max_rhat = max(valid_rhats)
-    n_converged = sum(1 for v in valid_rhats if v < threshold)
-    n_total = len(valid_rhats)
-    
-    # Determine status
-    if max_rhat < 1.01:
-        status = "✓✓ Excellent"
-    elif max_rhat < 1.05:
-        status = "✓ Good"
-    elif max_rhat < 1.1:
-        status = "~ Acceptable"
-    elif max_rhat < 1.2:
-        status = "⚠ Borderline"
-    else:
-        status = "✗ Not converged"
-    
-    print(f"  R-hat ({method}): max={max_rhat:.3f} {status}")
-    print(f"  Converged: {n_converged}/{n_total} parameters (R-hat < {threshold})")
-    
-    if reliability == 'marginal':
-        print(f"  ⚠ Marginal sample size - R-hat estimates may be noisy")
-    
-    return max_rhat < threshold
-
-# %%
-# Helper function to run a single PyDREAM calibration
-def run_pydream_calibration(obj_name, objective_func):
-    """
-    Run PyDREAM calibration for a single objective function.
-    
-    Returns the result and report, or loads from disk if already exists.
-    """
-    result_file = PYDREAM_RESULTS_DIR / f'410734_pydream_{obj_name.lower()}.pkl'
-    progress_file = PYDREAM_RESULTS_DIR / f'progress_{obj_name.lower()}'
-    
-    print("=" * 60)
-    print(f"PyDREAM CALIBRATION: {obj_name}")
-    print("=" * 60)
-    
-    # Check if already exists
-    if result_file.exists():
-        print(f"Loading existing result: {result_file.name}")
-        report = CalibrationReport.load(str(result_file))
-        result = report.result
-        print(f"✓ Loaded (Best objective: {result.best_objective:.4f})")
-        if hasattr(result, 'actual_objective_value'):
-            print(f"  Actual {obj_name}: {result.actual_objective_value:.4f}")
-        
-        # Compute R-hat from progress file if it exists
-        param_names = list(result.best_parameters.keys())
-        gr_result = compute_gelman_rubin_from_progress(progress_file, param_names, PYDREAM_CHAINS)
-        print_rhat_summary(gr_result, PYDREAM_CONVERGENCE_THRESHOLD)
-        
-        return result, report
-    
-    if not PYDREAM_AVAILABLE:
-        print("✗ PyDREAM not available!")
-        return None, None
-    
-    # Get likelihood transform
-    likelihood_transform = LIKELIHOOD_TRANSFORM_MAPPING.get(obj_name, 'sqrt')
-    likelihood = TransformedGaussianLikelihood(likelihood_transform)
-    
-    print(f"Objective: {obj_name}")
-    print(f"Likelihood: TransformedGaussianLikelihood('{likelihood_transform}')")
-    print(f"Flow emphasis: {likelihood.flow_emphasis}")
-    print(f"Config: {PYDREAM_ITERATIONS} iter × {PYDREAM_CHAINS} chains")
-    print(f"Monitor: tail -f {progress_file}.csv")
-    print("-" * 60)
-    
-    # Create runner
-    runner = CalibrationRunner(
-        model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
-        inputs=cal_inputs,
-        observed=cal_observed,
-        objective=likelihood,
-        warmup_period=WARMUP_DAYS
-    )
-    
-    start_time = time.time()
-    
-    try:
-        result = runner.run_pydream(
-            n_iterations=PYDREAM_ITERATIONS,
-            n_chains=PYDREAM_CHAINS,
-            multitry=PYDREAM_MULTITRY,
-            snooker=PYDREAM_SNOOKER,
-            DEpairs=PYDREAM_DEPAIRS,
-            parallel=True,
-            adapt_crossover=PYDREAM_ADAPT_CROSSOVER,
-            adapt_gamma=PYDREAM_ADAPT_GAMMA,
-            verbose=True,
-            nverbose=100,
-            dbname=str(progress_file),
-            hardboundaries=True,
-            convergence_check=True,
-            convergence_threshold=PYDREAM_CONVERGENCE_THRESHOLD
+        # Create CalibrationRunner with proper log-likelihood for MCMC
+        runner = CalibrationRunner(
+            model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
+            inputs=cal_inputs,
+            observed=cal_observed,
+            objective=likelihood,  # Use proper log-likelihood, not the efficiency metric
+            warmup_period=WARMUP_DAYS
         )
         
-        elapsed = time.time() - start_time
-        print("-" * 60)
-        print(f"✓ Completed in {elapsed:.1f}s")
-        print(f"Best log-likelihood: {result.best_objective:.4f}")
+        # Run PyDREAM calibration
+        # Progress file for external monitoring: tail -f <progress_file>.csv
+        progress_file = PYDREAM_RESULTS_DIR / f'progress_{_pkl_name}'
+        print(f"  Config: {PYDREAM_ITERATIONS} iter × {PYDREAM_CHAINS} chains (parallel)")
+        print(f"  Progress file: {progress_file}.csv")
+        print(f"  Monitor with: tail -f {progress_file}.csv")
+        start_time = time.time()
         
-        # Calculate actual objective value
-        eval_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-        eval_model.set_parameters(result.best_parameters)
-        eval_model.reset()
-        sim_output = eval_model.run(cal_inputs)
-        sim_values = sim_output['runoff'].values[WARMUP_DAYS:]
-        obs_values = cal_observed[WARMUP_DAYS:]
-        
-        actual_obj_value = objective_func(obs_values, sim_values)
-        print(f"Actual {obj_name}: {actual_obj_value:.4f}")
-        
-        result.actual_objective_value = actual_obj_value
-        result.objective_name = obj_name
-        
-        # Compute R-hat using same implementation as Notebook 08
-        param_names = list(result.best_parameters.keys())
-        gr_result = compute_gelman_rubin_from_progress(progress_file, param_names, PYDREAM_CHAINS)
-        print_rhat_summary(gr_result, PYDREAM_CONVERGENCE_THRESHOLD)
-        
-        # Store R-hat in result for later analysis
-        result.gelman_rubin_results = gr_result
-        
-        # Save
-        report = runner.create_report(result, catchment_info={
-            'name': 'Queanbeyan River', 
-            'gauge_id': '410734', 
-            'area_km2': CATCHMENT_AREA_KM2
-        })
-        report.save(str(result_file.with_suffix('')))
-        print(f"✓ Saved to: {result_file}")
-        
-        return result, report
-        
-    except Exception as e:
-        print(f"✗ Failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None
-
-# %% [markdown]
-# ### Calibration 1/13: NSE (High-flow emphasis)
-
-# %%
-result, report = run_pydream_calibration('NSE', objectives['NSE'])
-if result: pydream_results['NSE'] = result; pydream_reports['NSE'] = report
-
-# %% [markdown]
-# ### Calibration 2/13: LogNSE (Low-flow emphasis)
-
-# %%
-result, report = run_pydream_calibration('LogNSE', objectives['LogNSE'])
-if result: pydream_results['LogNSE'] = result; pydream_reports['LogNSE'] = report
-
-# %% [markdown]
-# ### Calibration 3/13: InvNSE (Very low-flow emphasis)
-
-# %%
-result, report = run_pydream_calibration('InvNSE', objectives['InvNSE'])
-if result: pydream_results['InvNSE'] = result; pydream_reports['InvNSE'] = report
-
-# %% [markdown]
-# ### Calibration 4/13: SqrtNSE (Balanced emphasis)
-
-# %%
-result, report = run_pydream_calibration('SqrtNSE', objectives['SqrtNSE'])
-if result: pydream_results['SqrtNSE'] = result; pydream_reports['SqrtNSE'] = report
-
-# %% [markdown]
-# ### Calibration 5/13: SDEB (Balanced + FDC)
-
-# %%
-result, report = run_pydream_calibration('SDEB', objectives['SDEB'])
-if result: pydream_results['SDEB'] = result; pydream_reports['SDEB'] = report
-
-# %% [markdown]
-# ### Calibration 6/13: KGE (High-flow emphasis)
-
-# %%
-result, report = run_pydream_calibration('KGE', objectives['KGE'])
-if result: pydream_results['KGE'] = result; pydream_reports['KGE'] = report
-
-# %% [markdown]
-# ### Calibration 7/13: KGE_inv (Very low-flow emphasis)
-
-# %%
-result, report = run_pydream_calibration('KGE_inv', objectives['KGE_inv'])
-if result: pydream_results['KGE_inv'] = result; pydream_reports['KGE_inv'] = report
-
-# %% [markdown]
-# ### Calibration 8/13: KGE_sqrt (Balanced emphasis)
-
-# %%
-result, report = run_pydream_calibration('KGE_sqrt', objectives['KGE_sqrt'])
-if result: pydream_results['KGE_sqrt'] = result; pydream_reports['KGE_sqrt'] = report
-
-# %% [markdown]
-# ### Calibration 9/13: KGE_log (Low-flow emphasis)
-
-# %%
-result, report = run_pydream_calibration('KGE_log', objectives['KGE_log'])
-if result: pydream_results['KGE_log'] = result; pydream_reports['KGE_log'] = report
-
-# %% [markdown]
-# ### Calibration 10/13: KGE_np (Robust high-flow)
-
-# %%
-result, report = run_pydream_calibration('KGE_np', objectives['KGE_np'])
-if result: pydream_results['KGE_np'] = result; pydream_reports['KGE_np'] = report
-
-# %% [markdown]
-# ### Calibration 11/13: KGE_np_inv (Robust very low-flow)
-
-# %%
-result, report = run_pydream_calibration('KGE_np_inv', objectives['KGE_np_inv'])
-if result: pydream_results['KGE_np_inv'] = result; pydream_reports['KGE_np_inv'] = report
-
-# %% [markdown]
-# ### Calibration 12/13: KGE_np_sqrt (Robust balanced)
-
-# %%
-result, report = run_pydream_calibration('KGE_np_sqrt', objectives['KGE_np_sqrt'])
-if result: pydream_results['KGE_np_sqrt'] = result; pydream_reports['KGE_np_sqrt'] = report
-
-# %% [markdown]
-# ### Calibration 13/13: KGE_np_log (Robust low-flow)
-
-# %%
-result, report = run_pydream_calibration('KGE_np_log', objectives['KGE_np_log'])
-if result: pydream_results['KGE_np_log'] = result; pydream_reports['KGE_np_log'] = report
-
-# %% [markdown]
-# ### Calibration Summary
-
-# %%
-print("=" * 60)
-print("PYDREAM CALIBRATION SUMMARY")
-print("=" * 60)
-print(f"\nCompleted: {len(pydream_results)}/13 calibrations")
-print("\nResults:")
-for name in objectives.keys():
-    if name in pydream_results:
-        result = pydream_results[name]
-        actual = getattr(result, 'actual_objective_value', result.best_objective)
-        print(f"  ✓ {name:<12}: {actual:.4f}")
-    else:
-        print(f"  - {name:<12}: Not available")
+        try:
+            result = runner.run_pydream(
+                n_iterations=PYDREAM_ITERATIONS,
+                n_chains=PYDREAM_CHAINS,
+                multitry=PYDREAM_MULTITRY,
+                snooker=PYDREAM_SNOOKER,  # Snooker probability for mode jumping
+                parallel=True,            # Enable multiprocessing for parallel chains
+                adapt_crossover=False,    # Disabled due to PyDREAM bug
+                adapt_gamma=PYDREAM_ADAPT_GAMMA,  # Adaptive gamma for step size
+                DEpairs=PYDREAM_DEPAIRS, # DE pairs for exploration
+                verbose=True,
+                nverbose=100,             # Print progress every 100 iterations
+                dbname=str(progress_file),  # CSV progress tracking
+                hardboundaries=True,      # Enforce parameter bounds
+                convergence_check=True,   # Calculate Gelman-Rubin diagnostics
+                convergence_threshold=PYDREAM_CONVERGENCE_THRESHOLD  # GR < 1.2
+            )
+            
+            elapsed = time.time() - start_time
+            print(f"  ✓ Completed in {elapsed:.1f}s")
+            print(f"  Best log-likelihood: {result.best_objective:.4f}")
+            
+            # Calculate the actual objective function value (NSE/KGE/etc.) for the best parameters
+            # This allows fair comparison with SCE-UA results
+            eval_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+            eval_model.set_parameters(result.best_parameters)
+            eval_model.reset()
+            sim_output = eval_model.run(cal_inputs)
+            sim_values = sim_output['runoff'].values[WARMUP_DAYS:]
+            obs_values = cal_observed[WARMUP_DAYS:]
+            
+            # Evaluate with the original objective function
+            actual_obj_value = objective(obs_values, sim_values)
+            print(f"  Actual {name}: {actual_obj_value:.4f}")
+            
+            # Store the actual objective value in result for comparison
+            result.actual_objective_value = actual_obj_value
+            result.objective_name = name
+            
+            # Check convergence
+            if 'gelman_rubin' in result.convergence_diagnostics:
+                gr_vals = result.convergence_diagnostics['gelman_rubin']
+                max_gr = max(gr_vals.values())
+                converged = result.convergence_diagnostics.get('converged', False)
+                status = "✓ Converged" if converged else f"⚠ Max R-hat: {max_gr:.3f}"
+                print(f"  Convergence: {status}")
+            
+            # Save result
+            report = runner.create_report(result, catchment_info={
+                'name': 'Queanbeyan River', 
+                'gauge_id': '410734', 
+                'area_km2': CATCHMENT_AREA_KM2
+            })
+            report.save(str(result_file.with_suffix('')))
+            
+            pydream_results[name] = result
+            pydream_reports[name] = report
+            
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+            continue
+    
+    total_elapsed = time.time() - total_start
+    print("\n" + "=" * 70)
+    print(f"ALL CALIBRATIONS COMPLETE")
+    print(f"Total time: {total_elapsed/60:.1f} minutes")
+    print(f"Successful: {len(pydream_results)}/{len(objectives)}")
+    print("=" * 70)
 
 # %% [markdown]
 # ---
@@ -1548,7 +1269,8 @@ for name in objectives.keys():
     if name in pydream_results:
         continue  # Already loaded
     
-    result_file = PYDREAM_RESULTS_DIR / f'410734_pydream_{name.lower()}.pkl'
+    _pkl_name = PYDREAM_FILENAMES[name]
+    result_file = PYDREAM_RESULTS_DIR / f'{_pkl_name}.pkl'
     if result_file.exists():
         try:
             report = CalibrationReport.load(str(result_file))
@@ -1570,68 +1292,7 @@ print(f"\nTotal PyDREAM results available: {len(pydream_results)}/{len(objective
 # by each algorithm across all objective functions.
 
 # %%
-# Build comprehensive comparison table with all NSE and KGE variants
-import plotly.graph_objects as go
-
-# Define all NSE and KGE variants to calculate
-# Each tuple: (display_name, objective_class, transform_type)
-nse_variants = [
-    ('NSE', NSE, None),
-    ('NSE(√Q)', NSE, 'sqrt'),
-    ('NSE(log Q)', NSE, 'log'),
-    ('NSE(1/Q)', NSE, 'inverse'),
-]
-
-kge_variants = [
-    ('KGE', KGE, None),
-    ('KGE(√Q)', KGE, 'sqrt'),
-    ('KGE(log Q)', KGE, 'log'),
-    ('KGE(1/Q)', KGE, 'inverse'),
-]
-
-def calculate_all_variants(sim, obs):
-    """Calculate all NSE and KGE variants for a simulation.
-    
-    Note: pyrrm.objectives classes use __call__(obs, sim) interface,
-    not compute(sim, obs).
-    """
-    results = {}
-    
-    # Calculate NSE variants
-    # NSE classes are callable: obj(obs, sim) - note argument order!
-    for name, obj_class, transform in nse_variants:
-        try:
-            if transform is None:
-                obj = obj_class()
-            else:
-                obj = obj_class(transform=FlowTransformation(transform, epsilon_value=0.01))
-            # Use callable interface with correct argument order (obs, sim)
-            results[name] = float(obj(obs, sim))
-        except Exception as e:
-            print(f"  Warning: Failed to calculate {name}: {e}")
-            results[name] = np.nan
-    
-    # Calculate KGE variants
-    for name, obj_class, transform in kge_variants:
-        try:
-            if transform is None:
-                obj = obj_class(variant='2012')
-            else:
-                obj = obj_class(variant='2012', transform=FlowTransformation(transform, epsilon_value=0.01))
-            # Use callable interface with correct argument order (obs, sim)
-            results[name] = float(obj(obs, sim))
-        except Exception as e:
-            print(f"  Warning: Failed to calculate {name}: {e}")
-            results[name] = np.nan
-    
-    # Also calculate RMSE and PBIAS using calculate_metrics
-    basic_metrics = calculate_metrics(sim, obs)
-    results['RMSE'] = basic_metrics.get('RMSE', np.nan)
-    results['PBIAS'] = basic_metrics.get('PBIAS', np.nan)
-    
-    return results
-
-# Build comparison data
+# Build comparison table
 comparison_data = []
 
 for name in objectives.keys():
@@ -1639,1826 +1300,537 @@ for name in objectives.keys():
     
     # SCE-UA results
     if name in sceua_results:
+        row['SCE-UA Best'] = sceua_results[name].best_objective
         row['SCE-UA Runtime (s)'] = sceua_results[name].runtime_seconds
-        
-        # Calculate performance metrics
-        model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-        model.set_parameters(sceua_results[name].best_parameters)
-        model.reset()
-        sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
-        obs = cal_observed[WARMUP_DAYS:]
-        
-        # Calculate all variants
-        all_metrics = calculate_all_variants(sim, obs)
-        for metric_name, value in all_metrics.items():
-            row[f'SCE-UA {metric_name}'] = value
     else:
+        row['SCE-UA Best'] = np.nan
         row['SCE-UA Runtime (s)'] = np.nan
-        for metric_name, _, _ in nse_variants + kge_variants:
-            row[f'SCE-UA {metric_name}'] = np.nan
-        row['SCE-UA RMSE'] = np.nan
-        row['SCE-UA PBIAS'] = np.nan
     
     # PyDREAM results
     if name in pydream_results:
+        row['PyDREAM Best'] = pydream_results[name].best_objective
         row['PyDREAM Runtime (s)'] = pydream_results[name].runtime_seconds
-        
-        # Calculate performance metrics
-        model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-        model.set_parameters(pydream_results[name].best_parameters)
-        model.reset()
-        sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
-        obs = cal_observed[WARMUP_DAYS:]
-        
-        # Calculate all variants
-        all_metrics = calculate_all_variants(sim, obs)
-        for metric_name, value in all_metrics.items():
-            row[f'PyDREAM {metric_name}'] = value
     else:
+        row['PyDREAM Best'] = np.nan
         row['PyDREAM Runtime (s)'] = np.nan
-        for metric_name, _, _ in nse_variants + kge_variants:
-            row[f'PyDREAM {metric_name}'] = np.nan
-        row['PyDREAM RMSE'] = np.nan
-        row['PyDREAM PBIAS'] = np.nan
     
     comparison_data.append(row)
 
 comparison_df = pd.DataFrame(comparison_data)
 
-# Reorder columns: SCE-UA on left half, PyDREAM on right half
-ordered_cols = ['Objective']
-
-# LEFT HALF: All SCE-UA metrics
-# SCE-UA NSE variants
-for metric_name, _, _ in nse_variants:
-    ordered_cols.append(f'SCE-UA {metric_name}')
-# SCE-UA KGE variants
-for metric_name, _, _ in kge_variants:
-    ordered_cols.append(f'SCE-UA {metric_name}')
-# SCE-UA error metrics and runtime
-ordered_cols.extend(['SCE-UA RMSE', 'SCE-UA PBIAS', 'SCE-UA Runtime (s)'])
-
-# RIGHT HALF: All PyDREAM metrics
-# PyDREAM NSE variants
-for metric_name, _, _ in nse_variants:
-    ordered_cols.append(f'PyDREAM {metric_name}')
-# PyDREAM KGE variants
-for metric_name, _, _ in kge_variants:
-    ordered_cols.append(f'PyDREAM {metric_name}')
-# PyDREAM error metrics and runtime
-ordered_cols.extend(['PyDREAM RMSE', 'PyDREAM PBIAS', 'PyDREAM Runtime (s)'])
-
-# Filter to only include columns that exist
-ordered_cols = [c for c in ordered_cols if c in comparison_df.columns]
-comparison_df = comparison_df[ordered_cols]
-
-print(f"Comparison table built with {len(comparison_df)} objectives and {len(comparison_df.columns)} metrics")
-print(f"  Left half (SCE-UA): {sum(1 for c in comparison_df.columns if 'SCE-UA' in c)} columns")
-print(f"  Right half (PyDREAM): {sum(1 for c in comparison_df.columns if 'PyDREAM' in c)} columns")
+print("=" * 70)
+print("ALGORITHM PERFORMANCE COMPARISON")
+print("=" * 70)
+print(f"\n{comparison_df.to_string(index=False)}")
 
 # %%
-# Create color-coded Plotly table showing winners (blue) vs losers (red)
-
-def create_comparison_table_plotly(df):
-    """
-    Create a Plotly table with color coding:
-    - Blue (#4169E1): Winner (better performance)
-    - Red (#DC143C): Loser (worse performance)
-    - White: Neutral (objective name, or no comparison possible)
-    
-    For NSE, KGE (all variants): Higher is better
-    For RMSE, PBIAS (absolute): Lower is better
-    For Runtime: Lower is better
-    """
-    
-    # Define metric pairs and which direction is better
-    # Include all NSE and KGE variants
-    metric_pairs = [
-        # NSE variants (higher is better)
-        ('SCE-UA NSE', 'PyDREAM NSE', 'higher'),
-        ('SCE-UA NSE(√Q)', 'PyDREAM NSE(√Q)', 'higher'),
-        ('SCE-UA NSE(log Q)', 'PyDREAM NSE(log Q)', 'higher'),
-        ('SCE-UA NSE(1/Q)', 'PyDREAM NSE(1/Q)', 'higher'),
-        # KGE variants (higher is better)
-        ('SCE-UA KGE', 'PyDREAM KGE', 'higher'),
-        ('SCE-UA KGE(√Q)', 'PyDREAM KGE(√Q)', 'higher'),
-        ('SCE-UA KGE(log Q)', 'PyDREAM KGE(log Q)', 'higher'),
-        ('SCE-UA KGE(1/Q)', 'PyDREAM KGE(1/Q)', 'higher'),
-        # Error metrics (lower is better)
-        ('SCE-UA RMSE', 'PyDREAM RMSE', 'lower'),
-        ('SCE-UA PBIAS', 'PyDREAM PBIAS', 'lower_abs'),  # Lower absolute value is better
-        # Runtime (lower is better)
-        ('SCE-UA Runtime (s)', 'PyDREAM Runtime (s)', 'lower'),
-    ]
-    
-    # Prepare cell colors
-    n_rows = len(df)
-    n_cols = len(df.columns)
-    
-    # Initialize all cells as white
-    cell_colors = [['white'] * n_rows for _ in range(n_cols)]
-    
-    # Color code the comparison columns
-    for sceua_col, pydream_col, direction in metric_pairs:
-        if sceua_col in df.columns and pydream_col in df.columns:
-            sceua_idx = df.columns.get_loc(sceua_col)
-            pydream_idx = df.columns.get_loc(pydream_col)
-            
-            for row_idx in range(n_rows):
-                sceua_val = df.iloc[row_idx][sceua_col]
-                pydream_val = df.iloc[row_idx][pydream_col]
-                
-                # Skip if either value is NaN
-                if pd.isna(sceua_val) or pd.isna(pydream_val):
-                    continue
-                
-                # Determine winner based on direction
-                if direction == 'higher':
-                    sceua_wins = sceua_val > pydream_val
-                    pydream_wins = pydream_val > sceua_val
-                elif direction == 'lower':
-                    sceua_wins = sceua_val < pydream_val
-                    pydream_wins = pydream_val < sceua_val
-                elif direction == 'lower_abs':
-                    sceua_wins = abs(sceua_val) < abs(pydream_val)
-                    pydream_wins = abs(pydream_val) < abs(sceua_val)
-                
-                # Apply colors: Blue for winner, Red for loser
-                if sceua_wins:
-                    cell_colors[sceua_idx][row_idx] = '#4169E1'  # Royal Blue
-                    cell_colors[pydream_idx][row_idx] = '#DC143C'  # Crimson
-                elif pydream_wins:
-                    cell_colors[sceua_idx][row_idx] = '#DC143C'  # Crimson
-                    cell_colors[pydream_idx][row_idx] = '#4169E1'  # Royal Blue
-                # If equal, both stay white
-    
-    # Format values for display
-    formatted_values = []
-    for col in df.columns:
-        if col == 'Objective':
-            formatted_values.append(df[col].tolist())
-        elif 'Runtime' in col:
-            formatted_values.append([f'{v:.1f}' if pd.notna(v) else '-' for v in df[col]])
-        elif 'PBIAS' in col:
-            formatted_values.append([f'{v:.2f}%' if pd.notna(v) else '-' for v in df[col]])
-        elif 'RMSE' in col:
-            formatted_values.append([f'{v:.3f}' if pd.notna(v) else '-' for v in df[col]])
-        else:
-            formatted_values.append([f'{v:.4f}' if pd.notna(v) else '-' for v in df[col]])
-    
-    # Determine text colors (white text on colored cells, black on white)
-    font_colors = []
-    for col_colors in cell_colors:
-        col_font = ['white' if c in ['#4169E1', '#DC143C'] else 'black' for c in col_colors]
-        font_colors.append(col_font)
-    
-    # Create header colors: GREY SHADES to avoid conflict with winner/loser colors
-    header_colors = []
-    for col in df.columns:
-        if col == 'Objective':
-            header_colors.append('#2F4F4F')  # Dark slate gray for objective
-        elif 'SCE-UA' in col:
-            header_colors.append('#607D8B')  # LIGHT GREY (Blue Grey 500) for SCE-UA
-        elif 'PyDREAM' in col:
-            header_colors.append('#37474F')  # DARK GREY (Blue Grey 800) for PyDREAM
-        else:
-            header_colors.append('#2F4F4F')  # Default
-    
-    # Display headers with algorithm label underneath
-    display_headers = []
-    for col in df.columns:
-        if col == 'Objective':
-            display_headers.append(f'<b>{col}</b>')
-        elif 'SCE-UA' in col:
-            short_name = col.replace('SCE-UA ', '')
-            display_headers.append(f'<b>{short_name}</b><br><sub>(SCE-UA)</sub>')
-        elif 'PyDREAM' in col:
-            short_name = col.replace('PyDREAM ', '')
-            display_headers.append(f'<b>{short_name}</b><br><sub>(PyDREAM)</sub>')
-        else:
-            display_headers.append(f'<b>{col}</b>')
-    
-    # Create Plotly table - CRITICAL: fill_color WITHOUT brackets for per-column colors
-    fig = go.Figure(data=[go.Table(
-        header=dict(
-            values=display_headers,
-            fill_color=header_colors,  # NO BRACKETS - applies one color per column
-            font=dict(color='white', size=11),
-            align='center',
-            height=50
-        ),
-        cells=dict(
-            values=formatted_values,
-            fill_color=cell_colors,
-            font=dict(color=font_colors, size=10),
-            align=['left'] + ['center'] * (n_cols - 1),
-            height=26
-        )
-    )])
-    
-    fig.update_layout(
-        title=dict(
-            text='<b>SCE-UA vs PyDREAM: Comprehensive Performance Comparison</b><br>' +
-                 '<span style="font-size:12px; color:gray">Cell colors: 🔵 Blue = Winner | 🔴 Red = Loser</span><br>' +
-                 '<span style="font-size:12px"><b style="background-color:#607D8B; color:white; padding:2px 6px;">LIGHT GREY = SCE-UA</b> | ' +
-                 '<b style="background-color:#37474F; color:white; padding:2px 6px;">DARK GREY = PyDREAM</b></span>',
-            font=dict(size=16),
-            x=0.5,
-            xanchor='center'
-        ),
-        width=1800,  # Wider to accommodate more columns
-        height=600,  # Taller for larger headers
-        margin=dict(l=20, r=20, t=100, b=20)  # More top margin for title
-    )
-    
-    return fig
-
-# Create separate focused tables for better readability
-def create_focused_table(df, metric_group, title_suffix):
-    """Create a focused comparison table for a specific metric group."""
-    # Select columns for this group
-    cols = ['Objective']
-    for col in df.columns:
-        if metric_group in col or 'Runtime' in col:
-            cols.append(col)
-    
-    subset_df = df[[c for c in cols if c in df.columns]]
-    return create_comparison_table_plotly(subset_df)
-
-# Display the full comparison table
-print("=" * 80)
-print("FULL COMPARISON TABLE: All Metrics")
-print("=" * 80)
-fig_comparison = create_comparison_table_plotly(comparison_df)
-fig_comparison.show()
-
-# %%
-# Create focused tables for easier analysis
-print("\n" + "=" * 80)
-print("NSE VARIANTS COMPARISON")
-print("=" * 80)
-
-# NSE variants table
-nse_cols = ['Objective'] + [c for c in comparison_df.columns if 'NSE' in c]
-nse_df = comparison_df[nse_cols]
-fig_nse = create_comparison_table_plotly(nse_df)
-fig_nse.update_layout(
-    title=dict(
-        text='<b>NSE Variants: SCE-UA vs PyDREAM</b><br>' +
-             '<span style="font-size:12px; color:gray">' +
-             '🔵 Blue = Winner | 🔴 Red = Loser | Higher NSE is better</span>',
-        font=dict(size=16),
-        x=0.5,
-        xanchor='center'
-    ),
-    width=1100,
-    height=500
-)
-fig_nse.show()
-
-# %%
-print("\n" + "=" * 80)
-print("KGE VARIANTS COMPARISON")
-print("=" * 80)
-
-# KGE variants table
-kge_cols = ['Objective'] + [c for c in comparison_df.columns if 'KGE' in c]
-kge_df = comparison_df[kge_cols]
-fig_kge = create_comparison_table_plotly(kge_df)
-fig_kge.update_layout(
-    title=dict(
-        text='<b>KGE Variants: SCE-UA vs PyDREAM</b><br>' +
-             '<span style="font-size:12px; color:gray">' +
-             '🔵 Blue = Winner | 🔴 Red = Loser | Higher KGE is better</span>',
-        font=dict(size=16),
-        x=0.5,
-        xanchor='center'
-    ),
-    width=1100,
-    height=500
-)
-fig_kge.show()
-
-# %%
-print("\n" + "=" * 80)
-print("ERROR METRICS & RUNTIME COMPARISON")
-print("=" * 80)
-
-# Other metrics table
-other_cols = ['Objective'] + [c for c in comparison_df.columns 
-              if 'RMSE' in c or 'PBIAS' in c or 'Runtime' in c]
-other_df = comparison_df[other_cols]
-fig_other = create_comparison_table_plotly(other_df)
-fig_other.update_layout(
-    title=dict(
-        text='<b>Error Metrics & Runtime: SCE-UA vs PyDREAM</b><br>' +
-             '<span style="font-size:12px; color:gray">' +
-             '🔵 Blue = Winner | 🔴 Red = Loser | Lower RMSE/|PBIAS|/Runtime is better</span>',
-        font=dict(size=16),
-        x=0.5,
-        xanchor='center'
-    ),
-    width=900,
-    height=500
-)
-fig_other.show()
-
-# %%
-# Summary statistics: Count wins for each algorithm
+# Calculate and display model performance metrics for both algorithms
 print("\n" + "=" * 70)
-print("SUMMARY: ALGORITHM WIN COUNTS")
+print("MODEL PERFORMANCE METRICS (NSE, KGE)")
 print("=" * 70)
 
-win_counts = {'SCE-UA': 0, 'PyDREAM': 0, 'Tie': 0}
-metric_wins = {}
+metrics_data = []
 
-metrics_to_compare = [
-    # NSE variants (higher is better)
-    ('NSE', 'higher'),
-    ('NSE(√Q)', 'higher'),
-    ('NSE(log Q)', 'higher'),
-    ('NSE(1/Q)', 'higher'),
-    # KGE variants (higher is better)
-    ('KGE', 'higher'),
-    ('KGE(√Q)', 'higher'),
-    ('KGE(log Q)', 'higher'),
-    ('KGE(1/Q)', 'higher'),
-    # Error metrics (lower is better)
-    ('RMSE', 'lower'),
-    ('PBIAS', 'lower_abs'),
-    # Runtime (lower is better)
-    ('Runtime (s)', 'lower')
-]
-
-for metric, direction in metrics_to_compare:
-    sceua_col = f'SCE-UA {metric}'
-    pydream_col = f'PyDREAM {metric}'
+for name in objectives.keys():
+    row = {'Objective': name}
     
-    if sceua_col not in comparison_df.columns or pydream_col not in comparison_df.columns:
-        continue
+    # SCE-UA simulation
+    if name in sceua_results:
+        model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+        model.set_parameters(sceua_results[name].best_parameters)
+        model.reset()
+        sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
+        obs = cal_observed[WARMUP_DAYS:]
+        metrics = calculate_metrics(sim, obs)
+        row['SCE-UA NSE'] = metrics['NSE']
+        row['SCE-UA KGE'] = metrics['KGE']
+    else:
+        row['SCE-UA NSE'] = np.nan
+        row['SCE-UA KGE'] = np.nan
     
-    sceua_wins = 0
-    pydream_wins = 0
-    ties = 0
+    # PyDREAM simulation
+    if name in pydream_results:
+        model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+        model.set_parameters(pydream_results[name].best_parameters)
+        model.reset()
+        sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
+        obs = cal_observed[WARMUP_DAYS:]
+        metrics = calculate_metrics(sim, obs)
+        row['PyDREAM NSE'] = metrics['NSE']
+        row['PyDREAM KGE'] = metrics['KGE']
+    else:
+        row['PyDREAM NSE'] = np.nan
+        row['PyDREAM KGE'] = np.nan
     
-    for idx, row in comparison_df.iterrows():
-        sceua_val = row[sceua_col]
-        pydream_val = row[pydream_col]
-        
-        if pd.isna(sceua_val) or pd.isna(pydream_val):
-            continue
-        
-        if direction == 'higher':
-            if sceua_val > pydream_val:
-                sceua_wins += 1
-            elif pydream_val > sceua_val:
-                pydream_wins += 1
-            else:
-                ties += 1
-        elif direction == 'lower':
-            if sceua_val < pydream_val:
-                sceua_wins += 1
-            elif pydream_val < sceua_val:
-                pydream_wins += 1
-            else:
-                ties += 1
-        elif direction == 'lower_abs':
-            if abs(sceua_val) < abs(pydream_val):
-                sceua_wins += 1
-            elif abs(pydream_val) < abs(sceua_val):
-                pydream_wins += 1
-            else:
-                ties += 1
-    
-    metric_wins[metric] = {'SCE-UA': sceua_wins, 'PyDREAM': pydream_wins, 'Tie': ties}
-    win_counts['SCE-UA'] += sceua_wins
-    win_counts['PyDREAM'] += pydream_wins
-    win_counts['Tie'] += ties
-    
-    winner = 'SCE-UA' if sceua_wins > pydream_wins else ('PyDREAM' if pydream_wins > sceua_wins else 'Tie')
-    print(f"\n{metric}:")
-    print(f"  SCE-UA wins:  {sceua_wins:2d} / {sceua_wins + pydream_wins + ties}")
-    print(f"  PyDREAM wins: {pydream_wins:2d} / {sceua_wins + pydream_wins + ties}")
-    print(f"  Ties:         {ties:2d} / {sceua_wins + pydream_wins + ties}")
-    print(f"  → Overall winner for {metric}: {winner}")
+    metrics_data.append(row)
 
-print("\n" + "-" * 70)
-print("OVERALL TOTALS (across all metrics and objectives):")
-print("-" * 70)
-total = win_counts['SCE-UA'] + win_counts['PyDREAM'] + win_counts['Tie']
-print(f"  SCE-UA total wins:  {win_counts['SCE-UA']:3d} / {total} ({100*win_counts['SCE-UA']/total:.1f}%)")
-print(f"  PyDREAM total wins: {win_counts['PyDREAM']:3d} / {total} ({100*win_counts['PyDREAM']/total:.1f}%)")
-print(f"  Ties:               {win_counts['Tie']:3d} / {total} ({100*win_counts['Tie']/total:.1f}%)")
-
-overall_winner = 'SCE-UA' if win_counts['SCE-UA'] > win_counts['PyDREAM'] else (
-    'PyDREAM' if win_counts['PyDREAM'] > win_counts['SCE-UA'] else 'Tie'
-)
-print(f"\n  🏆 OVERALL WINNER: {overall_winner}")
-
-# %%
-# Create visual summary: Win counts by metric category
-import plotly.express as px
-
-# Group metrics by category
-category_wins = {
-    'NSE (all variants)': {'SCE-UA': 0, 'PyDREAM': 0},
-    'KGE (all variants)': {'SCE-UA': 0, 'PyDREAM': 0},
-    'RMSE': {'SCE-UA': 0, 'PyDREAM': 0},
-    'PBIAS': {'SCE-UA': 0, 'PyDREAM': 0},
-    'Runtime': {'SCE-UA': 0, 'PyDREAM': 0},
-}
-
-for metric, wins in metric_wins.items():
-    if 'NSE' in metric:
-        category_wins['NSE (all variants)']['SCE-UA'] += wins['SCE-UA']
-        category_wins['NSE (all variants)']['PyDREAM'] += wins['PyDREAM']
-    elif 'KGE' in metric:
-        category_wins['KGE (all variants)']['SCE-UA'] += wins['SCE-UA']
-        category_wins['KGE (all variants)']['PyDREAM'] += wins['PyDREAM']
-    elif metric == 'RMSE':
-        category_wins['RMSE']['SCE-UA'] += wins['SCE-UA']
-        category_wins['RMSE']['PyDREAM'] += wins['PyDREAM']
-    elif metric == 'PBIAS':
-        category_wins['PBIAS']['SCE-UA'] += wins['SCE-UA']
-        category_wins['PBIAS']['PyDREAM'] += wins['PyDREAM']
-    elif metric == 'Runtime (s)':
-        category_wins['Runtime']['SCE-UA'] += wins['SCE-UA']
-        category_wins['Runtime']['PyDREAM'] += wins['PyDREAM']
-
-# Create summary visualization
-summary_data = []
-for category, wins in category_wins.items():
-    summary_data.append({'Category': category, 'Algorithm': 'SCE-UA', 'Wins': wins['SCE-UA']})
-    summary_data.append({'Category': category, 'Algorithm': 'PyDREAM', 'Wins': wins['PyDREAM']})
-
-summary_df = pd.DataFrame(summary_data)
-
-fig_wins = px.bar(
-    summary_df, 
-    x='Category', 
-    y='Wins', 
-    color='Algorithm',
-    barmode='group',
-    color_discrete_map={'SCE-UA': '#4169E1', 'PyDREAM': '#DC143C'},
-    title='<b>Algorithm Win Counts by Metric Category</b><br>' +
-          '<span style="font-size:12px; color:gray">Across all 13 objective functions</span>'
-)
-fig_wins.update_layout(
-    xaxis_title='Metric Category',
-    yaxis_title='Number of Wins (out of 13 objectives)',
-    legend_title='Algorithm',
-    width=900,
-    height=450
-)
-fig_wins.show()
-
-# Print category summary
-print("\n" + "=" * 70)
-print("SUMMARY BY METRIC CATEGORY")
-print("=" * 70)
-for category, wins in category_wins.items():
-    total_comparisons = wins['SCE-UA'] + wins['PyDREAM']
-    if total_comparisons > 0:
-        winner = 'SCE-UA' if wins['SCE-UA'] > wins['PyDREAM'] else (
-            'PyDREAM' if wins['PyDREAM'] > wins['SCE-UA'] else 'Tie')
-        print(f"\n{category}:")
-        print(f"  SCE-UA:  {wins['SCE-UA']:2d} wins")
-        print(f"  PyDREAM: {wins['PyDREAM']:2d} wins")
-        print(f"  → Winner: {winner}")
-
-# %%
-from scipy.stats import gaussian_kde
-
-# Get parameter bounds for all 22 Sacramento parameters
-model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-param_bounds = model.get_parameter_bounds()
-print(f"Sacramento model has {len(param_bounds)} parameters")
+metrics_df = pd.DataFrame(metrics_data)
+print(f"\n{metrics_df.round(4).to_string(index=False)}")
 
 # %% [markdown]
 # ---
-# ## Compact Visualizations
+# ## Parameter Comparison: Point Estimates vs Posterior Distributions
 #
-# Here we present 2 compact visualization approaches that efficiently summarize 
-# the comparison between SCE-UA point estimates and PyDREAM posterior distributions
-# for all 22 Sacramento model parameters:
-#
-# 1. **Ridge Plot (Joy Plot)** - Beautiful overlapping KDEs using Seaborn FacetGrid
-#    ([inspired by Python Graph Gallery](https://python-graph-gallery.com/ridgeline-graph-seaborn/))
-#    with vertical markers for SCE-UA (red solid) and PyDREAM (green dashed) best estimates
-# 2. **Summary Statistics Table** - Color-coded table with agreement indicators showing
-#    whether SCE-UA estimates fall within PyDREAM's 95% credible intervals
+# This is the key comparison! We visualize the posterior distributions from PyDREAM
+# compared to the point estimates from SCE-UA.
 
 # %%
-# =============================================================================
-# OPTION 1: RIDGE PLOT (JOY PLOT) - SEABORN FACETGRID VERSION
-# =============================================================================
-# Beautiful overlapping KDEs using Seaborn FacetGrid
-# Inspired by: https://python-graph-gallery.com/ridgeline-graph-seaborn/
-
-def plot_all_ridge_posteriors(pydream_results, sceua_results, param_bounds, burn_in_fraction=0.5):
+def plot_posterior_vs_point(obj_name, pydream_result, sceua_result, param_bounds):
     """
-    Create a combined figure with ridge plots for ALL 13 objective functions.
-    
-    Organized by objective function family:
-    - Row 1: NSE variants (NSE, LogNSE, InvNSE, SqrtNSE)
-    - Row 2: KGE variants (KGE, KGE_inv, KGE_sqrt, KGE_log)
-    - Row 3: KGE nonparametric variants (KGE_np, KGE_np_inv, KGE_np_sqrt, KGE_np_log)
-    - Row 4: SDEB + legend
-    
-    Features:
-    - Logical grouping by objective function family
-    - Agreement-based coloring:
-      * Dark Green: SCE-UA within 50% CI (strong agreement)
-      * Light Green: SCE-UA within 95% CI (moderate agreement)
-      * Orange: SCE-UA outside 95% CI but close (borderline)
-      * Red: SCE-UA outside 95% CI and far (disagreement)
-    - Dot markers for best parameter estimates
-    """
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
-    
-    # Agreement color scheme
-    COLOR_STRONG_AGREE = '#2E7D32'    # Dark green - within 50% CI
-    COLOR_MODERATE_AGREE = '#8BC34A'  # Light green - within 95% CI
-    COLOR_BORDERLINE = '#FF9800'      # Orange - outside CI but close
-    COLOR_DISAGREE = '#E53935'        # Red - outside CI and far
-    
-    def get_agreement_color(sceua_value, posterior, norm_sceua, norm_pydream):
-        """Determine ridge color based on SCE-UA agreement with PyDREAM posterior."""
-        # Calculate credible intervals
-        ci_50_low, ci_50_high = np.percentile(posterior, [25, 75])
-        ci_95_low, ci_95_high = np.percentile(posterior, [2.5, 97.5])
-        
-        # Calculate normalized distance between point estimates
-        distance = abs(norm_sceua - norm_pydream)
-        
-        # Determine agreement level
-        if ci_50_low <= sceua_value <= ci_50_high:
-            return COLOR_STRONG_AGREE  # Strong agreement
-        elif ci_95_low <= sceua_value <= ci_95_high:
-            return COLOR_MODERATE_AGREE  # Moderate agreement
-        else:
-            # Outside 95% CI - check distance
-            if distance < 0.2:
-                return COLOR_BORDERLINE  # Borderline - close but outside CI
-            else:
-                return COLOR_DISAGREE  # Clear disagreement
-    
-    # Organize objectives by family (row-wise)
-    # Column order: Base, Sqrt, Log, Inverse
-    objective_rows = [
-        # Row 1: NSE family
-        ['NSE', 'SqrtNSE', 'LogNSE', 'InvNSE'],
-        # Row 2: KGE family
-        ['KGE', 'KGE_sqrt', 'KGE_log', 'KGE_inv'],
-        # Row 3: KGE nonparametric family
-        ['KGE_np', 'KGE_np_sqrt', 'KGE_np_log', 'KGE_np_inv'],
-        # Row 4: SDEB in sqrt column (col 2), rest empty
-        [None, 'SDEB', None, None]
-    ]
-    
-    row_labels = ['NSE Family', 'KGE Family', 'KGE Nonparametric', 'Other']
-    
-    # Layout: 4 rows x 4 columns
-    n_cols = 4
-    n_rows = 4
-    
-    # Create figure with GridSpec for flexible layout
-    fig = plt.figure(figsize=(14, 14))
-    
-    # Get parameter list from first available result
-    first_obj = None
-    for row in objective_rows:
-        for obj in row:
-            if obj in pydream_results and pydream_results[obj].all_samples is not None:
-                first_obj = obj
-                break
-        if first_obj:
-            break
-    
-    if first_obj is None:
-        print("No objectives available for plotting")
-        return None
-    
-    all_params = list(sceua_results[first_obj].best_parameters.keys())
-    n_params = len(all_params)
-    
-    # Create subplots
-    axes = []
-    for row_idx in range(n_rows):
-        row_axes = []
-        for col_idx in range(n_cols):
-            ax = fig.add_subplot(n_rows, n_cols, row_idx * n_cols + col_idx + 1)
-            row_axes.append(ax)
-        axes.append(row_axes)
-    
-    # Plot each objective in its designated position
-    for row_idx, (obj_row, row_label) in enumerate(zip(objective_rows, row_labels)):
-        for col_idx, obj_name in enumerate(obj_row):
-            ax = axes[row_idx][col_idx]
-            
-            # Handle empty cells (None)
-            if obj_name is None:
-                ax.axis('off')
-                continue
-            
-            # Check if objective is available
-            if (obj_name not in pydream_results or obj_name not in sceua_results or
-                pydream_results[obj_name].all_samples is None):
-                ax.text(0.5, 0.5, f'{obj_name}\n(No data)', ha='center', va='center',
-                       fontsize=9, transform=ax.transAxes, color='gray')
-                ax.set_xlim(0, 1)
-                ax.set_ylim(0, 1)
-                ax.axis('off')
-                continue
-            
-            pydream_result = pydream_results[obj_name]
-            sceua_result = sceua_results[obj_name]
-            
-            # Get samples with burn-in
-            all_samples = pydream_result.all_samples
-            n_burnin = int(len(all_samples) * burn_in_fraction)
-            samples = all_samples.iloc[n_burnin:].copy()
-            
-            params_to_plot = [p for p in all_params if p in samples.columns]
-            
-            # Spacing for ridge effect
-            spacing = 1.0
-            
-            for i, param in enumerate(params_to_plot):
-                posterior = samples[param].values
-                bounds = param_bounds.get(param, (posterior.min(), posterior.max()))
-                
-                # Get actual SCE-UA value (not normalized) for CI comparison
-                sceua_value = sceua_result.best_parameters[param]
-                
-                # Normalize to [0, 1]
-                norm_posterior = (posterior - bounds[0]) / (bounds[1] - bounds[0])
-                norm_sceua = (sceua_value - bounds[0]) / (bounds[1] - bounds[0])
-                norm_pydream = (pydream_result.best_parameters[param] - bounds[0]) / (bounds[1] - bounds[0])
-                
-                # Determine agreement-based color
-                ridge_color = get_agreement_color(sceua_value, posterior, norm_sceua, norm_pydream)
-                
-                y_offset = i * spacing
-                
-                try:
-                    kde = gaussian_kde(norm_posterior)
-                    x_grid = np.linspace(0, 1, 100)
-                    y_kde = kde(x_grid)
-                    # Scale KDE height
-                    y_kde = y_kde / y_kde.max() * 0.85
-                    
-                    # Plot filled KDE with agreement-based color
-                    ax.fill_between(x_grid, y_offset, y_offset + y_kde, 
-                                   alpha=0.85, color=ridge_color, linewidth=0)
-                    # White contour
-                    ax.plot(x_grid, y_offset + y_kde, color='white', linewidth=0.8)
-                except Exception:
-                    pass
-                
-                # Baseline with same color
-                ax.axhline(y=y_offset, color=ridge_color, linewidth=0.3, alpha=0.3)
-                
-                # Point estimates as small markers with high contrast colors
-                # Blue for SCE-UA, Magenta for PyDREAM
-                ax.scatter([norm_sceua], [y_offset], color='#1E88E5', s=20, 
-                          marker='|', zorder=10, linewidths=2)
-                ax.scatter([norm_pydream], [y_offset], color='#D81B60', s=20,
-                          marker='|', zorder=10, linewidths=2)
-            
-            # Subplot styling
-            ax.set_xlim(-0.02, 1.02)
-            ax.set_ylim(-0.5, n_params * spacing + 0.5)
-            ax.set_title(obj_name, fontsize=10, fontweight='bold', pad=2)
-            ax.set_xticks([0, 0.5, 1])
-            ax.set_xticklabels(['0', '0.5', '1'], fontsize=7)
-            ax.set_yticks([])
-            ax.spines['left'].set_visible(False)
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            
-            # Show x-label on bottom row only
-            if row_idx == n_rows - 1:
-                ax.set_xlabel('Norm. Value', fontsize=8)
-        
-        # Add row label on leftmost plot
-        axes[row_idx][0].set_ylabel(row_label, fontsize=10, fontweight='bold', 
-                                    rotation=90, labelpad=10)
-        
-        # Hide unused columns in this row
-        for col_idx in range(len(obj_row), n_cols):
-            ax = axes[row_idx][col_idx]
-            ax.axis('off')
-    
-    # Use the empty cells in the last row for legend and info
-    # Row 4 layout: [Point Estimates, SDEB, Color Legend, Info]
-    
-    # Point estimates legend in column 1 (index 0)
-    legend_ax = axes[3][0]
-    legend_ax.axis('off')
-    marker_elements = [
-        Line2D([0], [0], marker='|', color='#1E88E5', markersize=14, 
-               markeredgewidth=3, label='SCE-UA', linestyle='None'),
-        Line2D([0], [0], marker='|', color='#D81B60', markersize=14,
-               markeredgewidth=3, label='PyDREAM', linestyle='None')
-    ]
-    legend_ax.legend(handles=marker_elements, loc='center', fontsize=10, 
-                     frameon=True, fancybox=True, title='Point Estimates',
-                     title_fontsize=11)
-    
-    # SDEB is in column 2 (index 1) - plotted automatically
-    
-    # Agreement color legend in column 3 (index 2)
-    color_ax = axes[3][2]
-    color_ax.axis('off')
-    color_elements = [
-        Patch(facecolor=COLOR_STRONG_AGREE, edgecolor='white', label='Within 50% CI'),
-        Patch(facecolor=COLOR_MODERATE_AGREE, edgecolor='white', label='Within 95% CI'),
-        Patch(facecolor=COLOR_BORDERLINE, edgecolor='white', label='Outside CI (close)'),
-        Patch(facecolor=COLOR_DISAGREE, edgecolor='white', label='Outside CI (far)')
-    ]
-    color_ax.legend(handles=color_elements, loc='center', fontsize=9, 
-                    frameon=True, fancybox=True, title='SCE-UA Agreement',
-                    title_fontsize=10)
-    
-    # Parameter info in column 4 (index 3)
-    info_ax = axes[3][3]
-    info_ax.axis('off')
-    info_ax.text(0.5, 0.7, f'{n_params} Parameters', ha='center', va='center', 
-                fontsize=11, fontweight='bold', transform=info_ax.transAxes)
-    info_ax.text(0.5, 0.45, 'Stacked top → bottom\n(uztwm ... uh5)', 
-                ha='center', va='center', fontsize=9, transform=info_ax.transAxes)
-    info_ax.text(0.5, 0.2, 'X-axis: Normalized [0,1]', ha='center', va='center',
-                fontsize=8, style='italic', transform=info_ax.transAxes)
-    
-    # Main title
-    fig.suptitle('Parameter Posterior Distributions by Objective Function Family', 
-                 fontsize=14, fontweight='bold', y=0.98)
-    
-    plt.tight_layout(rect=[0, 0.08, 1, 0.96])
-    
-    # Add explanatory text box at the bottom
-    explanation_text = (
-        "How to read this figure: Each subplot shows the posterior distributions (ridges) for all 22 Sacramento model parameters "
-        "calibrated using a specific objective function. The ridge color indicates agreement between SCE-UA and PyDREAM: "
-        "dark green = SCE-UA within 50% credible interval (strong agreement), light green = within 95% CI (moderate), "
-        "orange = outside CI but estimates are close, red = outside CI and far apart (disagreement). "
-        "Blue vertical bars (|) mark SCE-UA point estimates; magenta bars mark PyDREAM best estimates. "
-        "X-axis shows normalized parameter values [0=lower bound, 1=upper bound]."
-    )
-    fig.text(0.5, 0.02, explanation_text, ha='center', va='bottom', fontsize=8,
-             wrap=True, bbox=dict(boxstyle='round,pad=0.5', facecolor='#f5f5f5', 
-                                  edgecolor='gray', alpha=0.9),
-             transform=fig.transFigure)
-    
-    return fig
-
-# %%
-# =============================================================================
-# OPTION 3: SUMMARY STATISTICS TABLE WITH COLOR CODING
-# =============================================================================
-# Plotly table with agreement indicators
-
-def create_summary_table(obj_name, pydream_result, sceua_result, param_bounds, burn_in_fraction=0.5):
-    """
-    Create a color-coded summary table showing SCE-UA vs PyDREAM comparison.
+    Create a figure comparing PyDREAM posteriors with SCE-UA point estimates.
     """
     if pydream_result.all_samples is None or len(pydream_result.all_samples) == 0:
         print(f"No samples available for {obj_name}")
         return None
     
-    all_samples = pydream_result.all_samples
-    n_burnin = int(len(all_samples) * burn_in_fraction)
-    samples = all_samples.iloc[n_burnin:].copy()
+    samples = pydream_result.all_samples
+    param_names = list(sceua_result.best_parameters.keys())
     
-    all_params = list(sceua_result.best_parameters.keys())
-    params_to_plot = [p for p in all_params if p in samples.columns]
+    # Select key parameters for visualization (most important ones)
+    key_params = ['uztwm', 'uzfwm', 'lztwm', 'lzfpm', 'lzfsm', 
+                  'uzk', 'lzpk', 'lzsk', 'zperc', 'rexp',
+                  'pfree', 'pctim']
     
-    # Build table data
-    table_data = []
-    for param in params_to_plot:
+    # Filter to available parameters
+    key_params = [p for p in key_params if p in param_names and p in samples.columns]
+    
+    n_params = min(len(key_params), 12)
+    n_cols = 4
+    n_rows = (n_params + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 3.5 * n_rows))
+    axes = axes.flatten()
+    
+    for i, param in enumerate(key_params[:n_params]):
+        ax = axes[i]
+        
+        # Get posterior samples
         posterior = samples[param].values
-        sceua_val = sceua_result.best_parameters[param]
-        pydream_val = pydream_result.best_parameters[param]
+        
+        # Get SCE-UA point estimate
+        sceua_value = sceua_result.best_parameters[param]
+        
+        # Get PyDREAM best estimate
+        pydream_value = pydream_result.best_parameters[param]
+        
+        # Get parameter bounds
+        bounds = param_bounds.get(param, (posterior.min(), posterior.max()))
+        
+        # Plot posterior histogram
+        ax.hist(posterior, bins=50, density=True, alpha=0.7, color='steelblue',
+                label='PyDREAM Posterior', edgecolor='white', linewidth=0.5)
+        
+        # Plot SCE-UA point estimate
+        ax.axvline(sceua_value, color='red', linewidth=2, linestyle='-',
+                   label=f'SCE-UA: {sceua_value:.2f}')
+        
+        # Plot PyDREAM MAP estimate
+        ax.axvline(pydream_value, color='green', linewidth=2, linestyle='--',
+                   label=f'PyDREAM MAP: {pydream_value:.2f}')
+        
+        # Add credible interval
         ci_low, ci_high = np.percentile(posterior, [2.5, 97.5])
+        ax.axvspan(ci_low, ci_high, alpha=0.2, color='steelblue',
+                   label=f'95% CI: [{ci_low:.2f}, {ci_high:.2f}]')
         
-        # Calculate percentage difference
-        if sceua_val != 0:
-            pct_diff = (pydream_val - sceua_val) / abs(sceua_val) * 100
-        else:
-            pct_diff = 0 if pydream_val == 0 else 100
+        ax.set_xlabel(param, fontsize=10, fontweight='bold')
+        ax.set_ylabel('Density')
+        ax.set_xlim(bounds)
         
-        # Check if SCE-UA is within 95% CI
-        in_ci = ci_low <= sceua_val <= ci_high
-        
-        table_data.append({
-            'Parameter': param,
-            'SCE-UA': sceua_val,
-            'PyDREAM': pydream_val,
-            'CI_Low': ci_low,
-            'CI_High': ci_high,
-            'Diff_Pct': pct_diff,
-            'In_CI': in_ci
-        })
+        if i == 0:
+            ax.legend(fontsize=7, loc='upper right')
     
-    df = pd.DataFrame(table_data)
+    # Hide unused subplots
+    for i in range(n_params, len(axes)):
+        axes[i].set_visible(False)
     
-    # Color coding based on agreement
-    colors = []
-    for _, row in df.iterrows():
-        if row['In_CI']:
-            if abs(row['Diff_Pct']) < 10:
-                colors.append('#C8E6C9')  # Light green - excellent agreement
-            else:
-                colors.append('#FFF9C4')  # Light yellow - good agreement
-        else:
-            colors.append('#FFCDD2')  # Light red - poor agreement
+    plt.suptitle(f'Posterior Distributions vs SCE-UA Point Estimates: {obj_name}', 
+                 fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
     
-    # Format values
-    formatted = {
-        'Parameter': df['Parameter'].tolist(),
-        'SCE-UA': [f'{v:.4g}' for v in df['SCE-UA']],
-        'PyDREAM': [f'{v:.4g}' for v in df['PyDREAM']],
-        '95% CI': [f'[{l:.4g}, {h:.4g}]' for l, h in zip(df['CI_Low'], df['CI_High'])],
-        'Δ%': [f'{v:+.1f}%' for v in df['Diff_Pct']],
-        'Agreement': ['✓ In CI' if x else '✗ Outside' for x in df['In_CI']]
-    }
-    
-    fig = go.Figure(data=[go.Table(
-        header=dict(
-            values=['<b>Parameter</b>', '<b>SCE-UA</b>', '<b>PyDREAM</b>', 
-                    '<b>95% CI</b>', '<b>Δ%</b>', '<b>Agreement</b>'],
-            fill_color='#455A64',
-            font=dict(color='white', size=11),
-            align='center',
-            height=30
-        ),
-        cells=dict(
-            values=list(formatted.values()),
-            fill_color=[['white'] * len(df), ['white'] * len(df), ['white'] * len(df),
-                       ['white'] * len(df), colors, colors],
-            font=dict(size=10),
-            align=['left', 'right', 'right', 'center', 'right', 'center'],
-            height=25
+    return fig
+
+
+# Get parameter bounds
+model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+param_bounds = model.get_parameter_bounds()
+
+# %%
+# Create comparison plots for available results
+print("=" * 70)
+print("POSTERIOR vs POINT ESTIMATE COMPARISON")
+print("=" * 70)
+
+# Create figures directory
+figures_dir = Path('../figures')
+figures_dir.mkdir(exist_ok=True)
+
+# Select a few key objective functions to visualize in detail
+key_objectives = ['NSE', 'KGE', 'InvNSE', 'SDEB']
+
+for obj_name in key_objectives:
+    if obj_name in pydream_results and obj_name in sceua_results:
+        print(f"\nPlotting: {obj_name}")
+        fig = plot_posterior_vs_point(
+            obj_name, 
+            pydream_results[obj_name], 
+            sceua_results[obj_name],
+            param_bounds
         )
-    )])
+        if fig:
+            plt.savefig(figures_dir / f'05_posterior_vs_sceua_{obj_name.lower()}.png', 
+                       dpi=150, bbox_inches='tight')
+            plt.show()
+            plt.close()
+    else:
+        print(f"\n{obj_name}: Missing results for comparison")
+
+# %% [markdown]
+# ---
+# ## Comprehensive Posterior Comparison: All Objectives
+#
+# Let's create a comprehensive figure showing posteriors for a single key parameter
+# across all objective functions.
+
+# %%
+def plot_all_posteriors_single_param(param_name, pydream_results, sceua_results, param_bounds):
+    """
+    Plot posterior distributions for one parameter across all objectives.
+    """
+    available = [name for name in pydream_results.keys() 
+                 if pydream_results[name].all_samples is not None 
+                 and param_name in pydream_results[name].all_samples.columns]
     
-    fig.update_layout(
-        title=dict(
-            text=f'<b>{obj_name}: Parameter Comparison Summary</b><br>' +
-                 '<span style="font-size:11px; color:gray">Green = SCE-UA within PyDREAM 95% CI | ' +
-                 'Yellow = In CI but >10% diff | Red = Outside CI</span>',
-            font=dict(size=14),
-            x=0.5
-        ),
-        width=900,
-        height=min(800, 100 + len(df) * 28),
-        margin=dict(l=20, r=20, t=80, b=20)
-    )
+    if len(available) == 0:
+        print(f"No posteriors available for {param_name}")
+        return None
+    
+    n_obj = len(available)
+    n_cols = 3
+    n_rows = (n_obj + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
+    axes = axes.flatten()
+    
+    bounds = param_bounds.get(param_name, (0, 1))
+    
+    for i, obj_name in enumerate(available):
+        ax = axes[i]
+        
+        samples = pydream_results[obj_name].all_samples
+        posterior = samples[param_name].values
+        
+        sceua_value = sceua_results[obj_name].best_parameters[param_name] if obj_name in sceua_results else None
+        pydream_value = pydream_results[obj_name].best_parameters[param_name]
+        
+        # Histogram
+        ax.hist(posterior, bins=40, density=True, alpha=0.7, color='steelblue',
+                edgecolor='white', linewidth=0.5)
+        
+        # SCE-UA point
+        if sceua_value is not None:
+            ax.axvline(sceua_value, color='red', linewidth=2, linestyle='-',
+                       label=f'SCE-UA: {sceua_value:.1f}')
+        
+        # PyDREAM MAP
+        ax.axvline(pydream_value, color='green', linewidth=2, linestyle='--',
+                   label=f'PyDREAM: {pydream_value:.1f}')
+        
+        # 95% CI
+        ci_low, ci_high = np.percentile(posterior, [2.5, 97.5])
+        ax.axvspan(ci_low, ci_high, alpha=0.2, color='steelblue')
+        
+        ax.set_title(obj_name, fontsize=11, fontweight='bold')
+        ax.set_xlim(bounds)
+        ax.set_xlabel(param_name)
+        ax.set_ylabel('Density')
+        
+        if i == 0:
+            ax.legend(fontsize=8)
+    
+    # Hide unused
+    for i in range(n_obj, len(axes)):
+        axes[i].set_visible(False)
+    
+    plt.suptitle(f'Posterior Distributions for {param_name} Across All Objective Functions', 
+                 fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
     
     return fig
 
 # %%
-# =============================================================================
-# COMBINED SUMMARY TABLES - ALL 13 OBJECTIVES IN ONE FIGURE
-# =============================================================================
+# Plot posteriors for key parameters
+key_storage_params = ['uztwm', 'lztwm']
+key_rate_params = ['uzk', 'lzpk']
 
-def create_combined_summary_tables(pydream_results, sceua_results, param_bounds, burn_in_fraction=0.5):
-    """
-    Create a single Plotly figure with all 13 summary tables as subplots.
-    
-    Layout: 4 rows x 4 columns matching the ridge plot organization
-    - Row 1: NSE family (NSE, SqrtNSE, LogNSE, InvNSE)
-    - Row 2: KGE family (KGE, KGE_sqrt, KGE_log, KGE_inv)
-    - Row 3: KGE nonparametric (KGE_np, KGE_np_sqrt, KGE_np_log, KGE_np_inv)
-    - Row 4: Legend, SDEB (sqrt column), Info, Organization
-    """
-    from plotly.subplots import make_subplots
-    
-    # Organize objectives by family (matching ridge plot)
-    # Column order: Base, Sqrt, Log, Inverse
-    objective_rows = [
-        ['NSE', 'SqrtNSE', 'LogNSE', 'InvNSE'],
-        ['KGE', 'KGE_sqrt', 'KGE_log', 'KGE_inv'],
-        ['KGE_np', 'KGE_np_sqrt', 'KGE_np_log', 'KGE_np_inv'],
-        [None, 'SDEB', None, None]  # SDEB in sqrt column
-    ]
-    
-    row_titles = ['NSE Family', 'KGE Family', 'KGE Nonparametric', 'Other']
-    
-    # Create subplot specs (4x4 grid, all tables)
-    specs = [[{"type": "table"} for _ in range(4)] for _ in range(4)]
-    
-    # Create subplot titles
-    subplot_titles = []
-    for row in objective_rows:
-        for obj in row:
-            if obj is not None:
-                subplot_titles.append(f"<b>{obj}</b>")
-            else:
-                subplot_titles.append("")
-    
-    fig = make_subplots(
-        rows=4, cols=4,
-        specs=specs,
-        subplot_titles=subplot_titles,
-        vertical_spacing=0.02,  # Reduced to minimize row gaps
-        horizontal_spacing=0.005  # Minimal horizontal spacing
-    )
-    
-    def get_table_data(obj_name):
-        """Generate table data for a single objective."""
-        if (obj_name not in pydream_results or obj_name not in sceua_results or
-            pydream_results[obj_name].all_samples is None):
-            return None
-        
-        pydream_result = pydream_results[obj_name]
-        sceua_result = sceua_results[obj_name]
-        
-        all_samples = pydream_result.all_samples
-        n_burnin = int(len(all_samples) * burn_in_fraction)
-        samples = all_samples.iloc[n_burnin:].copy()
-        
-        all_params = list(sceua_result.best_parameters.keys())
-        params_to_plot = [p for p in all_params if p in samples.columns]
-        
-        # Build compact table data
-        params = []
-        sceua_vals = []
-        pydream_vals = []
-        agreements = []
-        colors = []
-        
-        for param in params_to_plot:
-            posterior = samples[param].values
-            sceua_val = sceua_result.best_parameters[param]
-            pydream_val = pydream_result.best_parameters[param]
-            ci_low, ci_high = np.percentile(posterior, [2.5, 97.5])
-            
-            # Check if SCE-UA is within 95% CI
-            in_ci = ci_low <= sceua_val <= ci_high
-            
-            # Calculate percentage difference
-            if sceua_val != 0:
-                pct_diff = abs((pydream_val - sceua_val) / sceua_val * 100)
-            else:
-                pct_diff = 0 if pydream_val == 0 else 100
-            
-            params.append(param)
-            sceua_vals.append(f'{sceua_val:.3g}')
-            pydream_vals.append(f'{pydream_val:.3g}')
-            
-            if in_ci:
-                if pct_diff < 10:
-                    agreements.append('✓')
-                    colors.append('#C8E6C9')  # Light green
-                else:
-                    agreements.append('~')
-                    colors.append('#FFF9C4')  # Light yellow
-            else:
-                agreements.append('✗')
-                colors.append('#FFCDD2')  # Light red
-        
-        return {
-            'params': params,
-            'sceua': sceua_vals,
-            'pydream': pydream_vals,
-            'agreements': agreements,
-            'colors': colors
-        }
-    
-    # Add tables to subplots
-    for row_idx, obj_row in enumerate(objective_rows):
-        for col_idx, obj_name in enumerate(obj_row):
-            # Skip None cells (will be filled with legend/info later)
-            if obj_name is None:
-                continue
-                
-            data = get_table_data(obj_name)
-            
-            if data is None:
-                # Add empty table for missing data
-                fig.add_trace(
-                    go.Table(
-                        header=dict(values=['No Data'], fill_color='#f0f0f0', height=25),
-                        cells=dict(values=[['N/A']], fill_color='white', height=20)
-                    ),
-                    row=row_idx + 1, col=col_idx + 1
-                )
-                continue
-            
-            # Create compact table
-            fig.add_trace(
-                go.Table(
-                    header=dict(
-                        values=['<b>Param</b>', '<b>SCE</b>', '<b>DRM</b>', '<b>Agr</b>'],
-                        fill_color='#455A64',
-                        font=dict(color='white', size=9),
-                        align='center',
-                        height=22
-                    ),
-                    cells=dict(
-                        values=[data['params'], data['sceua'], data['pydream'], data['agreements']],
-                        fill_color=[['white'] * len(data['params']), 
-                                   ['white'] * len(data['params']),
-                                   ['white'] * len(data['params']), 
-                                   data['colors']],
-                        font=dict(size=8),
-                        align=['left', 'right', 'right', 'center'],
-                        height=18
-                    )
-                ),
-                row=row_idx + 1, col=col_idx + 1
-            )
-    
-    # Add legend table in empty cell (row 4, col 1)
-    fig.add_trace(
-        go.Table(
-            header=dict(
-                values=['<b>Legend</b>'],
-                fill_color='#455A64',
-                font=dict(color='white', size=10),
-                align='center',
-                height=25
-            ),
-            cells=dict(
-                values=[['✓ = In 95% CI, <10% diff',
-                        '~ = In 95% CI, >10% diff', 
-                        '✗ = Outside 95% CI',
-                        '',
-                        'SCE = SCE-UA',
-                        'DRM = PyDREAM',
-                        'Agr = Agreement']],
-                fill_color=[['#C8E6C9', '#FFF9C4', '#FFCDD2', 'white', 'white', 'white', 'white']],
-                font=dict(size=9),
-                align='left',
-                height=20
-            )
-        ),
-        row=4, col=1
-    )
-    
-    # SDEB table is in row 4, col 2 (placed by the loop above)
-    
-    # Add info in empty cell (row 4, col 3)
-    fig.add_trace(
-        go.Table(
-            header=dict(
-                values=['<b>About This Figure</b>'],
-                fill_color='#455A64',
-                font=dict(color='white', size=10),
-                align='center',
-                height=25
-            ),
-            cells=dict(
-                values=[['Compares SCE-UA point estimates',
-                        'with PyDREAM posterior distributions',
-                        'for all 22 Sacramento parameters',
-                        '',
-                        'Color indicates whether SCE-UA',
-                        'falls within PyDREAM 95% CI']],
-                fill_color='white',
-                font=dict(size=9),
-                align='left',
-                height=20
-            )
-        ),
-        row=4, col=3
-    )
-    
-    fig.add_trace(
-        go.Table(
-            header=dict(
-                values=['<b>Organization</b>'],
-                fill_color='#455A64',
-                font=dict(color='white', size=10),
-                align='center',
-                height=25
-            ),
-            cells=dict(
-                values=[['Cols: Base, Sqrt, Log, Inv',
-                        'Row 1: NSE variants',
-                        'Row 2: KGE variants',
-                        'Row 3: KGE nonparametric',
-                        'Row 4: SDEB (sqrt col)',
-                        '22 params per table']],
-                fill_color='white',
-                font=dict(size=9),
-                align='left',
-                height=20
-            )
-        ),
-        row=4, col=4
-    )
-    
-    fig.update_layout(
-        title=dict(
-            text='<b>Parameter Comparison Summary: All Objective Functions</b><br>' +
-                 '<span style="font-size:11px; color:gray">' +
-                 'Comparing SCE-UA point estimates with PyDREAM 95% credible intervals</span>',
-            font=dict(size=16),
-            x=0.5
-        ),
-        height=1800,  # Compact height to reduce row gaps
-        width=1400,
-        margin=dict(l=5, r=5, t=80, b=10),  # Minimal left/right margins
-        showlegend=False
-    )
-    
-    return fig
+for param in key_storage_params + key_rate_params:
+    if len(pydream_results) > 0:
+        print(f"\nPlotting all posteriors for: {param}")
+        fig = plot_all_posteriors_single_param(param, pydream_results, sceua_results, param_bounds)
+        if fig:
+            plt.savefig(figures_dir / f'05_all_posteriors_{param}.png', dpi=150, bbox_inches='tight')
+            plt.show()
+            plt.close()
 
 # %% [markdown]
 # ---
-# ## Generate Compact Visualizations
+# ## Interactive Comparison Dashboard
 #
-# We generate two types of compact visualizations:
-# 1. **Combined Ridge Plot** - All 13 objectives in a single figure with subplots
-# 2. **Combined Summary Tables** - All 13 tables in a single Plotly figure
+# Create an interactive Plotly figure for comprehensive comparison.
 
 # %%
-# Generate COMBINED ridge plot for ALL 13 objective functions
-print("=" * 70)
-print("COMBINED RIDGE PLOT: ALL 13 OBJECTIVES")
-print("=" * 70)
-
-fig_combined = plot_all_ridge_posteriors(pydream_results, sceua_results, param_bounds)
-if fig_combined:
-    fig_combined.savefig(figures_dir / '06_ridge_all_objectives.png', dpi=150, bbox_inches='tight')
-    plt.show()
-    plt.close(fig_combined)
-
-print("\nCombined ridge plot saved: figures/06_ridge_all_objectives.png")
-
-# %%
-# Generate COMBINED summary tables for ALL 13 objective functions
-print("\n" + "=" * 70)
-print("COMBINED SUMMARY TABLES: ALL 13 OBJECTIVES")
-print("=" * 70)
-
-fig_tables = create_combined_summary_tables(pydream_results, sceua_results, param_bounds)
-if fig_tables:
-    fig_tables.show()
-    # Save as HTML for interactivity
-    fig_tables.write_html(str(figures_dir / '06_summary_tables_all_objectives.html'))
-    print(f"\nCombined tables saved: figures/06_summary_tables_all_objectives.html")
-
-print("\n" + "=" * 70)
-print("COMPACT VISUALIZATIONS COMPLETE")
-print("=" * 70)
-print("""
-Generated visualizations:
-  1. Combined Ridge Plot   - All 13 objectives in one figure (4x4 grid)
-                            Blue bar = SCE-UA | Magenta bar = PyDREAM
-                            Ridge color indicates agreement level
-  2. Combined Summary Tables - All 13 tables in one Plotly figure (4x4 grid)
-                              ✓ = Good agreement | ~ = Moderate | ✗ = Poor
-""")
-
-
-# %% [markdown]
-# ---
-# ## Visual Model Fit Comparison: SCE-UA vs PyDREAM
-#
-# A crucial aspect of comparing calibration algorithms is visually inspecting how well each
-# algorithm's best parameters reproduce the observed hydrograph. This section provides
-# interactive Plotly visualizations comparing:
-#
-# - **Hydrograph (Linear Scale)**: For inspecting peak flows
-# - **Hydrograph (Log Scale)**: For inspecting low flows and recession behavior
-# - **One-to-One Scatter (Log-Log)**: For assessing bias across the flow range
-# - **Flow Duration Curves**: For overall flow distribution comparison
-#
-# Each objective function gets its own comparison figure, allowing you to see how the
-# choice of objective function and algorithm affects the model fit.
-
-# %%
-# Generate simulations for all objective functions and both algorithms
-print("=" * 70)
-print("GENERATING MODEL SIMULATIONS FOR VISUAL COMPARISON")
-print("=" * 70)
-
-# Store simulated flows for both algorithms
-sceua_simulations = {}
-pydream_simulations = {}
-
-# Get observed flow (after warmup)
-obs_flow = cal_observed[WARMUP_DAYS:]
-comparison_dates = cal_inputs.index[WARMUP_DAYS:]
-
-print(f"\nSimulation period: {comparison_dates[0].date()} to {comparison_dates[-1].date()}")
-print(f"Number of days: {len(obs_flow):,}")
-print()
-
-for obj_name in objectives.keys():
-    # SCE-UA simulation
-    if obj_name in sceua_results:
-        sceua_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-        sceua_model.set_parameters(sceua_results[obj_name].best_parameters)
-        sceua_model.reset()
-        sceua_sim = sceua_model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
-        sceua_simulations[obj_name] = sceua_sim
-        sceua_status = "✓"
-    else:
-        sceua_status = "✗"
+def create_comparison_dashboard(pydream_results, sceua_results, objectives):
+    """Create interactive comparison dashboard."""
     
-    # PyDREAM simulation
-    if obj_name in pydream_results:
-        pydream_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-        pydream_model.set_parameters(pydream_results[obj_name].best_parameters)
-        pydream_model.reset()
-        pydream_sim = pydream_model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
-        pydream_simulations[obj_name] = pydream_sim
-        pydream_status = "✓"
-    else:
-        pydream_status = "✗"
+    # Prepare data
+    obj_names = list(objectives.keys())
     
-    print(f"  {obj_name:<15} SCE-UA: {sceua_status}  PyDREAM: {pydream_status}")
-
-print(f"\nGenerated {len(sceua_simulations)} SCE-UA simulations")
-print(f"Generated {len(pydream_simulations)} PyDREAM simulations")
-
-# %%
-def create_algorithm_comparison_plot(obj_name, obs, sceua_sim, pydream_sim, dates):
-    """
-    Create a 2x2 interactive Plotly comparison figure for SCE-UA vs PyDREAM.
+    # Get NSE and KGE for both algorithms
+    sceua_nse = []
+    sceua_kge = []
+    pydream_nse = []
+    pydream_kge = []
+    sceua_runtime = []
+    pydream_runtime = []
     
-    Includes:
-    - Hydrograph (Linear Scale)
-    - Hydrograph (Log Scale)  
-    - One-to-One Scatter (Log-Log axes)
-    - Flow Duration Curves
+    for name in obj_names:
+        # SCE-UA
+        if name in sceua_results:
+            model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+            model.set_parameters(sceua_results[name].best_parameters)
+            model.reset()
+            sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
+            obs = cal_observed[WARMUP_DAYS:]
+            metrics = calculate_metrics(sim, obs)
+            sceua_nse.append(metrics['NSE'])
+            sceua_kge.append(metrics['KGE'])
+            sceua_runtime.append(sceua_results[name].runtime_seconds)
+        else:
+            sceua_nse.append(None)
+            sceua_kge.append(None)
+            sceua_runtime.append(None)
+        
+        # PyDREAM
+        if name in pydream_results:
+            model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+            model.set_parameters(pydream_results[name].best_parameters)
+            model.reset()
+            sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
+            obs = cal_observed[WARMUP_DAYS:]
+            metrics = calculate_metrics(sim, obs)
+            pydream_nse.append(metrics['NSE'])
+            pydream_kge.append(metrics['KGE'])
+            pydream_runtime.append(pydream_results[name].runtime_seconds)
+        else:
+            pydream_nse.append(None)
+            pydream_kge.append(None)
+            pydream_runtime.append(None)
     
-    Args:
-        obj_name: Name of the objective function
-        obs: Observed flow array
-        sceua_sim: SCE-UA simulated flow array
-        pydream_sim: PyDREAM simulated flow array
-        dates: DatetimeIndex for x-axis
-    
-    Returns:
-        Plotly figure
-    """
+    # Create subplots
     fig = make_subplots(
         rows=2, cols=2,
         subplot_titles=(
-            'Hydrograph (Linear Scale)',
-            'Hydrograph (Log Scale)',
-            'One-to-One Scatter (Log-Log)',
-            'Flow Duration Curves'
+            'NSE by Objective Function',
+            'KGE by Objective Function',
+            'Runtime Comparison (log scale)',
+            'NSE: SCE-UA vs PyDREAM'
         ),
-        specs=[
-            [{"type": "scatter"}, {"type": "scatter"}],
-            [{"type": "scatter"}, {"type": "scatter"}]
-        ],
-        vertical_spacing=0.12,
-        horizontal_spacing=0.08
+        specs=[[{'type': 'bar'}, {'type': 'bar'}],
+               [{'type': 'bar'}, {'type': 'scatter'}]]
     )
     
-    # Color scheme
-    obs_color = 'black'
-    sceua_color = '#1f77b4'  # Blue
-    pydream_color = '#d62728'  # Red
-    
-    # Calculate metrics for title
-    from pyrrm.calibration.objective_functions import calculate_metrics
-    sceua_metrics = calculate_metrics(sceua_sim, obs)
-    pydream_metrics = calculate_metrics(pydream_sim, obs)
-    
-    # =========================================================================
-    # 1. Hydrograph - Linear Scale (top-left)
-    # =========================================================================
+    # NSE comparison
     fig.add_trace(
-        go.Scatter(
-            x=dates, y=obs, name='Observed',
-            line=dict(color=obs_color, width=1),
-            legendgroup='obs'
-        ),
+        go.Bar(name='SCE-UA', x=obj_names, y=sceua_nse, marker_color='steelblue'),
         row=1, col=1
     )
     fig.add_trace(
-        go.Scatter(
-            x=dates, y=sceua_sim, 
-            name=f'SCE-UA (NSE={sceua_metrics["NSE"]:.3f})',
-            line=dict(color=sceua_color, width=1, dash='solid'),
-            legendgroup='sceua'
-        ),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=dates, y=pydream_sim,
-            name=f'PyDREAM (NSE={pydream_metrics["NSE"]:.3f})',
-            line=dict(color=pydream_color, width=1, dash='solid'),
-            legendgroup='pydream'
-        ),
+        go.Bar(name='PyDREAM', x=obj_names, y=pydream_nse, marker_color='coral'),
         row=1, col=1
     )
     
-    # =========================================================================
-    # 2. Hydrograph - Log Scale (top-right)
-    # =========================================================================
+    # KGE comparison
     fig.add_trace(
-        go.Scatter(
-            x=dates, y=obs, name='Observed',
-            line=dict(color=obs_color, width=1),
-            legendgroup='obs', showlegend=False
-        ),
+        go.Bar(name='SCE-UA', x=obj_names, y=sceua_kge, marker_color='steelblue', showlegend=False),
         row=1, col=2
     )
     fig.add_trace(
-        go.Scatter(
-            x=dates, y=sceua_sim, name='SCE-UA',
-            line=dict(color=sceua_color, width=1),
-            legendgroup='sceua', showlegend=False
-        ),
-        row=1, col=2
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=dates, y=pydream_sim, name='PyDREAM',
-            line=dict(color=pydream_color, width=1),
-            legendgroup='pydream', showlegend=False
-        ),
+        go.Bar(name='PyDREAM', x=obj_names, y=pydream_kge, marker_color='coral', showlegend=False),
         row=1, col=2
     )
     
-    # =========================================================================
-    # 3. One-to-One Scatter - Log-Log axes (bottom-left)
-    # =========================================================================
-    # Add small epsilon to avoid log(0)
-    epsilon = 0.01
-    obs_log = np.maximum(obs, epsilon)
-    sceua_log = np.maximum(sceua_sim, epsilon)
-    pydream_log = np.maximum(pydream_sim, epsilon)
-    
+    # Runtime comparison
     fig.add_trace(
-        go.Scatter(
-            x=obs_log, y=sceua_log, mode='markers',
-            name='SCE-UA',
-            marker=dict(color=sceua_color, size=3, opacity=0.4),
-            legendgroup='sceua', showlegend=False
-        ),
+        go.Bar(name='SCE-UA', x=obj_names, y=sceua_runtime, marker_color='steelblue', showlegend=False),
         row=2, col=1
     )
     fig.add_trace(
-        go.Scatter(
-            x=obs_log, y=pydream_log, mode='markers',
-            name='PyDREAM',
-            marker=dict(color=pydream_color, size=3, opacity=0.4),
-            legendgroup='pydream', showlegend=False
-        ),
+        go.Bar(name='PyDREAM', x=obj_names, y=pydream_runtime, marker_color='coral', showlegend=False),
         row=2, col=1
     )
     
-    # 1:1 line
-    max_flow = max(obs.max(), sceua_sim.max(), pydream_sim.max())
-    min_flow = max(epsilon, min(obs.min(), sceua_sim.min(), pydream_sim.min()))
+    # Scatter: SCE-UA vs PyDREAM NSE
     fig.add_trace(
         go.Scatter(
-            x=[min_flow, max_flow], y=[min_flow, max_flow],
-            mode='lines', name='1:1 Line',
-            line=dict(color='gray', dash='dash', width=2),
+            x=sceua_nse, y=pydream_nse, mode='markers+text',
+            text=obj_names, textposition='top center',
+            marker=dict(size=12, color='purple'),
             showlegend=False
         ),
-        row=2, col=1
-    )
-    
-    # =========================================================================
-    # 4. Flow Duration Curves (bottom-right)
-    # =========================================================================
-    obs_sorted = np.sort(obs)[::-1]
-    sceua_sorted = np.sort(sceua_sim)[::-1]
-    pydream_sorted = np.sort(pydream_sim)[::-1]
-    exceedance = np.arange(1, len(obs_sorted) + 1) / len(obs_sorted) * 100
-    
-    fig.add_trace(
-        go.Scatter(
-            x=exceedance, y=obs_sorted, name='Observed FDC',
-            line=dict(color=obs_color, width=2),
-            legendgroup='obs', showlegend=False
-        ),
         row=2, col=2
     )
+    # 1:1 line
+    max_val = max([v for v in sceua_nse + pydream_nse if v is not None])
+    min_val = min([v for v in sceua_nse + pydream_nse if v is not None])
     fig.add_trace(
         go.Scatter(
-            x=exceedance, y=sceua_sorted, name='SCE-UA FDC',
-            line=dict(color=sceua_color, width=2),
-            legendgroup='sceua', showlegend=False
-        ),
-        row=2, col=2
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=exceedance, y=pydream_sorted, name='PyDREAM FDC',
-            line=dict(color=pydream_color, width=2),
-            legendgroup='pydream', showlegend=False
+            x=[min_val, max_val], y=[min_val, max_val],
+            mode='lines', line=dict(dash='dash', color='gray'),
+            showlegend=False
         ),
         row=2, col=2
     )
     
-    # =========================================================================
     # Update axes
-    # =========================================================================
-    # Row 1 - Hydrographs
-    fig.update_yaxes(title_text="Flow (ML/day)", row=1, col=1)
-    fig.update_yaxes(title_text="Flow (ML/day)", type="log", row=1, col=2)
+    fig.update_yaxes(title_text="NSE", row=1, col=1)
+    fig.update_yaxes(title_text="KGE", row=1, col=2)
+    fig.update_yaxes(title_text="Runtime (s)", type="log", row=2, col=1)
+    fig.update_xaxes(title_text="SCE-UA NSE", row=2, col=2)
+    fig.update_yaxes(title_text="PyDREAM NSE", row=2, col=2)
     
-    # Row 2 - Scatter and FDC
-    fig.update_xaxes(title_text="Observed (ML/day)", type="log", row=2, col=1)
-    fig.update_yaxes(title_text="Simulated (ML/day)", type="log", row=2, col=1)
-    fig.update_xaxes(title_text="Exceedance (%)", row=2, col=2)
-    fig.update_yaxes(title_text="Flow (ML/day)", type="log", row=2, col=2)
-    
-    # =========================================================================
-    # Layout
-    # =========================================================================
     fig.update_layout(
-        title=dict(
-            text=f'<b>Model Fit Comparison: {obj_name}</b><br>' +
-                 f'<span style="font-size:12px; color:gray">' +
-                 f'SCE-UA NSE={sceua_metrics["NSE"]:.3f}, KGE={sceua_metrics["KGE"]:.3f} | ' +
-                 f'PyDREAM NSE={pydream_metrics["NSE"]:.3f}, KGE={pydream_metrics["KGE"]:.3f}</span>',
-            font=dict(size=16),
-            x=0.5
-        ),
-        height=700,
-        width=1200,
-        legend=dict(
-            orientation='h',
-            yanchor='bottom',
-            y=1.02,
-            xanchor='center',
-            x=0.5
-        ),
-        hovermode='x unified'
+        title="<b>Algorithm Comparison: SCE-UA vs PyDREAM</b><br>" +
+              "<sup>Across 13 Objective Functions</sup>",
+        height=800,
+        showlegend=True,
+        barmode='group',
+        legend=dict(orientation='h', y=1.02)
     )
     
     return fig
 
-
-def create_combined_fit_comparison(objectives_list, obs, sceua_sims, pydream_sims, dates):
-    """
-    Create a combined figure showing all objective functions in a grid.
-    Each row is one objective function with 4 panels.
-    
-    Args:
-        objectives_list: List of objective function names
-        obs: Observed flow array
-        sceua_sims: Dict of SCE-UA simulations by objective name
-        pydream_sims: Dict of PyDREAM simulations by objective name
-        dates: DatetimeIndex for x-axis
-    
-    Returns:
-        Plotly figure
-    """
-    n_objectives = len(objectives_list)
-    
-    # Create subplot titles
-    subplot_titles = []
-    for obj in objectives_list:
-        subplot_titles.extend([
-            f'{obj} - Linear',
-            f'{obj} - Log',
-            f'{obj} - Scatter',
-            f'{obj} - FDC'
-        ])
-    
-    fig = make_subplots(
-        rows=n_objectives, cols=4,
-        subplot_titles=subplot_titles,
-        specs=[[{"type": "scatter"} for _ in range(4)] for _ in range(n_objectives)],
-        vertical_spacing=0.03,
-        horizontal_spacing=0.04,
-        row_heights=[1/n_objectives] * n_objectives
-    )
-    
-    # Colors
-    obs_color = 'black'
-    sceua_color = '#1f77b4'
-    pydream_color = '#d62728'
-    epsilon = 0.01
-    
-    # Calculate FDC data once
-    obs_sorted = np.sort(obs)[::-1]
-    exceedance = np.arange(1, len(obs_sorted) + 1) / len(obs_sorted) * 100
-    max_obs = obs.max()
-    min_obs = max(epsilon, obs.min())
-    
-    for row_idx, obj_name in enumerate(objectives_list, 1):
-        if obj_name not in sceua_sims or obj_name not in pydream_sims:
-            continue
-        
-        sceua_sim = sceua_sims[obj_name]
-        pydream_sim = pydream_sims[obj_name]
-        
-        # Show legend only for first row
-        show_legend = (row_idx == 1)
-        
-        # ----- Column 1: Hydrograph Linear -----
-        fig.add_trace(
-            go.Scatter(x=dates, y=obs, name='Observed',
-                      line=dict(color=obs_color, width=0.8),
-                      legendgroup='obs', showlegend=show_legend),
-            row=row_idx, col=1
-        )
-        fig.add_trace(
-            go.Scatter(x=dates, y=sceua_sim, name='SCE-UA',
-                      line=dict(color=sceua_color, width=0.8),
-                      legendgroup='sceua', showlegend=show_legend),
-            row=row_idx, col=1
-        )
-        fig.add_trace(
-            go.Scatter(x=dates, y=pydream_sim, name='PyDREAM',
-                      line=dict(color=pydream_color, width=0.8),
-                      legendgroup='pydream', showlegend=show_legend),
-            row=row_idx, col=1
-        )
-        
-        # ----- Column 2: Hydrograph Log -----
-        fig.add_trace(
-            go.Scatter(x=dates, y=obs, name='Observed',
-                      line=dict(color=obs_color, width=0.8),
-                      legendgroup='obs', showlegend=False),
-            row=row_idx, col=2
-        )
-        fig.add_trace(
-            go.Scatter(x=dates, y=sceua_sim, name='SCE-UA',
-                      line=dict(color=sceua_color, width=0.8),
-                      legendgroup='sceua', showlegend=False),
-            row=row_idx, col=2
-        )
-        fig.add_trace(
-            go.Scatter(x=dates, y=pydream_sim, name='PyDREAM',
-                      line=dict(color=pydream_color, width=0.8),
-                      legendgroup='pydream', showlegend=False),
-            row=row_idx, col=2
-        )
-        fig.update_yaxes(type="log", row=row_idx, col=2)
-        
-        # ----- Column 3: Scatter Log-Log -----
-        obs_log = np.maximum(obs, epsilon)
-        sceua_log = np.maximum(sceua_sim, epsilon)
-        pydream_log = np.maximum(pydream_sim, epsilon)
-        
-        fig.add_trace(
-            go.Scatter(x=obs_log, y=sceua_log, mode='markers', name='SCE-UA',
-                      marker=dict(color=sceua_color, size=2, opacity=0.3),
-                      legendgroup='sceua', showlegend=False),
-            row=row_idx, col=3
-        )
-        fig.add_trace(
-            go.Scatter(x=obs_log, y=pydream_log, mode='markers', name='PyDREAM',
-                      marker=dict(color=pydream_color, size=2, opacity=0.3),
-                      legendgroup='pydream', showlegend=False),
-            row=row_idx, col=3
-        )
-        # 1:1 line
-        max_flow = max(max_obs, sceua_sim.max(), pydream_sim.max())
-        fig.add_trace(
-            go.Scatter(x=[min_obs, max_flow], y=[min_obs, max_flow],
-                      mode='lines', line=dict(color='gray', dash='dash', width=1),
-                      showlegend=False),
-            row=row_idx, col=3
-        )
-        fig.update_xaxes(type="log", row=row_idx, col=3)
-        fig.update_yaxes(type="log", row=row_idx, col=3)
-        
-        # ----- Column 4: FDC -----
-        sceua_sorted = np.sort(sceua_sim)[::-1]
-        pydream_sorted = np.sort(pydream_sim)[::-1]
-        
-        fig.add_trace(
-            go.Scatter(x=exceedance, y=obs_sorted, name='Observed FDC',
-                      line=dict(color=obs_color, width=1.5),
-                      legendgroup='obs', showlegend=False),
-            row=row_idx, col=4
-        )
-        fig.add_trace(
-            go.Scatter(x=exceedance, y=sceua_sorted, name='SCE-UA FDC',
-                      line=dict(color=sceua_color, width=1.5),
-                      legendgroup='sceua', showlegend=False),
-            row=row_idx, col=4
-        )
-        fig.add_trace(
-            go.Scatter(x=exceedance, y=pydream_sorted, name='PyDREAM FDC',
-                      line=dict(color=pydream_color, width=1.5),
-                      legendgroup='pydream', showlegend=False),
-            row=row_idx, col=4
-        )
-        fig.update_yaxes(type="log", row=row_idx, col=4)
-    
-    fig.update_layout(
-        title=dict(
-            text='<b>Model Fit Comparison: All 13 Objective Functions</b><br>' +
-                 '<span style="font-size:12px; color:gray">' +
-                 'SCE-UA (blue) vs PyDREAM (red) | Columns: Linear, Log, Scatter, FDC</span>',
-            font=dict(size=18),
-            x=0.5
-        ),
-        height=250 * n_objectives,
-        width=1400,
-        legend=dict(
-            orientation='h',
-            yanchor='bottom',
-            y=1.005,
-            xanchor='center',
-            x=0.5
-        ),
-        showlegend=True
-    )
-    
-    return fig
-
-print("Comparison plotting functions defined!")
-
-# %% [markdown]
-# ### Generate Comparison Figures
-#
-# First, we generate all comparison plots and calculate metrics for each objective function.
-
 # %%
-# Generate individual comparison plots for all objective functions
-print("=" * 70)
-print("GENERATING MODEL FIT COMPARISON FIGURES")
-print("=" * 70)
-
-comparison_figs = {}
-objectives_with_both = [obj for obj in objectives.keys() 
-                       if obj in sceua_simulations and obj in pydream_simulations]
-
-print(f"\nGenerating plots for {len(objectives_with_both)} objective functions...")
-print()
-
-for obj_name in objectives_with_both:
-    fig = create_algorithm_comparison_plot(
-        obj_name=obj_name,
-        obs=obs_flow,
-        sceua_sim=sceua_simulations[obj_name],
-        pydream_sim=pydream_simulations[obj_name],
-        dates=comparison_dates
-    )
-    comparison_figs[obj_name] = fig
+if len(pydream_results) > 0 and len(sceua_results) > 0:
+    fig = create_comparison_dashboard(pydream_results, sceua_results, objectives)
+    fig.show()
     
-    # Calculate metrics for display
-    sceua_metrics = calculate_metrics(sceua_simulations[obj_name], obs_flow)
-    pydream_metrics = calculate_metrics(pydream_simulations[obj_name], obs_flow)
-    
-    print(f"{obj_name}:")
-    print(f"  SCE-UA  - NSE: {sceua_metrics['NSE']:.3f}, KGE: {sceua_metrics['KGE']:.3f}, PBIAS: {sceua_metrics['PBIAS']:+.1f}%")
-    print(f"  PyDREAM - NSE: {pydream_metrics['NSE']:.3f}, KGE: {pydream_metrics['KGE']:.3f}, PBIAS: {pydream_metrics['PBIAS']:+.1f}%")
-    
-    # Determine winner for this objective
-    nse_diff = pydream_metrics['NSE'] - sceua_metrics['NSE']
-    winner = "PyDREAM" if nse_diff > 0.001 else ("SCE-UA" if nse_diff < -0.001 else "Tie")
-    print(f"  → NSE Winner: {winner} (diff: {nse_diff:+.4f})")
-    print()
-
-print(f"\n✓ Generated {len(comparison_figs)} comparison figures")
-
-# %% [markdown]
-# ### Combined Overview: All 13 Objectives
-#
-# We start with the big picture - a mega-figure showing all 13 objective functions in a 
-# single scrollable view. This allows for quick visual comparison of how different 
-# objectives affect model fit.
-#
-# Each row shows one objective function with 4 diagnostic panels:
-# - **Linear hydrograph**: Good for peak flow comparison
-# - **Log hydrograph**: Good for low flow and recession comparison  
-# - **Log-log scatter**: Shows bias across all flow magnitudes
-# - **Flow duration curves**: Shows overall flow distribution fit
-
-# %%
-# Generate combined figure with all objectives
-print("=" * 70)
-print("COMBINED MODEL FIT COMPARISON: ALL 13 OBJECTIVES")
-print("=" * 70)
-
-fig_all = create_combined_fit_comparison(
-    objectives_list=objectives_with_both,
-    obs=obs_flow,
-    sceua_sims=sceua_simulations,
-    pydream_sims=pydream_simulations,
-    dates=comparison_dates
-)
-
-fig_all.show()
-
-# Save as HTML for interactivity
-fig_all.write_html(str(figures_dir / '06_model_fits_all_objectives.html'))
-print(f"\n✓ Combined figure saved to: figures/06_model_fits_all_objectives.html")
-
-# %% [markdown]
-# ### Individual Objective Function Comparisons
-#
-# Below we show larger, more detailed interactive plots for each family of objective 
-# functions. These are easier to inspect individually than the combined overview above.
-
-# %%
-# Display NSE-family comparisons (NSE, LogNSE, InvNSE, SqrtNSE)
-print("=" * 70)
-print("NSE-FAMILY OBJECTIVE FUNCTIONS")
-print("=" * 70)
-
-nse_family = ['NSE', 'LogNSE', 'InvNSE', 'SqrtNSE']
-for obj_name in nse_family:
-    if obj_name in comparison_figs:
-        print(f"\n{obj_name}:")
-        comparison_figs[obj_name].show()
-
-# %%
-# Display KGE-family comparisons (KGE, KGE_inv, KGE_sqrt, KGE_log)
-print("=" * 70)
-print("KGE-FAMILY OBJECTIVE FUNCTIONS")
-print("=" * 70)
-
-kge_family = ['KGE', 'KGE_inv', 'KGE_sqrt', 'KGE_log']
-for obj_name in kge_family:
-    if obj_name in comparison_figs:
-        print(f"\n{obj_name}:")
-        comparison_figs[obj_name].show()
-
-# %%
-# Display KGE-nonparametric family comparisons
-print("=" * 70)
-print("KGE NON-PARAMETRIC FAMILY OBJECTIVE FUNCTIONS")
-print("=" * 70)
-
-kge_np_family = ['KGE_np', 'KGE_np_inv', 'KGE_np_sqrt', 'KGE_np_log']
-for obj_name in kge_np_family:
-    if obj_name in comparison_figs:
-        print(f"\n{obj_name}:")
-        comparison_figs[obj_name].show()
-
-# %%
-# Display SDEB (composite objective)
-print("=" * 70)
-print("COMPOSITE OBJECTIVE FUNCTION (SDEB)")
-print("=" * 70)
-
-if 'SDEB' in comparison_figs:
-    print("\nSDEB (Spectral Decomposition-based Efficiency):")
-    comparison_figs['SDEB'].show()
-
-# %% [markdown]
-# ### Key Observations from Visual Comparison
-#
-# Looking at the hydrographs and diagnostics above, we can observe:
-#
-# **High-Flow Emphasis Objectives (NSE, KGE, KGE_np):**
-# - Both algorithms capture peak flows well
-# - May underestimate some low flow periods (visible in log-scale hydrographs)
-# - Flow duration curves typically match well at high exceedance percentiles
-#
-# **Low-Flow Emphasis Objectives (LogNSE, InvNSE, KGE_inv, KGE_log):**
-# - Better performance during recession and baseflow periods
-# - May not capture the highest peaks as accurately
-# - Flow duration curves match better at low exceedance percentiles
-#
-# **Balanced Objectives (SqrtNSE, KGE_sqrt, SDEB):**
-# - Compromise between high and low flow performance
-# - Often provide the most visually satisfying overall fit
-# - Flow duration curves typically match across the full range
-#
-# **Algorithm Differences:**
-# - SCE-UA and PyDREAM often produce very similar fits when NSE is high
-# - Differences are more apparent when the objective function is challenging
-# - Check the scatter plots for systematic biases between algorithms
+    # Save as HTML
+    fig.write_html(str(figures_dir / '05_algorithm_comparison_dashboard.html'))
+    print(f"\nDashboard saved to: {figures_dir / '05_algorithm_comparison_dashboard.html'}")
 
 # %% [markdown]
 # ---
-# ## Summary
+# ## Convergence Diagnostics
 #
-# This notebook compared SCE-UA (optimization) and PyDREAM (MCMC) calibration algorithms
-# across 13 objective functions for the Sacramento model.
+# For MCMC methods, checking convergence is critical. We examine the 
+# Gelman-Rubin statistic (R-hat) across all calibrations.
+
+# %%
+print("=" * 70)
+print("PYDREAM CONVERGENCE DIAGNOSTICS")
+print("=" * 70)
+
+convergence_data = []
+
+for name, result in pydream_results.items():
+    if 'gelman_rubin' in result.convergence_diagnostics:
+        gr_vals = result.convergence_diagnostics['gelman_rubin']
+        max_gr = max(gr_vals.values())
+        mean_gr = np.mean(list(gr_vals.values()))
+        converged = result.convergence_diagnostics.get('converged', False)
+        
+        convergence_data.append({
+            'Objective': name,
+            'Max R-hat': max_gr,
+            'Mean R-hat': mean_gr,
+            'Converged': '✓' if converged else '✗'
+        })
+
+if convergence_data:
+    conv_df = pd.DataFrame(convergence_data)
+    print(f"\n{conv_df.round(3).to_string(index=False)}")
+    print("\nR-hat < 1.2 indicates convergence")
+    print("Consider increasing iterations if not converged")
+else:
+    print("\nNo convergence diagnostics available")
+
+# %% [markdown]
+# ---
+# ## Summary and Recommendations
 #
-# **Key outputs:**
-# - Combined Ridge Plot showing posterior distributions with agreement coloring
-# - Combined Summary Tables showing parameter comparisons across all objectives
-# - Interactive model fit comparisons for all 13 objective functions
-# - Combined mega-figure saved as HTML for external viewing
+# ### Key Findings
+#
+# | Aspect | SCE-UA | PyDREAM |
+# |--------|--------|---------|
+# | **Output** | Point estimate | Full posterior |
+# | **Uncertainty** | None | Credible intervals |
+# | **Speed** | Fast (minutes) | Slow (hours) |
+# | **Convergence** | Easy | Requires checking |
+# | **Best for** | Quick calibration | Uncertainty analysis |
+#
+# ### When to Use Each Algorithm
+#
+# **Use SCE-UA when:**
+# - You need a quick calibration
+# - Point estimates are sufficient
+# - Computational resources are limited
+# - Running many catchments
+#
+# **Use PyDREAM when:**
+# - Parameter uncertainty is important
+# - Need credible intervals for predictions
+# - Assessing model structural uncertainty
+# - Research applications requiring full posteriors
+
+# %%
+print("=" * 70)
+print("ALGORITHM COMPARISON SUMMARY")
+print("=" * 70)
+
+# Summary statistics
+if len(sceua_results) > 0 and len(pydream_results) > 0:
+    common = set(sceua_results.keys()) & set(pydream_results.keys())
+    
+    if len(common) > 0:
+        sceua_times = [sceua_results[k].runtime_seconds for k in common]
+        pydream_times = [pydream_results[k].runtime_seconds for k in common]
+        
+        print(f"\nCompared {len(common)} objective functions")
+        print(f"\nRuntime comparison:")
+        print(f"  SCE-UA average:  {np.mean(sceua_times):.1f} seconds")
+        print(f"  PyDREAM average: {np.mean(pydream_times):.1f} seconds")
+        print(f"  Speed ratio:     {np.mean(pydream_times)/np.mean(sceua_times):.1f}x slower")
+
+print("""
+Recommendations:
+  • For quick calibration     → SCE-UA (fast, reliable)
+  • For uncertainty analysis  → PyDREAM (full posteriors)
+  • For research papers       → PyDREAM (publishable uncertainty)
+  • For operational use       → SCE-UA (efficient at scale)
+  • For best of both          → SCE-UA first, PyDREAM for final model
+""")
+
+# %% [markdown]
+# ---
+# ## Next Steps
+#
+# - **Notebook 06**: Sensitivity Analysis (Sobol indices)
+# - For production: Increase PyDREAM iterations (5000-10000+)
+# - Consider running PyDREAM overnight for comprehensive posteriors
+# - Use posteriors for prediction uncertainty bounds
 
 # %%
 print("=" * 70)
 print("ALGORITHM COMPARISON COMPLETE")
 print("=" * 70)
 print("""
-Generated outputs:
-  1. Combined Ridge Plot     - figures/06_ridge_posteriors_all_objectives.png
-  2. Combined Summary Tables - figures/06_summary_tables_all_objectives.html
-  3. Model Fit Comparisons   - figures/06_model_fits_all_objectives.html
-
-Key findings:
-  • SCE-UA provides fast point estimates
-  • PyDREAM provides full posterior distributions  
-  • Agreement coloring shows parameter identifiability
-  • Green ridges = SCE-UA within posterior (good agreement)
-  • Red ridges = SCE-UA outside posterior (algorithms disagree)
+You now understand:
+  ✓ How SCE-UA and PyDREAM differ fundamentally
+  ✓ How to run calibrations with both algorithms
+  ✓ How to compare posteriors with point estimates
+  ✓ When to use each approach
+  ✓ How to check MCMC convergence
   
-Visual comparison highlights:
-  • Linear hydrographs show peak flow performance
-  • Log hydrographs reveal low flow and recession behavior
-  • Log-log scatter plots expose systematic biases
-  • Flow duration curves summarize overall distribution fit
+The posterior distributions provide valuable insight into parameter
+uncertainty that point estimates alone cannot capture!
 """)

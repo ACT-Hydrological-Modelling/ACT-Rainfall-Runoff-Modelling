@@ -93,6 +93,9 @@ class CalibrationReport:
     # Model configuration (for re-simulation)
     model_config: Dict[str, Any] = field(default_factory=dict)
     
+    # Experiment identifier (canonical key from naming convention)
+    experiment_name: Optional[str] = None
+
     # Metadata
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     

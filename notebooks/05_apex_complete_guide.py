@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.0
+#       jupytext_version: 1.19.1
 #   kernelspec:
 #     display_name: pyrrm (Python 3.11.14)
 #     language: python
@@ -397,39 +397,39 @@ def load_and_simulate(report_path, label):
 # TRANSFORM: NONE (Untransformed - high flow emphasis)
 # =============================================================================
 print("\n--- TRANSFORM: NONE (untransformed) ---")
-result_nse, sim_nse = load_and_simulate('../test_data/reports/410734_nse.pkl', 'NSE')
-result_kge, sim_kge = load_and_simulate('../test_data/reports/410734_kge.pkl', 'KGE')
-result_kge_np, sim_kge_np = load_and_simulate('../test_data/reports/410734_kge_np.pkl', 'KGE-np')
+result_nse, sim_nse = load_and_simulate('../test_data/reports/410734_sacramento_nse_sceua.pkl', 'NSE')
+result_kge, sim_kge = load_and_simulate('../test_data/reports/410734_sacramento_kge_sceua.pkl', 'KGE')
+result_kge_np, sim_kge_np = load_and_simulate('../test_data/reports/410734_sacramento_kgenp_sceua.pkl', 'KGE-np')
 
 # =============================================================================
 # TRANSFORM: SQRT (Balanced)
 # =============================================================================
 print("\n--- TRANSFORM: SQRT (balanced) ---")
-result_nse_sqrt, sim_nse_sqrt = load_and_simulate('../test_data/reports/410734_sqrtnse.pkl', 'NSE-sqrt')
-result_kge_sqrt, sim_kge_sqrt = load_and_simulate('../test_data/reports/410734_kge_sqrt.pkl', 'KGE-sqrt')
-result_kge_np_sqrt, sim_kge_np_sqrt = load_and_simulate('../test_data/reports/410734_kge_np_sqrt.pkl', 'KGE-np-sqrt')
+result_nse_sqrt, sim_nse_sqrt = load_and_simulate('../test_data/reports/410734_sacramento_nse_sceua_sqrt.pkl', 'NSE-sqrt')
+result_kge_sqrt, sim_kge_sqrt = load_and_simulate('../test_data/reports/410734_sacramento_kge_sceua_sqrt.pkl', 'KGE-sqrt')
+result_kge_np_sqrt, sim_kge_np_sqrt = load_and_simulate('../test_data/reports/410734_sacramento_kgenp_sceua_sqrt.pkl', 'KGE-np-sqrt')
 
 # =============================================================================
 # TRANSFORM: LOG (Low flow emphasis)
 # =============================================================================
 print("\n--- TRANSFORM: LOG (low flow) ---")
-result_nse_log, sim_nse_log = load_and_simulate('../test_data/reports/410734_lognse.pkl', 'NSE-log')
-result_kge_log, sim_kge_log = load_and_simulate('../test_data/reports/410734_kge_log.pkl', 'KGE-log')
-result_kge_np_log, sim_kge_np_log = load_and_simulate('../test_data/reports/410734_kge_np_log.pkl', 'KGE-np-log')
+result_nse_log, sim_nse_log = load_and_simulate('../test_data/reports/410734_sacramento_nse_sceua_log.pkl', 'NSE-log')
+result_kge_log, sim_kge_log = load_and_simulate('../test_data/reports/410734_sacramento_kge_sceua_log.pkl', 'KGE-log')
+result_kge_np_log, sim_kge_np_log = load_and_simulate('../test_data/reports/410734_sacramento_kgenp_sceua_log.pkl', 'KGE-np-log')
 
 # =============================================================================
 # TRANSFORM: INVERSE (Strong low flow emphasis)
 # =============================================================================
 print("\n--- TRANSFORM: INVERSE (strong low flow) ---")
-result_nse_inv, sim_nse_inv = load_and_simulate('../test_data/reports/410734_invnse.pkl', 'NSE-inv')
-result_kge_inv, sim_kge_inv = load_and_simulate('../test_data/reports/410734_kge_inv.pkl', 'KGE-inv')
-result_kge_np_inv, sim_kge_np_inv = load_and_simulate('../test_data/reports/410734_kge_np_inv.pkl', 'KGE-np-inv')
+result_nse_inv, sim_nse_inv = load_and_simulate('../test_data/reports/410734_sacramento_nse_sceua_inverse.pkl', 'NSE-inv')
+result_kge_inv, sim_kge_inv = load_and_simulate('../test_data/reports/410734_sacramento_kge_sceua_inverse.pkl', 'KGE-inv')
+result_kge_np_inv, sim_kge_np_inv = load_and_simulate('../test_data/reports/410734_sacramento_kgenp_sceua_inverse.pkl', 'KGE-np-inv')
 
 # =============================================================================
 # SDEB BASELINE (for APEX vs SDEB comparison)
 # =============================================================================
 print("\n--- SDEB BASELINE ---")
-result_sdeb, sim_sdeb = load_and_simulate('../test_data/reports/410734_sdeb.pkl', 'SDEB')
+result_sdeb, sim_sdeb = load_and_simulate('../test_data/reports/410734_sacramento_sdeb_sceua.pkl', 'SDEB')
 
 # Organize baselines by transformation for easy access
 baselines_by_transform = {
@@ -666,9 +666,9 @@ for config_name, config in apex_configs.items():
     report = runner.create_report(result, catchment_info={
         'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
     })
-    save_name = f"410734_APEX_{config_name}"
-    report.save(f'../test_data/reports/{save_name}')
-    print(f"  Saved: test_data/reports/{save_name}.pkl")
+    save_name = f"410734_sacramento_apex_sceua_{config_name}-k05-uniform"
+    report.save(f'../test_data/reports/apex/{save_name}')
+    print(f"  Saved: test_data/reports/apex/{save_name}.pkl")
 
 print("\n" + "=" * 80)
 print(f"ALL {len(apex_configs)} APEX CALIBRATIONS COMPLETE")
@@ -774,9 +774,15 @@ for config_name, config in sensitivity_configs.items():
     report = runner.create_report(result, catchment_info={
         'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
     })
-    save_name = f"410734_APEX_{config_name}"
-    report.save(f'../test_data/reports/{save_name}')
-    print(f"  Saved: test_data/reports/{save_name}.pkl")
+    sensitivity_save_names = {
+        'sqrt_dyn03': '410734_sacramento_apex_sceua_sqrt-k03-uniform',
+        'sqrt_dyn07': '410734_sacramento_apex_sceua_sqrt-k07-uniform',
+        'sqrt_lowflow': '410734_sacramento_apex_sceua_sqrt-k05-lowflow',
+        'sqrt_balanced': '410734_sacramento_apex_sceua_sqrt-k05-balanced',
+    }
+    save_name = sensitivity_save_names[config_name]
+    report.save(f'../test_data/reports/apex/{save_name}')
+    print(f"  Saved: test_data/reports/apex/{save_name}.pkl")
 
 print("\n" + "=" * 80)
 print(f"ALL SENSITIVITY CALIBRATIONS COMPLETE")
@@ -810,15 +816,15 @@ print("=" * 80)
 # Define expected APEX calibration files
 apex_calibration_files = {
     # Primary transform-aligned configs (Part 3)
-    'none': '../test_data/reports/410734_APEX_none.pkl',
-    'sqrt': '../test_data/reports/410734_APEX_sqrt.pkl',
-    'log': '../test_data/reports/410734_APEX_log.pkl',
-    'inverse': '../test_data/reports/410734_APEX_inverse.pkl',
+    'none': '../test_data/reports/apex/410734_sacramento_apex_sceua_none-k05-uniform.pkl',
+    'sqrt': '../test_data/reports/apex/410734_sacramento_apex_sceua_sqrt-k05-uniform.pkl',
+    'log': '../test_data/reports/apex/410734_sacramento_apex_sceua_log-k05-uniform.pkl',
+    'inverse': '../test_data/reports/apex/410734_sacramento_apex_sceua_inverse-k05-uniform.pkl',
     # Sensitivity configs (Part 4)
-    'sqrt_dyn03': '../test_data/reports/410734_APEX_sqrt_dyn03.pkl',
-    'sqrt_dyn07': '../test_data/reports/410734_APEX_sqrt_dyn07.pkl',
-    'sqrt_lowflow': '../test_data/reports/410734_APEX_sqrt_lowflow.pkl',
-    'sqrt_balanced': '../test_data/reports/410734_APEX_sqrt_balanced.pkl',
+    'sqrt_dyn03': '../test_data/reports/apex/410734_sacramento_apex_sceua_sqrt-k03-uniform.pkl',
+    'sqrt_dyn07': '../test_data/reports/apex/410734_sacramento_apex_sceua_sqrt-k07-uniform.pkl',
+    'sqrt_lowflow': '../test_data/reports/apex/410734_sacramento_apex_sceua_sqrt-k05-lowflow.pkl',
+    'sqrt_balanced': '../test_data/reports/apex/410734_sacramento_apex_sceua_sqrt-k05-balanced.pkl',
 }
 
 # Check if calibrations are already in memory (Parts 3 & 4 were run in this session)

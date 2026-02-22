@@ -1,11 +1,19 @@
 """
-Batch experiment runner for single-catchment grid experiments.
+Batch experiment runner for single-catchment experiments.
 
 Automates running multiple calibrations across combinations of
 rainfall-runoff models, objective functions, optimization algorithms,
-and flow transformations.
+and flow transformations.  Supports two configuration modes:
 
-Example (programmatic):
+1. **Combinatorial grid** -- ``ExperimentGrid`` crosses models x objectives
+   x algorithms x transformations (Cartesian product).
+2. **Explicit experiment list** -- ``ExperimentList`` runs a user-curated
+   sequence of ``ExperimentSpec`` objects with no combinatorial expansion.
+
+Each call to ``run()`` creates a unique, timestamped run folder under the
+user-supplied ``output_dir`` so successive runs never overwrite each other.
+
+Example (combinatorial grid):
     >>> from pyrrm.calibration.batch import ExperimentGrid, BatchExperimentRunner
     >>> from pyrrm.models import GR4J, GR5J
     >>> from pyrrm.objectives import NSE, KGE
@@ -18,16 +26,29 @@ Example (programmatic):
     >>> runner = BatchExperimentRunner(inputs, observed, grid, output_dir='./results')
     >>> batch_result = runner.run()
 
+Example (explicit experiment list):
+    >>> from pyrrm.calibration.batch import ExperimentList, ExperimentSpec
+    >>> specs = [
+    ...     ExperimentSpec(key='gr4j_nse', model_name='GR4J', model=GR4J(),
+    ...                    objective_name='nse', objective=NSE(),
+    ...                    algorithm_name='sceua',
+    ...                    algorithm_kwargs={'method': 'sceua_direct', 'max_evals': 5000}),
+    ... ]
+    >>> exp_list = ExperimentList(specs)
+    >>> runner = BatchExperimentRunner(inputs, observed, exp_list, output_dir='./results')
+    >>> batch_result = runner.run(run_name='my_experiment')
+
 Example (YAML-driven):
     >>> runner = BatchExperimentRunner.from_config('experiment.yaml', inputs, observed)
     >>> batch_result = runner.run()
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from itertools import product
 from pathlib import Path
 from typing import (
-    Dict, List, Tuple, Optional, Any, Callable, Type, TYPE_CHECKING,
+    Dict, List, Tuple, Optional, Any, Callable, Type, Union, TYPE_CHECKING,
 )
 import copy
 import json
@@ -35,6 +56,7 @@ import logging
 import pickle
 import time
 import traceback
+import uuid
 import warnings
 
 import numpy as np
@@ -49,6 +71,155 @@ if TYPE_CHECKING:
     from pyrrm.calibration.objective_functions import ObjectiveFunction
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Experiment Naming Convention
+# ---------------------------------------------------------------------------
+#
+# Canonical key format:
+#   {catchment}_{model}_{objective}_{algorithm}[_{transformation}[-{tag}...]]
+#
+# Rules:
+#   - All fields lowercased, non-alphanumeric chars stripped.
+#   - Exactly 4 underscore-separated fields (5 with transformation).
+#   - catchment is always present (use DEFAULT_CATCHMENT when unknown).
+#   - APEX objectives append dash-separated parameter tags after the
+#     transformation so the full configuration is readable from the key.
+# ---------------------------------------------------------------------------
+
+DEFAULT_CATCHMENT = 'catchment'
+
+_SANITISE_KEEP = set('abcdefghijklmnopqrstuvwxyz0123456789')
+
+
+def _sanitise(value: str) -> str:
+    """Lowercase and strip non-alphanumeric characters."""
+    return ''.join(c for c in value.strip().lower() if c in _SANITISE_KEEP)
+
+
+def make_experiment_key(
+    model: str,
+    objective: str,
+    algorithm: str,
+    catchment: str = DEFAULT_CATCHMENT,
+    transformation: Optional[str] = None,
+    extra_tags: Optional[List[str]] = None,
+) -> str:
+    """Build a canonical experiment key.
+
+    Format::
+
+        {catchment}_{model}_{objective}_{algorithm}[_{transformation}[-{tag1}-{tag2}...]]
+
+    Always exactly 4 underscore-separated fields (5 with transformation).
+    APEX-specific parameter tags are dash-separated after the
+    transformation.
+
+    Args:
+        model: Model name (e.g. ``'GR4J'``, ``'Sacramento'``).
+        objective: Objective function name (e.g. ``'nse'``, ``'kge'``,
+            ``'apex'``).
+        algorithm: Algorithm name (e.g. ``'sceua'``, ``'dream'``).
+        catchment: Catchment identifier.  Defaults to
+            ``DEFAULT_CATCHMENT`` (``'catchment'``) when no real ID is
+            available.  Use descriptive labels such as ``'synthetic'``,
+            ``'demo'``, or the gauge ID.
+        transformation: Optional flow transformation (e.g. ``'sqrt'``,
+            ``'log'``, ``'inverse'``).
+        extra_tags: Optional dash-separated tags appended after the
+            transformation.  Used for APEX parameter encoding.
+
+    Returns:
+        Canonical key string.
+
+    Example:
+        >>> make_experiment_key('GR4J', 'nse', 'sceua', catchment='410734')
+        '410734_gr4j_nse_sceua'
+        >>> make_experiment_key('Sacramento', 'apex', 'sceua',
+        ...     catchment='410734', transformation='sqrt',
+        ...     extra_tags=['k05', 'uniform'])
+        '410734_sacramento_apex_sceua_sqrt-k05-uniform'
+    """
+    parts = [
+        _sanitise(catchment),
+        _sanitise(model),
+        _sanitise(objective),
+        _sanitise(algorithm),
+    ]
+    if transformation or extra_tags:
+        suffix = _sanitise(transformation or 'none')
+        if extra_tags:
+            suffix += '-' + '-'.join(_sanitise(t) for t in extra_tags)
+        parts.append(suffix)
+    return '_'.join(parts)
+
+
+def make_apex_tags(
+    dynamics_strength: float = 0.5,
+    regime_emphasis: str = 'uniform',
+) -> List[str]:
+    """Build APEX parameter tags.  Always includes all params.
+
+    Args:
+        dynamics_strength: Kappa value (dynamics multiplier strength).
+        regime_emphasis: Regime emphasis mode (``'uniform'``,
+            ``'low_flow'``, ``'balanced'``).
+
+    Returns:
+        List of short tag strings, e.g. ``['k05', 'uniform']``.
+
+    Example:
+        >>> make_apex_tags(dynamics_strength=0.3, regime_emphasis='low_flow')
+        ['k03', 'lowflow']
+    """
+    return [
+        f'k{int(dynamics_strength * 10):02d}',
+        regime_emphasis.replace('_', ''),
+    ]
+
+
+def parse_experiment_key(key: str) -> Dict[str, Any]:
+    """Parse a canonical experiment key into its components.
+
+    Args:
+        key: Canonical key string.
+
+    Returns:
+        Dict with keys ``catchment``, ``model``, ``objective``,
+        ``algorithm``, and optionally ``transformation`` and
+        ``apex_tags``.
+
+    Example:
+        >>> parse_experiment_key('410734_gr4j_nse_sceua_sqrt')
+        {'catchment': '410734', 'model': 'gr4j', 'objective': 'nse',
+         'algorithm': 'sceua', 'transformation': 'sqrt'}
+        >>> parse_experiment_key('410734_sacramento_apex_sceua_sqrt-k05-uniform')
+        {'catchment': '410734', 'model': 'sacramento', 'objective': 'apex',
+         'algorithm': 'sceua', 'transformation': 'sqrt',
+         'apex_tags': ['k05', 'uniform']}
+    """
+    parts = key.split('_')
+    result: Dict[str, Any] = {}
+    if len(parts) >= 4:
+        result['catchment'] = parts[0]
+        result['model'] = parts[1]
+        result['objective'] = parts[2]
+        result['algorithm'] = parts[3]
+    if len(parts) >= 5:
+        last = parts[4]
+        if '-' in last:
+            segments = last.split('-')
+            result['transformation'] = segments[0]
+            result['apex_tags'] = segments[1:]
+        else:
+            result['transformation'] = last
+    return result
+
+try:
+    from tqdm.auto import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -203,12 +374,15 @@ class ExperimentGrid:
         objectives: ``{'nse': NSE(), 'kge': KGE()}``.
         algorithms: ``{'sceua': {'method': 'sceua_direct', 'max_evals': 20000}}``.
         transformations: Optional axis for flow transformations.
+        catchment: Catchment identifier used in generated keys.
+            Defaults to ``DEFAULT_CATCHMENT``.
 
     Example:
         >>> grid = ExperimentGrid(
         ...     models={'GR4J': GR4J()},
         ...     objectives={'nse': NSE(), 'kge': KGE()},
         ...     algorithms={'sceua': {'method': 'sceua_direct', 'max_evals': 20000}},
+        ...     catchment='410734',
         ... )
         >>> specs = grid.combinations()
         >>> len(specs)
@@ -218,6 +392,7 @@ class ExperimentGrid:
     objectives: Dict[str, Any]
     algorithms: Dict[str, Dict[str, Any]]
     transformations: Optional[Dict[str, Any]] = None
+    catchment: str = DEFAULT_CATCHMENT
 
     def combinations(self) -> List[ExperimentSpec]:
         """Generate all combinations as ExperimentSpec objects."""
@@ -233,10 +408,13 @@ class ExperimentGrid:
             self.algorithms.items(),
             trans_items,
         ):
-            parts = [m_name, o_name, a_name]
-            if t_name is not None:
-                parts.append(t_name)
-            key = '__'.join(parts)
+            key = make_experiment_key(
+                model=m_name,
+                objective=o_name,
+                algorithm=a_name,
+                catchment=self.catchment,
+                transformation=t_name,
+            )
             specs.append(ExperimentSpec(
                 key=key,
                 model_name=m_name,
@@ -258,6 +436,250 @@ class ExperimentGrid:
 
 
 # ---------------------------------------------------------------------------
+# ExperimentList -- user-defined list of specific experiments
+# ---------------------------------------------------------------------------
+@dataclass
+class ExperimentList:
+    """User-defined list of specific experiments (no combinatorial expansion).
+
+    Use this instead of ``ExperimentGrid`` when you want to run a curated
+    set of experiments rather than the full Cartesian product of axes.
+
+    Args:
+        specs: List of ``ExperimentSpec`` objects to run.
+
+    Example:
+        >>> from pyrrm.calibration.batch import ExperimentList, ExperimentSpec
+        >>> specs = [
+        ...     ExperimentSpec(
+        ...         key='gr4j_nse_sceua', model_name='GR4J', model=GR4J(),
+        ...         objective_name='nse', objective=NSE(),
+        ...         algorithm_name='sceua',
+        ...         algorithm_kwargs={'method': 'sceua_direct', 'max_evals': 5000},
+        ...     ),
+        ...     ExperimentSpec(
+        ...         key='sac_kge_dream', model_name='Sacramento', model=Sacramento(),
+        ...         objective_name='kge', objective=KGE(),
+        ...         algorithm_name='dream',
+        ...         algorithm_kwargs={'method': 'dream', 'nsamples': 10000},
+        ...     ),
+        ... ]
+        >>> exp_list = ExperimentList(specs)
+        >>> len(exp_list)
+        2
+    """
+    specs: List[ExperimentSpec]
+
+    def combinations(self) -> List[ExperimentSpec]:
+        """Return the experiment specs as-is (no combinatorial expansion)."""
+        return list(self.specs)
+
+    def __len__(self) -> int:
+        return len(self.specs)
+
+    @classmethod
+    def from_dicts(
+        cls,
+        experiment_dicts: List[Dict[str, Any]],
+        catchment: str = DEFAULT_CATCHMENT,
+    ) -> 'ExperimentList':
+        """Build an ExperimentList from a list of plain dictionaries.
+
+        Each dict should contain:
+            - ``key`` (str, optional): Unique experiment identifier.
+              Auto-generated via ``make_experiment_key`` when omitted.
+            - ``model`` (str): Model name (resolved via model registry).
+            - ``model_params`` (dict, optional): Model constructor kwargs.
+            - ``objective`` (dict): Objective spec, e.g. ``{'type': 'NSE'}``.
+            - ``algorithm`` (dict): Algorithm kwargs including ``method``.
+            - ``transformation`` (str or dict, optional): Flow transformation.
+
+        Args:
+            experiment_dicts: List of experiment configuration dicts.
+            catchment: Default catchment identifier used when
+                auto-generating keys.
+
+        Returns:
+            ExperimentList with resolved ExperimentSpec objects.
+
+        Example:
+            >>> dicts = [
+            ...     {'model': 'GR4J',
+            ...      'objective': {'type': 'NSE'},
+            ...      'algorithm': {'method': 'sceua_direct', 'max_evals': 5000}},
+            ... ]
+            >>> exp_list = ExperimentList.from_dicts(dicts, catchment='410734')
+        """
+        specs = []
+        for d in experiment_dicts:
+            model_name = d['model']
+            model_cls = get_model_class(model_name)
+            model_params = d.get('model_params', {}) or {}
+            model = model_cls(**model_params)
+
+            obj_spec = d.get('objective', {'type': 'NSE'})
+            if isinstance(obj_spec, str):
+                obj_spec = {'type': obj_spec}
+            objective = _build_objective(obj_spec)
+            objective_name = obj_spec.get('type', 'NSE').lower()
+
+            alg_kwargs = dict(d.get('algorithm', {'method': 'sceua_direct'}))
+            algorithm_name = alg_kwargs.get('method', 'sceua_direct')
+
+            transformation = None
+            transformation_name = None
+            t_spec = d.get('transformation', None)
+            if t_spec is not None:
+                try:
+                    from pyrrm.objectives import FlowTransformation
+                    if isinstance(t_spec, str):
+                        transformation = FlowTransformation(t_spec)
+                        transformation_name = t_spec
+                    elif isinstance(t_spec, dict):
+                        t_type = t_spec.get('type', 'none')
+                        transformation = FlowTransformation(t_type)
+                        transformation_name = t_type
+                except ImportError:
+                    warnings.warn(
+                        "FlowTransformation not available; "
+                        f"skipping transformation for experiment '{d.get('key', model_name)}'"
+                    )
+
+            key = d.get('key') or make_experiment_key(
+                model=model_name,
+                objective=objective_name,
+                algorithm=algorithm_name,
+                catchment=catchment,
+                transformation=transformation_name,
+            )
+
+            specs.append(ExperimentSpec(
+                key=key,
+                model_name=model_name,
+                model=model,
+                objective_name=objective_name,
+                objective=objective,
+                algorithm_name=algorithm_name,
+                algorithm_kwargs=alg_kwargs,
+                transformation_name=transformation_name,
+                transformation=transformation,
+            ))
+        return cls(specs)
+
+
+# Type alias for experiment sources accepted by the runner
+ExperimentSource = Union[ExperimentGrid, ExperimentList]
+
+
+# ---------------------------------------------------------------------------
+# BatchLogger -- structured logging for batch runs
+# ---------------------------------------------------------------------------
+class _BatchLogger:
+    """Manages file-based and console logging for a batch run.
+
+    Creates:
+      - ``run_dir/batch.log``: All INFO+ messages.
+      - ``run_dir/logs/<key>.log``: Per-experiment log files.
+
+    Attaches handlers to the ``pyrrm.calibration.batch`` logger and
+    removes them on ``close()``.
+    """
+
+    def __init__(
+        self,
+        run_dir: Path,
+        log_level: str = 'INFO',
+        progress_bar: bool = True,
+    ):
+        self.run_dir = run_dir
+        self.logs_dir = run_dir / 'logs'
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+
+        self._handlers: List[logging.Handler] = []
+        self._experiment_handlers: Dict[str, logging.FileHandler] = {}
+
+        numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+        formatter = logging.Formatter(
+            '%(asctime)s | %(levelname)-8s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+        )
+
+        batch_log_path = run_dir / 'batch.log'
+        fh = logging.FileHandler(str(batch_log_path), mode='a')
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+        self._handlers.append(fh)
+
+        if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+                   for h in logger.handlers):
+            ch = logging.StreamHandler()
+            ch.setLevel(numeric_level)
+            ch.setFormatter(formatter)
+            logger.addHandler(ch)
+            self._handlers.append(ch)
+
+        logger.setLevel(logging.DEBUG)
+
+        self._use_progress_bar = progress_bar and TQDM_AVAILABLE
+        self._pbar: Any = None
+
+    def start_progress(self, total: int, completed: int) -> None:
+        """Initialise the progress bar."""
+        if self._use_progress_bar:
+            self._pbar = tqdm(
+                total=total, initial=completed,
+                desc='Batch experiments', unit='exp',
+                dynamic_ncols=True,
+            )
+
+    def update_progress(self, key: str, success: bool) -> None:
+        """Advance the progress bar by one experiment."""
+        if self._pbar is not None:
+            status = 'ok' if success else 'FAIL'
+            self._pbar.set_postfix_str(f'{key} [{status}]', refresh=True)
+            self._pbar.update(1)
+
+    def close_progress(self) -> None:
+        """Close the progress bar."""
+        if self._pbar is not None:
+            self._pbar.close()
+            self._pbar = None
+
+    def start_experiment_log(self, key: str) -> None:
+        """Open a per-experiment log file."""
+        log_path = self.logs_dir / f'{key}.log'
+        formatter = logging.Formatter(
+            '%(asctime)s | %(levelname)-8s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+        )
+        fh = logging.FileHandler(str(log_path), mode='w')
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+        self._experiment_handlers[key] = fh
+
+    def end_experiment_log(self, key: str) -> None:
+        """Close the per-experiment log file handler."""
+        fh = self._experiment_handlers.pop(key, None)
+        if fh is not None:
+            logger.removeHandler(fh)
+            fh.close()
+
+    def close(self) -> None:
+        """Remove all handlers added by this logger."""
+        self.close_progress()
+        for fh in self._experiment_handlers.values():
+            logger.removeHandler(fh)
+            fh.close()
+        self._experiment_handlers.clear()
+        for h in self._handlers:
+            logger.removeHandler(h)
+            h.close()
+        self._handlers.clear()
+
+
+# ---------------------------------------------------------------------------
 # BatchResult -- aggregated results
 # ---------------------------------------------------------------------------
 @dataclass
@@ -268,10 +690,12 @@ class BatchResult:
         results: Mapping of experiment key to CalibrationReport.
         failures: Mapping of experiment key to error message.
         runtime_seconds: Total wall-clock time.
+        run_dir: Path to the timestamped run folder (set after ``run()``).
     """
     results: Dict[str, CalibrationReport] = field(default_factory=dict)
     failures: Dict[str, str] = field(default_factory=dict)
     runtime_seconds: float = 0.0
+    run_dir: Optional[str] = None
 
     def to_dataframe(self) -> pd.DataFrame:
         """Summary table: one row per experiment.
@@ -281,13 +705,14 @@ class BatchResult:
         """
         rows = []
         for key, report in self.results.items():
-            parts = key.split('__')
+            parsed = parse_experiment_key(key)
             row = {
                 'key': key,
-                'model': parts[0] if len(parts) > 0 else '',
-                'objective': parts[1] if len(parts) > 1 else '',
-                'algorithm': parts[2] if len(parts) > 2 else '',
-                'transformation': parts[3] if len(parts) > 3 else 'none',
+                'catchment': parsed.get('catchment', ''),
+                'model': parsed.get('model', ''),
+                'objective': parsed.get('objective', ''),
+                'algorithm': parsed.get('algorithm', ''),
+                'transformation': parsed.get('transformation', 'none'),
                 'best_objective': report.result.best_objective,
                 'runtime_seconds': report.result.runtime_seconds,
                 'n_parameters': len(report.result.best_parameters),
@@ -299,13 +724,14 @@ class BatchResult:
             rows.append(row)
 
         for key, err in self.failures.items():
-            parts = key.split('__')
+            parsed = parse_experiment_key(key)
             rows.append({
                 'key': key,
-                'model': parts[0] if len(parts) > 0 else '',
-                'objective': parts[1] if len(parts) > 1 else '',
-                'algorithm': parts[2] if len(parts) > 2 else '',
-                'transformation': parts[3] if len(parts) > 3 else 'none',
+                'catchment': parsed.get('catchment', ''),
+                'model': parsed.get('model', ''),
+                'objective': parsed.get('objective', ''),
+                'algorithm': parsed.get('algorithm', ''),
+                'transformation': parsed.get('transformation', 'none'),
                 'best_objective': np.nan,
                 'runtime_seconds': np.nan,
                 'n_parameters': np.nan,
@@ -319,8 +745,8 @@ class BatchResult:
         """For each unique objective, return the best (key, value) pair."""
         grouped: Dict[str, List[Tuple[str, float]]] = {}
         for key, report in self.results.items():
-            parts = key.split('__')
-            obj_name = parts[1] if len(parts) > 1 else 'unknown'
+            parsed = parse_experiment_key(key)
+            obj_name = parsed.get('objective', 'unknown')
             value = report.result.best_objective
             grouped.setdefault(obj_name, []).append((key, value))
 
@@ -330,8 +756,20 @@ class BatchResult:
             best[obj_name] = (best_key, best_val)
         return best
 
-    def save(self, path: str) -> None:
-        """Save the entire BatchResult to a pickle file."""
+    def save(self, path: Optional[str] = None) -> None:
+        """Save the entire BatchResult to a pickle file.
+
+        Args:
+            path: File path.  Defaults to ``run_dir/batch_result.pkl``
+                if ``run_dir`` is set.
+        """
+        if path is None:
+            if self.run_dir is None:
+                raise ValueError(
+                    "No path given and run_dir is not set. "
+                    "Provide an explicit path or run the batch first."
+                )
+            path = str(Path(self.run_dir) / 'batch_result.pkl')
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, 'wb') as f:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -349,41 +787,162 @@ class BatchResult:
     def __repr__(self) -> str:
         n_ok = len(self.results)
         n_fail = len(self.failures)
-        return (
+        parts = [
             f"BatchResult({n_ok} completed, {n_fail} failed, "
             f"{self.runtime_seconds:.1f}s)"
+        ]
+        if self.run_dir:
+            parts.append(f"  run_dir: {self.run_dir}")
+        return '\n'.join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Run-folder helpers
+# ---------------------------------------------------------------------------
+
+def _make_run_dir_name(run_name: Optional[str] = None) -> str:
+    """Generate a unique timestamped folder name."""
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    short_id = uuid.uuid4().hex[:4]
+    name = f'{ts}_{short_id}'
+    if run_name:
+        safe_name = "".join(
+            c if (c.isalnum() or c in '_-') else '_'
+            for c in run_name
         )
+        name = f'{name}_{safe_name}'
+    return name
+
+
+def _find_latest_run_dir(output_dir: Path) -> Optional[Path]:
+    """Find the most recent run folder under *output_dir* by name sort."""
+    candidates = sorted(
+        [d for d in output_dir.iterdir()
+         if d.is_dir() and (d / 'results').is_dir()],
+        key=lambda d: d.name,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def _write_summary(
+    run_dir: Path,
+    batch_result: 'BatchResult',
+    specs: List[ExperimentSpec],
+    elapsed: float,
+) -> None:
+    """Write batch_summary.json and batch_summary.csv to the run folder."""
+    best = batch_result.best_by_objective()
+    summary = {
+        'run_dir': str(run_dir),
+        'timestamp': datetime.now().isoformat(),
+        'total_experiments': len(specs),
+        'completed': len(batch_result.results),
+        'failed': len(batch_result.failures),
+        'runtime_seconds': round(elapsed, 2),
+        'best_by_objective': {
+            obj: {'key': k, 'value': round(v, 6)}
+            for obj, (k, v) in best.items()
+        },
+        'failures': dict(batch_result.failures),
+    }
+    json_path = run_dir / 'batch_summary.json'
+    with open(json_path, 'w') as f:
+        json.dump(summary, f, indent=2, default=str)
+
+    df = batch_result.to_dataframe()
+    csv_path = run_dir / 'batch_summary.csv'
+    df.to_csv(csv_path, index=False)
+
+    logger.info("Summary written to %s", run_dir)
+
+
+def _write_config_snapshot(
+    run_dir: Path,
+    grid: ExperimentSource,
+    catchment_info: Dict[str, Any],
+    warmup_period: int,
+    backend: str,
+) -> None:
+    """Write a config.yaml (or .json) snapshot of the experiment setup."""
+    config: Dict[str, Any] = {
+        'catchment': catchment_info,
+        'warmup_days': warmup_period,
+        'backend': backend,
+    }
+
+    if isinstance(grid, ExperimentGrid):
+        config['mode'] = 'grid'
+        config['models'] = list(grid.models.keys())
+        config['objectives'] = list(grid.objectives.keys())
+        config['algorithms'] = {
+            name: dict(kw) for name, kw in grid.algorithms.items()
+        }
+        if grid.transformations:
+            config['transformations'] = list(grid.transformations.keys())
+    elif isinstance(grid, ExperimentList):
+        config['mode'] = 'list'
+        config['experiments'] = [
+            {
+                'key': s.key,
+                'model': s.model_name,
+                'objective': s.objective_name,
+                'algorithm': s.algorithm_name,
+                'algorithm_kwargs': s.algorithm_kwargs,
+            }
+            for s in grid.specs
+        ]
+
+    if YAML_AVAILABLE:
+        path = run_dir / 'config.yaml'
+        with open(path, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    else:
+        path = run_dir / 'config.json'
+        with open(path, 'w') as f:
+            json.dump(config, f, indent=2, default=str)
 
 
 # ---------------------------------------------------------------------------
 # BatchExperimentRunner -- the orchestrator
 # ---------------------------------------------------------------------------
 class BatchExperimentRunner:
-    """Orchestrates batch calibration experiments across a combinatorial grid.
+    """Orchestrates batch calibration experiments.
+
+    Accepts either an ``ExperimentGrid`` (combinatorial) or an
+    ``ExperimentList`` (user-curated).  Each call to ``run()`` creates a
+    unique timestamped run folder under ``output_dir``.
 
     Features:
         - Pluggable parallelism via ParallelBackend (sequential / multiprocessing / ray)
-        - Progress reporting via callbacks and optional tqdm
+        - Progress reporting via tqdm and structured file logging
         - Failure isolation -- failed experiments logged and skipped
         - Result persistence -- each experiment saves immediately on completion
-        - Resume capability -- scans output_dir for completed results and skips them
+        - Resume capability -- scans for completed results and skips them
+        - Organised output -- timestamped run folders with results/, logs/,
+          batch.log, batch_summary.json/csv, and config snapshot
         - Configurable via YAML/JSON or programmatic Python API
 
     Args:
         inputs: Input DataFrame with DatetimeIndex, 'precipitation', 'pet' columns.
         observed: Observed flow array.
-        grid: ExperimentGrid defining the combinatorial axes.
-        output_dir: Directory for per-experiment result files.
+        grid: ``ExperimentGrid`` or ``ExperimentList`` defining the experiments.
+        output_dir: Parent directory for timestamped run folders.
         warmup_period: Warmup timesteps excluded from the objective.
         catchment_info: Optional metadata (name, gauge_id, area_km2).
         backend: Parallelisation backend name ('sequential', 'multiprocessing', 'ray').
         max_workers: Number of workers for multiprocessing/ray.
         on_complete: Callback(key, report) invoked after each success.
         on_error: Callback(key, exception) invoked after each failure.
+        log_level: Logging level for console output ('DEBUG', 'INFO', 'WARNING').
+        progress_bar: Enable tqdm progress bar (requires tqdm).
+        catchment: Catchment identifier forwarded to ``ExperimentGrid``
+            if the grid does not already set one.
 
     Example:
         >>> runner = BatchExperimentRunner(inputs, observed, grid, './results')
-        >>> result = runner.run(resume=True)
+        >>> result = runner.run(run_name='calibration_v1')
+        >>> print(result.run_dir)
         >>> print(result.to_dataframe())
     """
 
@@ -391,7 +950,7 @@ class BatchExperimentRunner:
         self,
         inputs: pd.DataFrame,
         observed: np.ndarray,
-        grid: ExperimentGrid,
+        grid: ExperimentSource,
         output_dir: str = './batch_results',
         warmup_period: int = 365,
         catchment_info: Optional[Dict[str, Any]] = None,
@@ -399,10 +958,15 @@ class BatchExperimentRunner:
         max_workers: Optional[int] = None,
         on_complete: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
+        log_level: str = 'INFO',
+        progress_bar: bool = True,
+        catchment: Optional[str] = None,
     ):
         self.inputs = inputs
         self.observed = np.asarray(observed).flatten()
         self.grid = grid
+        if catchment and isinstance(grid, ExperimentGrid) and grid.catchment == DEFAULT_CATCHMENT:
+            grid.catchment = catchment
         self.output_dir = Path(output_dir)
         self.warmup_period = warmup_period
         self.catchment_info = catchment_info or {}
@@ -410,6 +974,14 @@ class BatchExperimentRunner:
         self.max_workers = max_workers
         self._on_complete = on_complete
         self._on_error = on_error
+        self.log_level = log_level
+        self.progress_bar = progress_bar
+        self._run_dir: Optional[Path] = None
+
+    @property
+    def run_dir(self) -> Optional[Path]:
+        """Path to the run folder created by the most recent ``run()`` call."""
+        return self._run_dir
 
     # ------------------------------------------------------------------
     # Run single experiment
@@ -463,19 +1035,51 @@ class BatchExperimentRunner:
         result = run_fn(**alg_kwargs)
 
         report = cal_runner.create_report(
-            result, catchment_info=self.catchment_info,
+            result,
+            catchment_info=self.catchment_info,
+            experiment_name=spec.key,
         )
         return report
 
     # ------------------------------------------------------------------
+    # Resume helpers
+    # ------------------------------------------------------------------
+
+    def _load_completed(
+        self,
+        results_dir: Path,
+        specs: List[ExperimentSpec],
+    ) -> Dict[str, CalibrationReport]:
+        """Scan a results directory for previously completed experiments."""
+        completed: Dict[str, CalibrationReport] = {}
+        for spec in specs:
+            pkl_path = results_dir / f"{spec.key}.pkl"
+            if pkl_path.exists():
+                try:
+                    report = CalibrationReport.load(str(pkl_path))
+                    completed[spec.key] = report
+                    logger.info("Resumed: %s", spec.key)
+                except Exception as e:
+                    logger.warning("Failed to load %s: %s", spec.key, e)
+        return completed
+
+    # ------------------------------------------------------------------
     # Run all experiments
     # ------------------------------------------------------------------
-    def run(self, resume: bool = True) -> BatchResult:
-        """Run all experiments in the grid.
+    def run(
+        self,
+        resume: bool = True,
+        resume_from: Optional[str] = None,
+        run_name: Optional[str] = None,
+    ) -> BatchResult:
+        """Run all experiments.
 
         Args:
-            resume: If True, skip experiments whose results already exist
-                in ``output_dir``.
+            resume: If True, try to resume from a previous run folder.
+            resume_from: Explicit path to a run folder to resume from.
+                When given, new results are written into that same folder.
+            run_name: Human-readable label appended to the timestamped
+                folder name (e.g. ``'calibration_v1'``).
 
         Returns:
             BatchResult aggregating all completed experiments.
@@ -487,49 +1091,109 @@ class BatchExperimentRunner:
         completed: Dict[str, CalibrationReport] = {}
         failures: Dict[str, str] = {}
 
-        if resume:
-            for spec in specs:
-                pkl_path = self.output_dir / f"{spec.key}.pkl"
-                if pkl_path.exists():
-                    try:
-                        report = CalibrationReport.load(str(pkl_path))
-                        completed[spec.key] = report
-                        logger.info("Resumed: %s", spec.key)
-                    except Exception as e:
-                        logger.warning("Failed to load %s: %s", spec.key, e)
+        # --- Determine run_dir and load completed results -----------------
+        if resume_from is not None:
+            run_dir = Path(resume_from)
+            if not run_dir.exists():
+                raise FileNotFoundError(
+                    f"Resume folder not found: {resume_from}"
+                )
+            results_dir = run_dir / 'results'
+            results_dir.mkdir(parents=True, exist_ok=True)
+            completed.update(self._load_completed(results_dir, specs))
+        elif resume:
+            # Try the new folder layout first
+            latest = _find_latest_run_dir(self.output_dir)
+            if latest is not None:
+                run_dir = latest
+                results_dir = run_dir / 'results'
+                completed.update(self._load_completed(results_dir, specs))
+            else:
+                # Backward compat: legacy flat .pkl files in output_dir
+                legacy_completed = self._load_completed(self.output_dir, specs)
+                if legacy_completed:
+                    logger.info(
+                        "Found %d legacy results in %s",
+                        len(legacy_completed), self.output_dir,
+                    )
+                    completed.update(legacy_completed)
+                run_dir = self.output_dir / _make_run_dir_name(run_name)
+            if latest is not None:
+                run_dir = latest
+            else:
+                run_dir = self.output_dir / _make_run_dir_name(run_name)
+        else:
+            run_dir = self.output_dir / _make_run_dir_name(run_name)
+
+        self._run_dir = run_dir
+        results_dir = run_dir / 'results'
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- Set up logging -----------------------------------------------
+        batch_logger = _BatchLogger(
+            run_dir, log_level=self.log_level,
+            progress_bar=self.progress_bar,
+        )
+
+        _write_config_snapshot(
+            run_dir, self.grid, self.catchment_info,
+            self.warmup_period, self.backend_name,
+        )
 
         remaining = [s for s in specs if s.key not in completed]
         logger.info(
-            "Batch experiment: %d total, %d completed, %d remaining",
-            total, len(completed), len(remaining),
+            "Batch run: %d total, %d completed, %d remaining | run_dir=%s",
+            total, len(completed), len(remaining), run_dir,
         )
 
         if not remaining:
-            return BatchResult(
+            batch_result = BatchResult(
                 results=completed,
                 failures=failures,
                 runtime_seconds=0.0,
+                run_dir=str(run_dir),
             )
+            _write_summary(run_dir, batch_result, specs, 0.0)
+            batch_logger.close()
+            return batch_result
 
+        batch_logger.start_progress(total, len(completed))
         t0 = time.time()
 
         def _on_complete(key: str, report: CalibrationReport):
-            pkl_path = self.output_dir / f"{key}.pkl"
+            pkl_path = results_dir / f"{key}.pkl"
             try:
                 report.save(str(pkl_path))
             except Exception as e:
                 logger.warning("Failed to save %s: %s", key, e)
+            batch_logger.update_progress(key, success=True)
+            batch_logger.end_experiment_log(key)
             if self._on_complete:
                 self._on_complete(key, report)
 
         def _on_error(key: str, exc: Exception):
             failures[key] = f"{type(exc).__name__}: {exc}"
             logger.error("Experiment %s failed: %s", key, exc)
+            batch_logger.update_progress(key, success=False)
+            batch_logger.end_experiment_log(key)
             if self._on_error:
                 self._on_error(key, exc)
 
         def _run_task(spec: ExperimentSpec) -> CalibrationReport:
-            return self.run_single(spec)
+            batch_logger.start_experiment_log(spec.key)
+            t_start = time.time()
+            logger.info(
+                "Experiment %s started at %s",
+                spec.key, datetime.now().strftime('%H:%M:%S'),
+            )
+            report = self.run_single(spec)
+            elapsed_exp = time.time() - t_start
+            logger.info(
+                "Experiment %s completed in %.1fs | %s = %.6f",
+                spec.key, elapsed_exp,
+                report.result.objective_name, report.result.best_objective,
+            )
+            return report
 
         backend = create_backend(self.backend_name, self.max_workers)
         try:
@@ -546,11 +1210,49 @@ class BatchExperimentRunner:
             backend.shutdown()
 
         elapsed = time.time() - t0
-        return BatchResult(
+        batch_logger.close_progress()
+
+        # --- Completion summary -------------------------------------------
+        n_ok = len(completed)
+        n_fail = len(failures)
+        logger.info("=" * 60)
+        logger.info("BATCH RUN COMPLETE")
+        logger.info("=" * 60)
+        logger.info("  Total experiments : %d", total)
+        logger.info("  Completed         : %d", n_ok)
+        logger.info("  Failed            : %d", n_fail)
+        logger.info("  Total runtime     : %.1fs", elapsed)
+        best = {}
+        grouped: Dict[str, List[Tuple[str, float]]] = {}
+        for key, report in completed.items():
+            parsed = parse_experiment_key(key)
+            obj_name = parsed.get('objective', 'unknown')
+            grouped.setdefault(obj_name, []).append(
+                (key, report.result.best_objective)
+            )
+        for obj_name, items in grouped.items():
+            bk, bv = max(items, key=lambda x: x[1])
+            best[obj_name] = (bk, bv)
+            logger.info("  Best %-12s: %s (%.6f)", obj_name, bk, bv)
+        if failures:
+            logger.info("  Failures:")
+            for fkey, ferr in failures.items():
+                logger.info("    %s: %s", fkey, ferr)
+        logger.info("  Run folder: %s", run_dir)
+        logger.info("=" * 60)
+
+        batch_result = BatchResult(
             results=completed,
             failures=failures,
             runtime_seconds=elapsed,
+            run_dir=str(run_dir),
         )
+
+        _write_summary(run_dir, batch_result, specs, elapsed)
+        batch_result.save()
+        batch_logger.close()
+
+        return batch_result
 
     # ------------------------------------------------------------------
     # YAML / JSON factory
@@ -564,6 +1266,45 @@ class BatchExperimentRunner:
     ) -> 'BatchExperimentRunner':
         """Create a BatchExperimentRunner from a YAML or JSON config file.
 
+        Supports two modes (mutually exclusive):
+
+        **Mode A -- Combinatorial grid** (existing)::
+
+            models:
+              GR4J: {}
+              GR5J: {}
+            objectives:
+              nse: {type: NSE}
+              kge: {type: KGE}
+            algorithms:
+              sceua:
+                method: sceua_direct
+                max_evals: 20000
+
+        **Mode B -- Explicit experiment list** (new)::
+
+            experiments:
+              - key: "gr4j_nse_sceua"
+                model: GR4J
+                objective: {type: NSE}
+                algorithm: {method: sceua_direct, max_evals: 5000}
+              - key: "sacramento_kge_dream"
+                model: Sacramento
+                objective: {type: KGE}
+                algorithm: {method: dream, nsamples: 10000}
+
+        Common fields (both modes)::
+
+            catchment:
+              name: "Queanbeyan River"
+              gauge_id: "410734"
+            warmup_days: 365
+            output_dir: "./results"
+            backend: sequential
+            max_workers: 4
+            log_level: INFO
+            progress_bar: true
+
         Args:
             config_path: Path to YAML or JSON experiment configuration.
             inputs: Input DataFrame with DatetimeIndex.
@@ -572,32 +1313,8 @@ class BatchExperimentRunner:
         Returns:
             Configured BatchExperimentRunner instance.
 
-        YAML format example::
-
-            catchment:
-              name: "Queanbeyan River"
-              gauge_id: "410734"
-              area_km2: 490
-
-            warmup_days: 365
-
-            models:
-              GR4J: {}
-              GR5J: {}
-
-            objectives:
-              nse: {type: NSE}
-              kge: {type: KGE, variant: "2012"}
-
-            algorithms:
-              sceua:
-                method: sceua_direct
-                max_evals: 20000
-                seed: 42
-
-            output_dir: "./results/batch_410734"
-            backend: sequential
-            max_workers: 4
+        Raises:
+            ValueError: If both ``experiments`` and ``models`` are specified.
         """
         config_path = Path(config_path)
         suffix = config_path.suffix.lower()
@@ -618,47 +1335,63 @@ class BatchExperimentRunner:
                 f"Unsupported config format: '{suffix}'. Use .yaml or .json"
             )
 
-        models = {}
-        for name, model_cfg in cfg.get('models', {}).items():
-            model_cls = get_model_class(name)
-            models[name] = model_cls(**(model_cfg or {}))
+        has_experiments = 'experiments' in cfg
+        has_grid = any(k in cfg for k in ('models', 'objectives', 'algorithms'))
 
-        objectives = {}
-        for name, obj_spec in cfg.get('objectives', {}).items():
-            if obj_spec is None:
-                obj_spec = {'type': name}
-            objectives[name] = _build_objective(obj_spec)
+        if has_experiments and has_grid:
+            raise ValueError(
+                "Config file must use either 'experiments' (explicit list) "
+                "OR 'models'/'objectives'/'algorithms' (combinatorial grid), "
+                "not both."
+            )
 
-        algorithms = {}
-        for name, alg_cfg in cfg.get('algorithms', {}).items():
-            algorithms[name] = dict(alg_cfg or {})
+        if has_experiments:
+            grid: ExperimentSource = ExperimentList.from_dicts(cfg['experiments'])
+        else:
+            models = {}
+            for name, model_cfg in cfg.get('models', {}).items():
+                model_cls = get_model_class(name)
+                models[name] = model_cls(**(model_cfg or {}))
 
-        transformations = None
-        if 'transformations' in cfg:
-            try:
-                from pyrrm.objectives import FlowTransformation
-                transformations = {}
-                for name, t_spec in cfg['transformations'].items():
-                    if isinstance(t_spec, str):
-                        transformations[name] = FlowTransformation(t_spec)
-                    else:
-                        transformations[name] = FlowTransformation(
-                            t_spec.get('type', name)
-                        )
-            except ImportError:
-                warnings.warn(
-                    "FlowTransformation not available; "
-                    "skipping transformations axis"
-                )
+            objectives = {}
+            for name, obj_spec in cfg.get('objectives', {}).items():
+                if obj_spec is None:
+                    obj_spec = {'type': name}
+                objectives[name] = _build_objective(obj_spec)
 
-        grid = ExperimentGrid(
-            models=models,
-            objectives=objectives,
-            algorithms=algorithms,
-            transformations=transformations,
-        )
+            algorithms = {}
+            for name, alg_cfg in cfg.get('algorithms', {}).items():
+                algorithms[name] = dict(alg_cfg or {})
+
+            transformations = None
+            if 'transformations' in cfg:
+                try:
+                    from pyrrm.objectives import FlowTransformation
+                    transformations = {}
+                    for name, t_spec in cfg['transformations'].items():
+                        if isinstance(t_spec, str):
+                            transformations[name] = FlowTransformation(t_spec)
+                        else:
+                            transformations[name] = FlowTransformation(
+                                t_spec.get('type', name)
+                            )
+                except ImportError:
+                    warnings.warn(
+                        "FlowTransformation not available; "
+                        "skipping transformations axis"
+                    )
+
+            grid = ExperimentGrid(
+                models=models,
+                objectives=objectives,
+                algorithms=algorithms,
+                transformations=transformations,
+            )
 
         catchment_info = cfg.get('catchment', {})
+        catchment_id = catchment_info.get(
+            'gauge_id', catchment_info.get('name', None)
+        )
 
         return cls(
             inputs=inputs,
@@ -669,12 +1402,21 @@ class BatchExperimentRunner:
             catchment_info=catchment_info,
             backend=cfg.get('backend', 'sequential'),
             max_workers=cfg.get('max_workers', None),
+            log_level=cfg.get('log_level', 'INFO'),
+            progress_bar=cfg.get('progress_bar', True),
+            catchment=catchment_id,
         )
 
 
 __all__ = [
+    'DEFAULT_CATCHMENT',
+    'make_experiment_key',
+    'make_apex_tags',
+    'parse_experiment_key',
     'ExperimentSpec',
     'ExperimentGrid',
+    'ExperimentList',
+    'ExperimentSource',
     'BatchResult',
     'BatchExperimentRunner',
     'get_model_class',

@@ -975,6 +975,136 @@ class CalibrationRunner:
             message=result['convergence_diagnostics']['message'],
         )
     
+    def run_nuts(
+        self,
+        num_warmup: int = 1000,
+        num_samples: int = 2000,
+        num_chains: int = 4,
+        target_accept_prob: float = 0.8,
+        max_tree_depth: int = 8,
+        likelihood_type: str = "gaussian",
+        transform: str = "none",
+        transform_params: Optional[dict] = None,
+        error_model: str = "iid",
+        prior_config: Optional[dict] = None,
+        sigma_prior_scale: float = 1.0,
+        reparameterize: bool = False,
+        use_float64: bool = True,
+        max_ninc: Optional[int] = None,
+        fast_mode: bool = False,
+        seed: int = 42,
+        progress_bar: bool = True,
+        verbose: bool = True,
+    ) -> CalibrationResult:
+        """
+        Run NumPyro NUTS (No-U-Turn Sampler) Bayesian calibration.
+
+        NUTS is a gradient-based MCMC sampler that uses JAX automatic
+        differentiation to efficiently explore parameter space.  It
+        requires a JAX-ported forward model (e.g. ``gr4j_jax``,
+        ``sacramento_jax``).
+
+        Args:
+            num_warmup: NUTS warmup (adaptation) iterations per chain.
+            num_samples: Post-warmup samples per chain.
+            num_chains: Number of independent MCMC chains.
+            target_accept_prob: Target acceptance probability (0.6-0.95).
+            max_tree_depth: Maximum leapfrog tree depth (default 8;
+                max leapfrog steps = 2^depth).
+            likelihood_type: ``"gaussian"`` or ``"transformed_gaussian"``.
+            transform: Flow transformation for the likelihood
+                (``"none"``, ``"sqrt"``, ``"log"``, ``"inverse"``,
+                ``"boxcox"``).
+            transform_params: Optional overrides for the transform.
+            error_model: ``"iid"`` (default) or ``"ar1"``.
+            prior_config: Dict mapping parameter name to a
+                ``numpyro.distributions`` object for custom priors.
+            sigma_prior_scale: Scale for the HalfNormal prior on sigma.
+            reparameterize: If True, sample Uniform-prior parameters in
+                [0, 1] and deterministically transform to physical
+                bounds.  Recommended for models with many parameters
+                spanning different scales (e.g. Sacramento).
+            use_float64: If True (default), run in float64 precision.
+                Set to False for ~2x speedup on CPU.
+            max_ninc: Override Sacramento inner loop count (default
+                ``None`` keeps model default of 20).  Set to 5 for
+                faster calibration.  Ignored when ``fast_mode=True``.
+            fast_mode: If True, bypass the Sacramento inner sub-daily
+                loop entirely (ninc=1), eliminating the nested
+                ``lax.scan`` and reducing the XLA graph by ~10-16×.
+                Dramatically faster JIT compilation and gradient
+                evaluation.  Recommended for calibration; validate
+                posterior with ``fast_mode=False``.
+            seed: PRNG seed for reproducibility.
+            progress_bar: Show NumPyro sampling progress bar.
+            verbose: Print summary to stdout.
+
+        Returns:
+            CalibrationResult containing posterior medians as best
+            parameters, all MCMC samples, and ArviZ InferenceData
+            stored in ``_raw_result["inference_data"]``.
+
+        Example:
+            >>> runner = CalibrationRunner(model, inputs, observed)
+            >>> result = runner.run_nuts(num_warmup=500, num_samples=1000)
+            >>> print(result.best_parameters)
+        """
+        try:
+            from pyrrm.calibration.numpyro_adapter import (
+                run_nuts as _adapter_run_nuts,
+                NUMPYRO_AVAILABLE as _NUMPYRO_OK,
+            )
+        except ImportError:
+            raise ImportError(
+                "NumPyro is required for NUTS calibration. "
+                "Install with: pip install jax jaxlib numpyro arviz"
+            )
+
+        if not _NUMPYRO_OK:
+            raise ImportError(
+                "NumPyro is required for NUTS calibration. "
+                "Install with: pip install jax jaxlib numpyro arviz"
+            )
+
+        result = _adapter_run_nuts(
+            model=self.model,
+            inputs=self.inputs,
+            observed=self.observed,
+            parameter_bounds=self._param_bounds,
+            warmup_period=self.warmup_period,
+            num_warmup=num_warmup,
+            num_samples=num_samples,
+            num_chains=num_chains,
+            target_accept_prob=target_accept_prob,
+            max_tree_depth=max_tree_depth,
+            likelihood_type=likelihood_type,
+            transform=transform,
+            transform_params=transform_params,
+            error_model=error_model,
+            prior_config=prior_config,
+            sigma_prior_scale=sigma_prior_scale,
+            reparameterize=reparameterize,
+            use_float64=use_float64,
+            max_ninc=max_ninc,
+            fast_mode=fast_mode,
+            seed=seed,
+            progress_bar=progress_bar,
+            verbose=verbose,
+        )
+
+        return CalibrationResult(
+            best_parameters=result["best_parameters"],
+            best_objective=result["best_objective"],
+            all_samples=result["all_samples"],
+            convergence_diagnostics=result["convergence_diagnostics"],
+            runtime_seconds=result["runtime_seconds"],
+            method="NUTS (NumPyro)",
+            objective_name=f"log_likelihood ({transform})",
+            success=result["convergence_diagnostics"].get("converged", False),
+            message="",
+            _raw_result=result,
+        )
+
     def evaluate_parameters(
         self, 
         parameters: Dict[str, float]
@@ -1106,14 +1236,15 @@ class CalibrationRunner:
         self,
         result: CalibrationResult,
         catchment_info: Optional[Dict[str, Any]] = None,
-        include_inputs: bool = True
+        include_inputs: bool = True,
+        experiment_name: Optional[str] = None,
     ) -> 'CalibrationReport':
         """
         Create a CalibrationReport from a calibration result.
-        
+
         This method packages all the data needed for comprehensive visualization
         and analysis into a CalibrationReport object that can be saved and loaded.
-        
+
         Args:
             result: CalibrationResult from any calibration method
             catchment_info: Optional catchment metadata dictionary with keys like:
@@ -1121,18 +1252,21 @@ class CalibrationRunner:
                 - gauge_id: Gauge identifier
                 - area_km2: Catchment area (if different from model)
             include_inputs: Whether to include full input data for re-simulation
-            
+            experiment_name: Optional canonical experiment key (from the
+                naming convention) stored in the report metadata.
+
         Returns:
             CalibrationReport instance
-            
+
         Example:
             >>> runner = CalibrationRunner(model, inputs, observed, objective)
             >>> result = runner.run_sceua_direct(max_evals=10000)
             >>> report = runner.create_report(
             ...     result,
-            ...     catchment_info={'name': 'Queanbeyan', 'gauge_id': '410734'}
+            ...     catchment_info={'name': 'Queanbeyan', 'gauge_id': '410734'},
+            ...     experiment_name='410734_sacramento_nse_sceua',
             ... )
-            >>> report.save('calibrations/queanbeyan_nse.pkl')
+            >>> report.save('calibrations/410734_sacramento_nse_sceua.pkl')
         """
         from pyrrm.calibration.report import CalibrationReport
         
@@ -1207,7 +1341,8 @@ class CalibrationRunner:
             catchment_info=info,
             calibration_period=(cal_start, cal_end),
             warmup_days=self.warmup_period,
-            model_config=model_config
+            model_config=model_config,
+            experiment_name=experiment_name,
         )
         
         return report

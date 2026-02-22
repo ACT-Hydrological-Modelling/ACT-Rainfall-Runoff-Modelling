@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.0
+#       jupytext_version: 1.19.1
 #   kernelspec:
 #     display_name: Python (pyrrm)
 #     language: python
@@ -273,22 +273,22 @@ print("=" * 70)
 # Map of ALL 13 objective names to report files
 SACRAMENTO_REPORTS = {
     # NSE variants (4)
-    'nse': '../test_data/reports/410734_nse.pkl',
-    'lognse': '../test_data/reports/410734_lognse.pkl',
-    'invnse': '../test_data/reports/410734_invnse.pkl',
-    'sqrtnse': '../test_data/reports/410734_sqrtnse.pkl',
+    'nse': '../test_data/reports/models/410734_sacramento_nse_sceua.pkl',
+    'lognse': '../test_data/reports/models/410734_sacramento_nse_sceua_log.pkl',
+    'invnse': '../test_data/reports/models/410734_sacramento_nse_sceua_inverse.pkl',
+    'sqrtnse': '../test_data/reports/models/410734_sacramento_nse_sceua_sqrt.pkl',
     # KGE variants (4)
-    'kge': '../test_data/reports/410734_kge.pkl',
-    'kge_inv': '../test_data/reports/410734_kge_inv.pkl',
-    'kge_sqrt': '../test_data/reports/410734_kge_sqrt.pkl',
-    'kge_log': '../test_data/reports/410734_kge_log.pkl',
+    'kge': '../test_data/reports/models/410734_sacramento_kge_sceua.pkl',
+    'kge_inv': '../test_data/reports/models/410734_sacramento_kge_sceua_inverse.pkl',
+    'kge_sqrt': '../test_data/reports/models/410734_sacramento_kge_sceua_sqrt.pkl',
+    'kge_log': '../test_data/reports/models/410734_sacramento_kge_sceua_log.pkl',
     # Non-parametric KGE variants (4)
-    'kge_np': '../test_data/reports/410734_kge_np.pkl',
-    'kge_np_inv': '../test_data/reports/410734_kge_np_inv.pkl',
-    'kge_np_sqrt': '../test_data/reports/410734_kge_np_sqrt.pkl',
-    'kge_np_log': '../test_data/reports/410734_kge_np_log.pkl',
+    'kge_np': '../test_data/reports/models/410734_sacramento_kgenp_sceua.pkl',
+    'kge_np_inv': '../test_data/reports/models/410734_sacramento_kgenp_sceua_inverse.pkl',
+    'kge_np_sqrt': '../test_data/reports/models/410734_sacramento_kgenp_sceua_sqrt.pkl',
+    'kge_np_log': '../test_data/reports/models/410734_sacramento_kgenp_sceua_log.pkl',
     # Composite (1)
-    'sdeb': '../test_data/reports/410734_sdeb.pkl',
+    'sdeb': '../test_data/reports/models/410734_sacramento_sdeb_sceua.pkl',
 }
 
 sacramento_results = {}
@@ -364,7 +364,7 @@ MODELS_GR_ONLY = [m for m in MODELS_FOR_ANALYSIS if m != 'Sacramento']  # GR4J, 
 # Set to True to load from pre-run pickle files; False to run all calibrations
 LOAD_FROM_PICKLE = True
 
-REPORTS_DIR = Path('../test_data/reports')
+REPORTS_DIR = Path('../test_data/reports/models')
 
 gr4j_results = {}
 gr5j_results = {}
@@ -372,6 +372,22 @@ gr6j_results = {}
 gr4j_times = {}
 gr5j_times = {}
 gr6j_times = {}
+
+OBJ_TO_CANONICAL = {
+    'nse': 'nse_sceua',
+    'lognse': 'nse_sceua_log',
+    'invnse': 'nse_sceua_inverse',
+    'sqrtnse': 'nse_sceua_sqrt',
+    'kge': 'kge_sceua',
+    'kge_inv': 'kge_sceua_inverse',
+    'kge_sqrt': 'kge_sceua_sqrt',
+    'kge_log': 'kge_sceua_log',
+    'kge_np': 'kgenp_sceua',
+    'kge_np_inv': 'kgenp_sceua_inverse',
+    'kge_np_sqrt': 'kgenp_sceua_sqrt',
+    'kge_np_log': 'kgenp_sceua_log',
+    'sdeb': 'sdeb_sceua',
+}
 
 if LOAD_FROM_PICKLE:
     print("=" * 70)
@@ -384,7 +400,8 @@ if LOAD_FROM_PICKLE:
     ]:
         loaded = 0
         for obj_name in OBJECTIVES.keys():
-            pkl_path = REPORTS_DIR / f'410734_{model_key}_{obj_name}.pkl'
+            canonical = OBJ_TO_CANONICAL[obj_name]
+            pkl_path = REPORTS_DIR / f'410734_{model_key}_{canonical}.pkl'
             if pkl_path.exists():
                 try:
                     report = CalibrationReport.load(str(pkl_path))
@@ -433,7 +450,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['nse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_nse')
+    report.save('../test_data/reports/models/410734_gr4j_nse_sceua')
     print(f"\n✓ Best NSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -459,7 +476,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['lognse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_lognse')
+    report.save('../test_data/reports/models/410734_gr4j_nse_sceua_log')
     print(f"\n✓ Best LogNSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -485,7 +502,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['invnse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_invnse')
+    report.save('../test_data/reports/models/410734_gr4j_nse_sceua_inverse')
     print(f"\n✓ Best InvNSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -511,7 +528,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['sqrtnse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_sqrtnse')
+    report.save('../test_data/reports/models/410734_gr4j_nse_sceua_sqrt')
     print(f"\n✓ Best SqrtNSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -537,7 +554,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['kge'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_kge')
+    report.save('../test_data/reports/models/410734_gr4j_kge_sceua')
     print(f"\n✓ Best KGE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -563,7 +580,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['kge_inv'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_kge_inv')
+    report.save('../test_data/reports/models/410734_gr4j_kge_sceua_inverse')
     print(f"\n✓ Best KGE_inv: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -589,7 +606,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['kge_sqrt'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_kge_sqrt')
+    report.save('../test_data/reports/models/410734_gr4j_kge_sceua_sqrt')
     print(f"\n✓ Best KGE_sqrt: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -615,7 +632,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['kge_log'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_kge_log')
+    report.save('../test_data/reports/models/410734_gr4j_kge_sceua_log')
     print(f"\n✓ Best KGE_log: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -641,7 +658,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['kge_np'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_kge_np')
+    report.save('../test_data/reports/models/410734_gr4j_kgenp_sceua')
     print(f"\n✓ Best KGE_np: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -667,7 +684,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['kge_np_inv'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_kge_np_inv')
+    report.save('../test_data/reports/models/410734_gr4j_kgenp_sceua_inverse')
     print(f"\n✓ Best KGE_np_inv: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -693,7 +710,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['kge_np_sqrt'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_kge_np_sqrt')
+    report.save('../test_data/reports/models/410734_gr4j_kgenp_sceua_sqrt')
     print(f"\n✓ Best KGE_np_sqrt: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -719,7 +736,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['kge_np_log'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_kge_np_log')
+    report.save('../test_data/reports/models/410734_gr4j_kgenp_sceua_log')
     print(f"\n✓ Best KGE_np_log: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -745,7 +762,7 @@ if not LOAD_FROM_PICKLE:
     gr4j_times['sdeb'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr4j_sdeb')
+    report.save('../test_data/reports/models/410734_gr4j_sdeb_sceua')
     print(f"\n✓ Best SDEB: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
     print("\n" + "=" * 70)
@@ -785,7 +802,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['nse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_nse')
+    report.save('../test_data/reports/models/410734_gr5j_nse_sceua')
     print(f"\n✓ Best NSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -811,7 +828,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['lognse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_lognse')
+    report.save('../test_data/reports/models/410734_gr5j_nse_sceua_log')
     print(f"\n✓ Best LogNSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -837,7 +854,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['invnse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_invnse')
+    report.save('../test_data/reports/models/410734_gr5j_nse_sceua_inverse')
     print(f"\n✓ Best InvNSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -863,7 +880,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['sqrtnse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_sqrtnse')
+    report.save('../test_data/reports/models/410734_gr5j_nse_sceua_sqrt')
     print(f"\n✓ Best SqrtNSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -889,7 +906,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['kge'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_kge')
+    report.save('../test_data/reports/models/410734_gr5j_kge_sceua')
     print(f"\n✓ Best KGE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -915,7 +932,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['kge_inv'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_kge_inv')
+    report.save('../test_data/reports/models/410734_gr5j_kge_sceua_inverse')
     print(f"\n✓ Best KGE_inv: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -941,7 +958,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['kge_sqrt'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_kge_sqrt')
+    report.save('../test_data/reports/models/410734_gr5j_kge_sceua_sqrt')
     print(f"\n✓ Best KGE_sqrt: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -967,7 +984,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['kge_log'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_kge_log')
+    report.save('../test_data/reports/models/410734_gr5j_kge_sceua_log')
     print(f"\n✓ Best KGE_log: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -993,7 +1010,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['kge_np'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_kge_np')
+    report.save('../test_data/reports/models/410734_gr5j_kgenp_sceua')
     print(f"\n✓ Best KGE_np: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1019,7 +1036,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['kge_np_inv'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_kge_np_inv')
+    report.save('../test_data/reports/models/410734_gr5j_kgenp_sceua_inverse')
     print(f"\n✓ Best KGE_np_inv: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1045,7 +1062,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['kge_np_sqrt'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_kge_np_sqrt')
+    report.save('../test_data/reports/models/410734_gr5j_kgenp_sceua_sqrt')
     print(f"\n✓ Best KGE_np_sqrt: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1071,7 +1088,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['kge_np_log'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_kge_np_log')
+    report.save('../test_data/reports/models/410734_gr5j_kgenp_sceua_log')
     print(f"\n✓ Best KGE_np_log: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1097,7 +1114,7 @@ if not LOAD_FROM_PICKLE:
     gr5j_times['sdeb'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr5j_sdeb')
+    report.save('../test_data/reports/models/410734_gr5j_sdeb_sceua')
     print(f"\n✓ Best SDEB: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
     print("\n" + "=" * 70)
@@ -1137,7 +1154,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['nse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_nse')
+    report.save('../test_data/reports/models/410734_gr6j_nse_sceua')
     print(f"\n✓ Best NSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1163,7 +1180,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['lognse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_lognse')
+    report.save('../test_data/reports/models/410734_gr6j_nse_sceua_log')
     print(f"\n✓ Best LogNSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1189,7 +1206,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['invnse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_invnse')
+    report.save('../test_data/reports/models/410734_gr6j_nse_sceua_inverse')
     print(f"\n✓ Best InvNSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1215,7 +1232,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['sqrtnse'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_sqrtnse')
+    report.save('../test_data/reports/models/410734_gr6j_nse_sceua_sqrt')
     print(f"\n✓ Best SqrtNSE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1241,7 +1258,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['kge'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_kge')
+    report.save('../test_data/reports/models/410734_gr6j_kge_sceua')
     print(f"\n✓ Best KGE: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1267,7 +1284,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['kge_inv'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_kge_inv')
+    report.save('../test_data/reports/models/410734_gr6j_kge_sceua_inverse')
     print(f"\n✓ Best KGE_inv: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1293,7 +1310,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['kge_sqrt'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_kge_sqrt')
+    report.save('../test_data/reports/models/410734_gr6j_kge_sceua_sqrt')
     print(f"\n✓ Best KGE_sqrt: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1319,7 +1336,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['kge_log'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_kge_log')
+    report.save('../test_data/reports/models/410734_gr6j_kge_sceua_log')
     print(f"\n✓ Best KGE_log: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1345,7 +1362,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['kge_np'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_kge_np')
+    report.save('../test_data/reports/models/410734_gr6j_kgenp_sceua')
     print(f"\n✓ Best KGE_np: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1371,7 +1388,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['kge_np_inv'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_kge_np_inv')
+    report.save('../test_data/reports/models/410734_gr6j_kgenp_sceua_inverse')
     print(f"\n✓ Best KGE_np_inv: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1397,7 +1414,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['kge_np_sqrt'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_kge_np_sqrt')
+    report.save('../test_data/reports/models/410734_gr6j_kgenp_sceua_sqrt')
     print(f"\n✓ Best KGE_np_sqrt: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1423,7 +1440,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['kge_np_log'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_kge_np_log')
+    report.save('../test_data/reports/models/410734_gr6j_kgenp_sceua_log')
     print(f"\n✓ Best KGE_np_log: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
 # %%
@@ -1449,7 +1466,7 @@ if not LOAD_FROM_PICKLE:
     gr6j_times['sdeb'] = elapsed
 
     report = runner.create_report(result, catchment_info={'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2})
-    report.save('../test_data/reports/410734_gr6j_sdeb')
+    report.save('../test_data/reports/models/410734_gr6j_sdeb_sceua')
     print(f"\n✓ Best SDEB: {result.best_objective:.4f} | Time: {elapsed:.1f}s")
 
     print("\n" + "=" * 70)

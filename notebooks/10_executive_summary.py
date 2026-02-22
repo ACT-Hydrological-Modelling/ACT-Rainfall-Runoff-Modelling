@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.0
+#       jupytext_version: 1.19.1
 #   kernelspec:
 #     display_name: Python (pyrrm)
 #     language: python
@@ -129,7 +129,7 @@ FIGURE_DIR.mkdir(exist_ok=True)
 
 from pyrrm.calibration import CalibrationReport
 
-rep = CalibrationReport.load(REPORT_DIR / "410734_gr4j_nse.pkl")
+rep = CalibrationReport.load(REPORT_DIR / "models" / "410734_gr4j_nse_sceua.pkl")
 
 rainfall = rep.inputs["rainfall"].values[-len(rep.dates):] if rep.inputs is not None else None
 
@@ -443,6 +443,38 @@ plt.show()
 # difference in peak and baseflow reproduction.
 
 # %%
+OBJ_TO_CANONICAL = {
+    "nse": "nse_sceua",
+    "lognse": "nse_sceua_log",
+    "invnse": "nse_sceua_inverse",
+    "sqrtnse": "nse_sceua_sqrt",
+    "kge": "kge_sceua",
+    "kge_inv": "kge_sceua_inverse",
+    "kge_sqrt": "kge_sceua_sqrt",
+    "kge_log": "kge_sceua_log",
+    "kge_np": "kgenp_sceua",
+    "kge_np_inv": "kgenp_sceua_inverse",
+    "kge_np_sqrt": "kgenp_sceua_sqrt",
+    "kge_np_log": "kgenp_sceua_log",
+    "sdeb": "sdeb_sceua",
+}
+
+OBJ_TO_DREAM = {
+    "nse": "nse_dream",
+    "lognse": "nse_dream_log",
+    "invnse": "nse_dream_inverse",
+    "sqrtnse": "nse_dream_sqrt",
+    "kge": "kge_dream",
+    "kge_inv": "kge_dream_inverse",
+    "kge_sqrt": "kge_dream_sqrt",
+    "kge_log": "kge_dream_log",
+    "kge_np": "kgenp_dream",
+    "kge_np_inv": "kgenp_dream_inverse",
+    "kge_np_sqrt": "kgenp_dream_sqrt",
+    "kge_np_log": "kgenp_dream_log",
+    "sdeb": "sdeb_dream",
+}
+
 obj_labels = {
     "nse": "NSE (peak-focused)",
     "sqrtnse": "Sqrt-NSE (balanced)",
@@ -453,7 +485,7 @@ fig, axes = plt.subplots(len(obj_labels), 1, figsize=(14, 3 * len(obj_labels)),
                           sharex=True)
 
 for ax, (obj_key, label) in zip(axes, obj_labels.items()):
-    r = CalibrationReport.load(REPORT_DIR / f"410734_gr4j_{obj_key}.pkl")
+    r = CalibrationReport.load(REPORT_DIR / "models" / f"410734_gr4j_{OBJ_TO_CANONICAL[obj_key]}.pkl")
     ax.plot(r.dates, r.observed, "k-", lw=0.7, alpha=0.6, label="Observed")
     ax.plot(r.dates, r.simulated, lw=0.9, label=f"GR4J — {label}")
     ax.set_ylabel("Flow (ML/d)")
@@ -661,10 +693,10 @@ plt.show()
 
 # %%
 apex_configs = {
-    "APEX sqrt": "410734_APEX_sqrt.pkl",
-    "APEX none": "410734_APEX_none.pkl",
-    "APEX log": "410734_APEX_log.pkl",
-    "APEX inverse": "410734_APEX_inverse.pkl",
+    "APEX sqrt": "apex/410734_sacramento_apex_sceua_sqrt-k05-uniform.pkl",
+    "APEX none": "apex/410734_sacramento_apex_sceua_none-k05-uniform.pkl",
+    "APEX log": "apex/410734_sacramento_apex_sceua_log-k05-uniform.pkl",
+    "APEX inverse": "apex/410734_sacramento_apex_sceua_inverse-k05-uniform.pkl",
 }
 
 comparison_metrics = ["NSE", "KGE", "LogNSE", "RMSE", "PBIAS", "MAE"]
@@ -691,7 +723,7 @@ for label, fname in apex_configs.items():
 print("\nStandard Objectives (Sacramento, for reference)")
 print("-" * 80)
 for obj_key, obj_label in [("nse", "NSE"), ("sqrtnse", "SqrtNSE"), ("sdeb", "SDEB")]:
-    fpath = REPORT_DIR / f"410734_{obj_key}.pkl"
+    fpath = REPORT_DIR / f"410734_sacramento_{OBJ_TO_CANONICAL[obj_key]}.pkl"
     if fpath.exists():
         r = CalibrationReport.load(fpath)
         mets = calculate_metrics(r.simulated, r.observed)
@@ -771,8 +803,8 @@ algo_comparison = []
 for obj_key in ["nse", "lognse", "invnse", "sqrtnse", "kge", "kge_inv",
                 "kge_sqrt", "kge_log", "kge_np", "kge_np_inv",
                 "kge_np_sqrt", "kge_np_log", "sdeb"]:
-    sceua_path = REPORT_DIR / f"410734_{obj_key}.pkl"
-    dream_path = pydream_dir / f"410734_pydream_{obj_key}.pkl"
+    sceua_path = REPORT_DIR / f"410734_sacramento_{OBJ_TO_CANONICAL[obj_key]}.pkl"
+    dream_path = pydream_dir / f"410734_sacramento_{OBJ_TO_DREAM[obj_key]}.pkl"
 
     if sceua_path.exists() and dream_path.exists():
         r_sceua = CalibrationReport.load(sceua_path)

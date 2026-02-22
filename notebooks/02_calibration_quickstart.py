@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.0
+#       jupytext_version: 1.19.1
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -54,7 +54,7 @@
 #
 # ```python
 # from pyrrm.calibration import CalibrationReport
-# report = CalibrationReport.load('test_data/reports/410734_nse.pkl')
+# report = CalibrationReport.load('test_data/reports/410734_sacramento_nse_sceua.pkl')
 # report.plot_report_card()  # Generate comprehensive visualization
 # ```
 #
@@ -663,8 +663,56 @@ from pyrrm.calibration import CalibrationReport
 nse_report = runner.create_report(result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-nse_report.save('../test_data/reports/410734_nse')
-print(f"\nCalibration saved to: test_data/reports/410734_nse.pkl")
+nse_report.save('../test_data/reports/410734_sacramento_nse_sceua')
+print(f"\nCalibration saved to: test_data/reports/410734_sacramento_nse_sceua.pkl")
+
+# %% [markdown]
+# ## pyrrm Experiment Naming Convention
+#
+# All calibration reports in `pyrrm` follow a **canonical naming convention** so that
+# any file name immediately tells you the catchment, model, objective function,
+# algorithm, and (optionally) flow transformation used:
+#
+# ```
+# {catchment}_{model}_{objective}_{algorithm}[_{transformation}]
+# ```
+#
+# | Field            | Description | Examples |
+# |------------------|-------------|----------|
+# | `catchment`      | Gauge ID or descriptive label (always present) | `410734`, `synthetic`, `demo` |
+# | `model`          | Rainfall–runoff model | `sacramento`, `gr4j`, `gr5j` |
+# | `objective`      | Objective / likelihood function | `nse`, `kge`, `kgenp`, `apex`, `gaussian` |
+# | `algorithm`      | Calibration algorithm | `sceua`, `dream`, `nuts` |
+# | `transformation` | Flow transformation (optional) | `log`, `sqrt`, `inverse` |
+#
+# **Rules:**
+# - All fields are **lowercased** with non-alphanumeric characters stripped.
+# - Exactly **4 underscore-separated fields** (5 when a transformation is used).
+# - When no real catchment ID exists, use a descriptive default (`synthetic`, `demo`, etc.).
+#
+# **APEX extension** — when the objective is `apex`, all key hyperparameters are
+# appended as **dash-separated tags** after the transformation (kappa first, then regime):
+#
+# ```
+# 410734_sacramento_apex_sceua_sqrt-k05-uniform
+# ```
+#
+# Helper functions are available in `pyrrm.calibration`:
+#
+# ```python
+# from pyrrm.calibration import make_experiment_key, make_apex_tags
+#
+# # Standard experiment
+# key = make_experiment_key('Sacramento', 'nse', 'sceua', catchment='410734')
+# # -> '410734_sacramento_nse_sceua'
+#
+# # APEX experiment with parameter tags
+# tags = make_apex_tags(dynamics_strength=0.5, regime_emphasis='uniform')
+# key = make_experiment_key('Sacramento', 'apex', 'sceua',
+#                           catchment='410734', transformation='sqrt',
+#                           extra_tags=tags)
+# # -> '410734_sacramento_apex_sceua_sqrt-k05-uniform'
+# ```
 
 # %% [markdown]
 # ### Understanding the Output
@@ -1216,8 +1264,8 @@ print("\n" + log_result.summary())
 log_report = log_runner.create_report(log_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-log_report.save('../test_data/reports/410734_lognse')
-print(f"Calibration saved to: test_data/reports/410734_lognse.pkl")
+log_report.save('../test_data/reports/410734_sacramento_nse_sceua_log')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_nse_sceua_log.pkl")
 
 # %%
 # Run calibration with InverseNSE
@@ -1247,8 +1295,8 @@ print("\n" + inv_result.summary())
 inv_report = inv_runner.create_report(inv_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-inv_report.save('../test_data/reports/410734_invnse')
-print(f"Calibration saved to: test_data/reports/410734_invnse.pkl")
+inv_report.save('../test_data/reports/410734_sacramento_nse_sceua_inverse')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_nse_sceua_inverse.pkl")
 
 # %%
 # Run calibration with SqrtNSE
@@ -1278,8 +1326,8 @@ print("\n" + sqrt_result.summary())
 sqrt_report = sqrt_runner.create_report(sqrt_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-sqrt_report.save('../test_data/reports/410734_sqrtnse')
-print(f"Calibration saved to: test_data/reports/410734_sqrtnse.pkl")
+sqrt_report.save('../test_data/reports/410734_sacramento_nse_sceua_sqrt')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_nse_sceua_sqrt.pkl")
 
 # %%
 # Run calibration with SDEB
@@ -1311,8 +1359,8 @@ print("\n" + sdeb_result.summary())
 sdeb_report = sdeb_runner.create_report(sdeb_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-sdeb_report.save('../test_data/reports/410734_sdeb')
-print(f"Calibration saved to: test_data/reports/410734_sdeb.pkl")
+sdeb_report.save('../test_data/reports/410734_sacramento_sdeb_sceua')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_sdeb_sceua.pkl")
 
 # %% [markdown]
 # ---
@@ -1359,8 +1407,8 @@ print("\n" + kge_result.summary())
 kge_report = kge_runner.create_report(kge_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_report.save('../test_data/reports/410734_kge')
-print(f"Calibration saved to: test_data/reports/410734_kge.pkl")
+kge_report.save('../test_data/reports/410734_sacramento_kge_sceua')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_kge_sceua.pkl")
 
 # %%
 # Run calibration with KGE(inverse)
@@ -1392,8 +1440,8 @@ print("\n" + kge_inv_result.summary())
 kge_inv_report = kge_inv_runner.create_report(kge_inv_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_inv_report.save('../test_data/reports/410734_kge_inv')
-print(f"Calibration saved to: test_data/reports/410734_kge_inv.pkl")
+kge_inv_report.save('../test_data/reports/410734_sacramento_kge_sceua_inverse')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_kge_sceua_inverse.pkl")
 
 # %%
 # Run calibration with KGE(sqrt)
@@ -1425,8 +1473,8 @@ print("\n" + kge_sqrt_result.summary())
 kge_sqrt_report = kge_sqrt_runner.create_report(kge_sqrt_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_sqrt_report.save('../test_data/reports/410734_kge_sqrt')
-print(f"Calibration saved to: test_data/reports/410734_kge_sqrt.pkl")
+kge_sqrt_report.save('../test_data/reports/410734_sacramento_kge_sceua_sqrt')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_kge_sceua_sqrt.pkl")
 
 # %%
 # Run calibration with KGE(log) - use with caution
@@ -1463,8 +1511,8 @@ print("\n" + kge_log_result.summary())
 kge_log_report = kge_log_runner.create_report(kge_log_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_log_report.save('../test_data/reports/410734_kge_log')
-print(f"Calibration saved to: test_data/reports/410734_kge_log.pkl")
+kge_log_report.save('../test_data/reports/410734_sacramento_kge_sceua_log')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_kge_sceua_log.pkl")
 
 # %%
 # Run calibration with Non-parametric KGE
@@ -1497,8 +1545,8 @@ print("\n" + kge_np_result.summary())
 kge_np_report = kge_np_runner.create_report(kge_np_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_np_report.save('../test_data/reports/410734_kge_np')
-print(f"Calibration saved to: test_data/reports/410734_kge_np.pkl")
+kge_np_report.save('../test_data/reports/410734_sacramento_kgenp_sceua')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_kgenp_sceua.pkl")
 
 # %%
 # Run calibration with Non-parametric KGE with inverse transformation
@@ -1530,8 +1578,8 @@ print("\n" + kge_np_inv_result.summary())
 kge_np_inv_report = kge_np_inv_runner.create_report(kge_np_inv_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_np_inv_report.save('../test_data/reports/410734_kge_np_inv')
-print(f"Calibration saved to: test_data/reports/410734_kge_np_inv.pkl")
+kge_np_inv_report.save('../test_data/reports/410734_sacramento_kgenp_sceua_inverse')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_kgenp_sceua_inverse.pkl")
 
 # %%
 # Run calibration with Non-parametric KGE with sqrt transformation
@@ -1563,8 +1611,8 @@ print("\n" + kge_np_sqrt_result.summary())
 kge_np_sqrt_report = kge_np_sqrt_runner.create_report(kge_np_sqrt_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_np_sqrt_report.save('../test_data/reports/410734_kge_np_sqrt')
-print(f"Calibration saved to: test_data/reports/410734_kge_np_sqrt.pkl")
+kge_np_sqrt_report.save('../test_data/reports/410734_sacramento_kgenp_sceua_sqrt')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_kgenp_sceua_sqrt.pkl")
 
 # %%
 # Run calibration with Non-parametric KGE with log transformation
@@ -1601,8 +1649,8 @@ print("\n" + kge_np_log_result.summary())
 kge_np_log_report = kge_np_log_runner.create_report(kge_np_log_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_np_log_report.save('../test_data/reports/410734_kge_np_log')
-print(f"Calibration saved to: test_data/reports/410734_kge_np_log.pkl")
+kge_np_log_report.save('../test_data/reports/410734_sacramento_kgenp_sceua_log')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_kgenp_sceua_log.pkl")
 
 # %%
 # Run simulations with all calibrated parameter sets (NSE-based objectives)
@@ -3192,8 +3240,8 @@ print(f"  Best SDEB: {-custom_result.best_objective:.4f}")
 custom_report = custom_runner.create_report(custom_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-custom_report.save('../test_data/reports/410734_sdeb_custom')
-print(f"Calibration saved to: test_data/reports/410734_sdeb_custom.pkl")
+custom_report.save('../test_data/reports/410734_sacramento_sdeb_sceua_custom')
+print(f"Calibration saved to: test_data/reports/410734_sacramento_sdeb_sceua_custom.pkl")
 
 # %%
 # Compare default bounds vs custom bounds results (SDEB)

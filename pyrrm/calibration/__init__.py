@@ -101,16 +101,32 @@ except ImportError:
     continue_pydream = None
     check_pydream_convergence = None
 
+# Check for optional NumPyro dependency
+try:
+    from pyrrm.calibration.numpyro_adapter import (
+        run_nuts,
+        NUMPYRO_AVAILABLE,
+    )
+except ImportError:
+    NUMPYRO_AVAILABLE = False
+    run_nuts = None
+
 # Import checkpoint manager
 from pyrrm.calibration.checkpoint import CheckpointManager, CheckpointInfo
 
 # Import CalibrationReport for comprehensive result storage
 from pyrrm.calibration.report import CalibrationReport
 
-# Batch experiment runner
+# Batch experiment runner and naming convention helpers
 from pyrrm.calibration.batch import (
+    DEFAULT_CATCHMENT,
+    make_experiment_key,
+    make_apex_tags,
+    parse_experiment_key,
     ExperimentGrid,
+    ExperimentList,
     ExperimentSpec,
+    ExperimentSource,
     BatchExperimentRunner,
     BatchResult,
     get_model_class,
@@ -148,7 +164,10 @@ __all__ = [
     "get_calibration_value",
     # Availability flags
     "PYDREAM_AVAILABLE",
+    "NUMPYRO_AVAILABLE",
     "NEW_OBJECTIVES_AVAILABLE",
+    # NumPyro NUTS (if available)
+    "run_nuts",
     # New objective functions (if pyrrm.objectives available)
     "SDEB",
     "KGENonParametric",
@@ -178,9 +197,15 @@ __all__ = [
     # Checkpointing
     "CheckpointManager",
     "CheckpointInfo",
-    # Batch experiment runner
+    # Batch experiment runner and naming helpers
+    "DEFAULT_CATCHMENT",
+    "make_experiment_key",
+    "make_apex_tags",
+    "parse_experiment_key",
     "ExperimentGrid",
+    "ExperimentList",
     "ExperimentSpec",
+    "ExperimentSource",
     "BatchExperimentRunner",
     "BatchResult",
     "get_model_class",

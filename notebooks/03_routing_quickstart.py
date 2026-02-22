@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.0
+#       jupytext_version: 1.19.1
 #   kernelspec:
 #     display_name: pyrrm (Python 3.11.14)
 #     language: python
@@ -904,26 +904,26 @@ print(f"  n error: {cal_n - TRUE_ROUTING_PARAMS['n_subreaches']:+d}")
 #
 # | Report File | Objective | Flow Regime Focus |
 # |-------------|-----------|-------------------|
-# | `410734_nse.pkl` | NSE | High flows |
-# | `410734_lognse.pkl` | LogNSE | Low flows |
-# | `410734_invnse.pkl` | InvNSE | Very low flows |
-# | `410734_sqrtnse.pkl` | SqrtNSE | Balanced |
+# | `410734_sacramento_nse_sceua.pkl` | NSE | High flows |
+# | `410734_sacramento_nse_sceua_log.pkl` | LogNSE | Low flows |
+# | `410734_sacramento_nse_sceua_inv.pkl` | InvNSE | Very low flows |
+# | `410734_sacramento_nse_sceua_sqrt.pkl` | SqrtNSE | Balanced |
 #
 # **KGE-based Objectives:**
 #
 # | Report File | Objective | Flow Regime Focus |
 # |-------------|-----------|-------------------|
-# | `410734_kge.pkl` | KGE | High flows |
-# | `410734_kge_inv.pkl` | KGE (1/Q) | Very low flows |
-# | `410734_kge_sqrt.pkl` | KGE (√Q) | Balanced |
-# | `410734_kge_log.pkl` | KGE (log Q) | Low flows |
-# | `410734_kge_np.pkl` | KGE_np | Non-parametric |
+# | `410734_sacramento_kge_sceua.pkl` | KGE | High flows |
+# | `410734_sacramento_kge_sceua_inv.pkl` | KGE (1/Q) | Very low flows |
+# | `410734_sacramento_kge_sceua_sqrt.pkl` | KGE (√Q) | Balanced |
+# | `410734_sacramento_kge_sceua_log.pkl` | KGE (log Q) | Low flows |
+# | `410734_sacramento_kge_np_sceua.pkl` | KGE_np | Non-parametric |
 #
 # **Composite Objective:**
 #
 # | Report File | Objective | Flow Regime Focus |
 # |-------------|-----------|-------------------|
-# | `410734_sdeb.pkl` | SDEB | Multi-timescale balance |
+# | `410734_sacramento_sdeb_sceua.pkl` | SDEB | Multi-timescale balance |
 #
 # ### Experimental Design: Three-Stage Calibration
 #
@@ -1011,22 +1011,22 @@ print("=" * 70)
 # All available reports from Notebook 02 (must match the exact filenames)
 report_files = {
     # NSE variants
-    'NSE': '410734_nse.pkl',
-    'LogNSE': '410734_lognse.pkl',
-    'InvNSE': '410734_invnse.pkl',
-    'SqrtNSE': '410734_sqrtnse.pkl',
+    'NSE': '410734_sacramento_nse_sceua.pkl',
+    'LogNSE': '410734_sacramento_nse_sceua_log.pkl',
+    'InvNSE': '410734_sacramento_nse_sceua_inv.pkl',
+    'SqrtNSE': '410734_sacramento_nse_sceua_sqrt.pkl',
     # KGE variants
-    'KGE': '410734_kge.pkl',
-    'KGE_inv': '410734_kge_inv.pkl',
-    'KGE_sqrt': '410734_kge_sqrt.pkl',
-    'KGE_log': '410734_kge_log.pkl',
+    'KGE': '410734_sacramento_kge_sceua.pkl',
+    'KGE_inv': '410734_sacramento_kge_sceua_inv.pkl',
+    'KGE_sqrt': '410734_sacramento_kge_sceua_sqrt.pkl',
+    'KGE_log': '410734_sacramento_kge_sceua_log.pkl',
     # KGE non-parametric variants
-    'KGE_np': '410734_kge_np.pkl',
-    'KGE_np_inv': '410734_kge_np_inv.pkl',
-    'KGE_np_sqrt': '410734_kge_np_sqrt.pkl',
-    'KGE_np_log': '410734_kge_np_log.pkl',
+    'KGE_np': '410734_sacramento_kge_np_sceua.pkl',
+    'KGE_np_inv': '410734_sacramento_kge_np_sceua_inv.pkl',
+    'KGE_np_sqrt': '410734_sacramento_kge_np_sceua_sqrt.pkl',
+    'KGE_np_log': '410734_sacramento_kge_np_sceua_log.pkl',
     # Composite
-    'SDEB': '410734_sdeb.pkl',
+    'SDEB': '410734_sacramento_sdeb_sceua.pkl',
 }
 
 # Try to load each report
@@ -1179,6 +1179,25 @@ joint_bounds['routing_K'] = (0.5, 15.0)
 joint_bounds['routing_m'] = (0.1, 1.2)
 joint_bounds['routing_n_subreaches'] = (1, 10)
 
+CANONICAL_NAMES = {
+    'NSE': '410734_sacramento_nse_sceua',
+    'LogNSE': '410734_sacramento_nse_sceua_log',
+    'InvNSE': '410734_sacramento_nse_sceua_inv',
+    'SqrtNSE': '410734_sacramento_nse_sceua_sqrt',
+    'KGE': '410734_sacramento_kge_sceua',
+    'KGE_inv': '410734_sacramento_kge_sceua_inv',
+    'KGE_sqrt': '410734_sacramento_kge_sceua_sqrt',
+    'KGE_log': '410734_sacramento_kge_sceua_log',
+    'KGE_np': '410734_sacramento_kge_np_sceua',
+    'KGE_np_inv': '410734_sacramento_kge_np_sceua_inv',
+    'KGE_np_sqrt': '410734_sacramento_kge_np_sceua_sqrt',
+    'KGE_np_log': '410734_sacramento_kge_np_sceua_log',
+    'SDEB': '410734_sacramento_sdeb_sceua',
+}
+
+ROUTING_DIR = REPORTS_DIR / 'routing'
+ROUTING_DIR.mkdir(parents=True, exist_ok=True)
+
 print("=" * 70)
 print("THREE-STAGE CALIBRATION FOR ALL OBJECTIVE FUNCTIONS")
 print("=" * 70)
@@ -1249,7 +1268,7 @@ for obj_name, config in available_objectives.items():
     report_B = runner_B.create_report(result_B, catchment_info={
         'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
     })
-    report_B.save(REPORTS_DIR / f"410734_{obj_name.lower()}_routing_B")
+    report_B.save(ROUTING_DIR / f"{CANONICAL_NAMES[obj_name]}_routingB")
     
     # -------------------------------------------------------------------------
     # Stage C: Joint calibration (Sacramento + routing)
@@ -1291,7 +1310,7 @@ for obj_name, config in available_objectives.items():
     report_C = runner_C.create_report(result_C, catchment_info={
         'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
     })
-    report_C.save(REPORTS_DIR / f"410734_{obj_name.lower()}_routing_C")
+    report_C.save(ROUTING_DIR / f"{CANONICAL_NAMES[obj_name]}_routingC")
     
     # -------------------------------------------------------------------------
     # Store results

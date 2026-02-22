@@ -38,6 +38,7 @@ import pandas as pd
 from pyrrm.calibration.runner import CalibrationRunner, CalibrationResult
 from pyrrm.calibration.report import CalibrationReport
 from pyrrm.calibration.objective_functions import ObjectiveFunction, NSE
+from pyrrm.calibration.batch import make_experiment_key
 from pyrrm.parallel import create_backend, ParallelBackend
 from pyrrm.network.topology import (
     CatchmentNode, NetworkLink, CatchmentNetwork, NodeCalibrationConfig,
@@ -292,6 +293,18 @@ class CatchmentNetworkRunner:
     # ------------------------------------------------------------------
     # Configuration resolution
     # ------------------------------------------------------------------
+    def _node_file_stem(self, node_id: str) -> str:
+        """Build the canonical file stem for a node's output files."""
+        cfg = self._resolve_config(self.network.get_node(node_id))
+        method = cfg.algorithm.get('method', 'sceua_direct')
+        obj_name = type(cfg.objective).__name__
+        return make_experiment_key(
+            model=cfg.model_class,
+            objective=obj_name,
+            algorithm=method,
+            catchment=node_id,
+        )
+
     def _resolve_config(self, node: CatchmentNode) -> ResolvedNodeConfig:
         """Merge network defaults with per-node overrides."""
         nc = node.calibration_config or NodeCalibrationConfig()
@@ -345,8 +358,19 @@ class CatchmentNetworkRunner:
 
         if resume:
             for nid in self.network.node_ids:
-                pkl_path = self.output_dir / f"{nid}.pkl"
-                sim_path = self.output_dir / f"{nid}_sim.npy"
+                stem = self._node_file_stem(nid)
+                pkl_path = self.output_dir / f"{stem}.pkl"
+                sim_path = self.output_dir / f"{stem}_sim.npy"
+                # Backward compat: try legacy {nid}.pkl
+                if not pkl_path.exists():
+                    legacy_pkl = self.output_dir / f"{nid}.pkl"
+                    legacy_sim = self.output_dir / f"{nid}_sim.npy"
+                    if legacy_pkl.exists():
+                        pkl_path = legacy_pkl
+                        sim_path = legacy_sim
+                        logger.info(
+                            "Using legacy file %s for node %s", legacy_pkl.name, nid,
+                        )
                 if pkl_path.exists():
                     try:
                         report = CalibrationReport.load(str(pkl_path))
@@ -395,8 +419,9 @@ class CatchmentNetworkRunner:
                         link_routed_flows[key] = flow
 
                     try:
-                        report.save(str(self.output_dir / f"{nid}.pkl"))
-                        np.save(str(self.output_dir / f"{nid}_sim.npy"), sim)
+                        stem = self._node_file_stem(nid)
+                        report.save(str(self.output_dir / f"{stem}.pkl"))
+                        np.save(str(self.output_dir / f"{stem}_sim.npy"), sim)
                     except Exception as e:
                         logger.warning("Failed to save results for %s: %s", nid, e)
 
@@ -584,7 +609,13 @@ class CatchmentNetworkRunner:
                 raise ValueError(f"Unknown calibration method: '{method}'")
 
         result = run_fn(**alg_kwargs)
-        report = cal_runner.create_report(result)
+        exp_name = make_experiment_key(
+            model=cfg.model_class,
+            objective=type(cfg.objective).__name__,
+            algorithm=method,
+            catchment=node.id,
+        )
+        report = cal_runner.create_report(result, experiment_name=exp_name)
 
         model.reset()
         model.parameters = result.best_parameters

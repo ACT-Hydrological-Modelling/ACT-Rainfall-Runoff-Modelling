@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.0
+#       jupytext_version: 1.19.1
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -183,7 +183,7 @@ print("Using Plotly for interactive visualizations")
 # Notebook 06 (Algorithm Comparison) runs PyDREAM calibrations for 13 objective 
 # functions. The progress files are saved to:
 # ```
-# test_data/reports/pydream/progress_{objective}.csv
+# test_data/reports/pydream/progress_410734_sacramento_{objective}_dream[_{transformation}].csv
 # ```
 #
 # Available objective functions to monitor:
@@ -224,7 +224,17 @@ if CALIBRATION_SOURCE == 'pydream_synthetic':
     
 elif CALIBRATION_SOURCE == 'pydream_realdata':
     # Real data calibrations from Notebook 06 (13 objective functions)
-    CSV_FILE = PYDREAM_DIR / f'progress_{PYDREAM_OBJECTIVE.lower()}.csv'
+    obj_lower = PYDREAM_OBJECTIVE.lower()
+    transform_suffixes = {
+        'lognse': ('nse', 'log'), 'invnse': ('nse', 'inv'), 'sqrtnse': ('nse', 'sqrt'),
+        'kge_inv': ('kge', 'inv'), 'kge_sqrt': ('kge', 'sqrt'), 'kge_log': ('kge', 'log'),
+        'kge_np_inv': ('kge_np', 'inv'), 'kge_np_sqrt': ('kge_np', 'sqrt'), 'kge_np_log': ('kge_np', 'log'),
+    }
+    if obj_lower in transform_suffixes:
+        base_obj, transform = transform_suffixes[obj_lower]
+        CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{base_obj}_dream_{transform}.csv'
+    else:
+        CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{obj_lower}_dream.csv'
     
 elif CALIBRATION_SOURCE == 'custom':
     # Custom path - edit directly
@@ -263,14 +273,15 @@ elif CALIBRATION_SOURCE == 'pydream_realdata':
     
     # List available progress files
     if PYDREAM_DIR.exists():
-        progress_files = sorted(PYDREAM_DIR.glob('progress_*.csv'))
+        progress_files = sorted(PYDREAM_DIR.glob('progress_410734_sacramento_*_dream*.csv'))
         if progress_files:
             print(f"\nAvailable PyDREAM progress files:")
             for f in progress_files:
                 size_kb = f.stat().st_size / 1024
                 mtime = datetime.fromtimestamp(f.stat().st_mtime)
                 n_lines = sum(1 for _ in open(f)) - 1  # Subtract header
-                obj_name = f.stem.replace('progress_', '').upper()
+                parts = f.stem.replace('progress_410734_sacramento_', '').replace('_dream', '')
+                obj_name = parts.upper() if parts else f.stem.upper()
                 status = "✓ CURRENT" if f.name == CSV_FILE.name else ""
                 print(f"  {obj_name:<12}: {n_lines:>8,} samples, {size_kb:>8.1f} KB, "
                       f"updated {mtime.strftime('%H:%M:%S')} {status}")
@@ -319,7 +330,16 @@ def monitor_pydream(objective: str) -> None:
     global CSV_FILE, PYDREAM_OBJECTIVE
     
     PYDREAM_OBJECTIVE = objective.lower()
-    CSV_FILE = PYDREAM_DIR / f'progress_{PYDREAM_OBJECTIVE}.csv'
+    transform_suffixes = {
+        'lognse': ('nse', 'log'), 'invnse': ('nse', 'inv'), 'sqrtnse': ('nse', 'sqrt'),
+        'kge_inv': ('kge', 'inv'), 'kge_sqrt': ('kge', 'sqrt'), 'kge_log': ('kge', 'log'),
+        'kge_np_inv': ('kge_np', 'inv'), 'kge_np_sqrt': ('kge_np', 'sqrt'), 'kge_np_log': ('kge_np', 'log'),
+    }
+    if PYDREAM_OBJECTIVE in transform_suffixes:
+        base_obj, transform = transform_suffixes[PYDREAM_OBJECTIVE]
+        CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{base_obj}_dream_{transform}.csv'
+    else:
+        CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{PYDREAM_OBJECTIVE}_dream.csv'
     
     print(f"\n{'='*60}")
     print(f"SWITCHED TO: {objective.upper()} CALIBRATION")
@@ -349,7 +369,7 @@ def list_available_calibrations() -> None:
         print(f"⚠ Directory not found: {PYDREAM_DIR}")
         return
     
-    progress_files = sorted(PYDREAM_DIR.glob('progress_*.csv'))
+    progress_files = sorted(PYDREAM_DIR.glob('progress_410734_sacramento_*_dream*.csv'))
     
     if not progress_files:
         print("No progress files found. Run Notebook 06 to start calibrations.")
@@ -359,7 +379,8 @@ def list_available_calibrations() -> None:
     print("-" * 60)
     
     for f in progress_files:
-        obj_name = f.stem.replace('progress_', '').upper()
+        parts = f.stem.replace('progress_410734_sacramento_', '').replace('_dream', '')
+        obj_name = parts.upper() if parts else f.stem.upper()
         size_kb = f.stat().st_size / 1024
         mtime = datetime.fromtimestamp(f.stat().st_mtime)
         n_lines = sum(1 for _ in open(f)) - 1

@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.0
+#       jupytext_version: 1.19.1
 #   kernelspec:
 #     display_name: Python (pyrrm)
 #     language: python
@@ -66,27 +66,27 @@ print("Setup complete!")
 #
 # | Report File | Objective | Flow Regime Focus |
 # |-------------|-----------|-------------------|
-# | `410734_nse.pkl` | NSE | High flows |
-# | `410734_lognse.pkl` | LogNSE | Low flows |
-# | `410734_invnse.pkl` | InvNSE | Very low flows |
-# | `410734_sqrtnse.pkl` | SqrtNSE | Balanced |
-# | `410734_sdeb.pkl` | SDEB | Flow duration curve |
+# | `410734_sacramento_nse_sceua.pkl` | NSE | High flows |
+# | `410734_sacramento_nse_sceua_log.pkl` | LogNSE | Low flows |
+# | `410734_sacramento_nse_sceua_inverse.pkl` | InvNSE | Very low flows |
+# | `410734_sacramento_nse_sceua_sqrt.pkl` | SqrtNSE | Balanced |
+# | `410734_sacramento_sdeb_sceua.pkl` | SDEB | Flow duration curve |
 #
 # **KGE-based Objectives (Default Bounds):**
 #
 # | Report File | Objective | Flow Regime Focus |
 # |-------------|-----------|-------------------|
-# | `410734_kge.pkl` | KGE | High flows |
-# | `410734_kge_inv.pkl` | KGE (1/Q) | Very low flows |
-# | `410734_kge_sqrt.pkl` | KGE (√Q) | Balanced |
-# | `410734_kge_log.pkl` | KGE (log Q) | Low flows |
-# | `410734_kge_np.pkl` | KGE_np | Non-parametric |
+# | `410734_sacramento_kge_sceua.pkl` | KGE | High flows |
+# | `410734_sacramento_kge_sceua_inverse.pkl` | KGE (1/Q) | Very low flows |
+# | `410734_sacramento_kge_sceua_sqrt.pkl` | KGE (√Q) | Balanced |
+# | `410734_sacramento_kge_sceua_log.pkl` | KGE (log Q) | Low flows |
+# | `410734_sacramento_kge_np_sceua.pkl` | KGE_np | Non-parametric |
 #
 # **Custom Bounds Calibrations:**
 #
 # | Report File | Objective | Notes |
 # |-------------|-----------|-------|
-# | `410734_sdeb_custom.pkl` | SDEB | Extended lower bounds |
+# | `410734_sacramento_sdeb_sceua_custom.pkl` | SDEB | Extended lower bounds |
 
 # %% [markdown]
 # ---
@@ -115,7 +115,7 @@ for report_file in report_files:
 
 # %%
 # Load a specific report for detailed analysis
-loaded_report = CalibrationReport.load('../test_data/reports/410734_sdeb.pkl')
+loaded_report = CalibrationReport.load('../test_data/reports/410734_sacramento_sdeb_sceua.pkl')
 print(f"Loaded report: {loaded_report}")
 
 # %%
@@ -167,8 +167,8 @@ for name, value in metrics.items():
 # %%
 # Generate a matplotlib report card (comprehensive figure)
 fig = loaded_report.plot_report_card(figsize=(20, 24))
-fig.savefig('../test_data/reports/410734_sdeb_report_card.png', dpi=150, bbox_inches='tight')
-print("Report card saved to: ../test_data/reports/410734_sdeb_report_card.png")
+fig.savefig('../test_data/reports/410734_sacramento_sdeb_sceua_report_card.png', dpi=150, bbox_inches='tight')
+print("Report card saved to: ../test_data/reports/410734_sacramento_sdeb_sceua_report_card.png")
 plt.show()
 
 # %% [markdown]
@@ -180,8 +180,8 @@ plt.show()
 # Generate an interactive Plotly report card (HTML)
 if PLOTLY_AVAILABLE:
     fig_plotly = loaded_report.plot_report_card_interactive(height=1000)
-    fig_plotly.write_html('../test_data/reports/410734_sdeb_report_card.html')
-    print("Interactive report saved to: ../test_data/reports/410734_sdeb_report_card.html")
+    fig_plotly.write_html('../test_data/reports/410734_sacramento_sdeb_sceua_report_card.html')
+    print("Interactive report saved to: ../test_data/reports/410734_sacramento_sdeb_sceua_report_card.html")
     fig_plotly.show()
 else:
     print("Plotly not available - skipping interactive report")
@@ -195,12 +195,12 @@ else:
 # %%
 # Load multiple reports for comparison
 reports_to_compare = [
-    ('NSE', '410734_nse.pkl'),
-    ('LogNSE', '410734_lognse.pkl'),
-    ('SqrtNSE', '410734_sqrtnse.pkl'),
-    ('SDEB', '410734_sdeb.pkl'),
-    ('KGE', '410734_kge.pkl'),
-    ('KGE(√Q)', '410734_kge_sqrt.pkl'),
+    ('NSE', '410734_sacramento_nse_sceua.pkl'),
+    ('LogNSE', '410734_sacramento_nse_sceua_log.pkl'),
+    ('SqrtNSE', '410734_sacramento_nse_sceua_sqrt.pkl'),
+    ('SDEB', '410734_sacramento_sdeb_sceua.pkl'),
+    ('KGE', '410734_sacramento_kge_sceua.pkl'),
+    ('KGE(√Q)', '410734_sacramento_kge_sceua_sqrt.pkl'),
 ]
 
 loaded_reports = {}
@@ -288,7 +288,7 @@ export_df = pd.DataFrame({
 export_df.set_index('date', inplace=True)
 
 # Save to CSV
-export_path = '../test_data/reports/410734_sdeb_timeseries.csv'
+export_path = '../test_data/reports/410734_sacramento_sdeb_sceua_timeseries.csv'
 export_df.to_csv(export_path)
 print(f"Time series exported to: {export_path}")
 print(f"\nShape: {export_df.shape}")
