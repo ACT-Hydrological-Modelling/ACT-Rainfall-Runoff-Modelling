@@ -16,8 +16,6 @@
 # %% [markdown]
 # # Time-Varying Parameter (TVP) Calibration — GR4J with Gaussian Random Walk
 #
-# ---
-#
 # ## Purpose
 #
 # This notebook demonstrates **time-varying parameter (TVP)** calibration
@@ -52,26 +50,47 @@
 # The `resolution` parameter controls how many timesteps share each
 # $\delta$ increment (e.g. `resolution=5` means one increment per 5 days).
 #
-# ## Notebook Structure
+# ## What You'll Learn
 #
-# | Part | Description |
-# |------|-------------|
-# | **1** | Setup & helper functions |
-# | **2** | Load and prepare gauge 410734 data |
-# | **3** | TVP-GR4J calibration (GRW on X1) — 4 likelihood transforms |
-# | **4** | TVP transform comparison |
-# | **5** | Reload all prior fixed-parameter calibrations |
-# | **6** | Grand comparison: TVP vs fixed-parameter |
-# | **7** | Summary |
+# - How to configure a **Gaussian Random Walk prior** on GR4J's X1 parameter
+# - How to run **TVP calibration** via NUTS with 4 likelihood transforms
+# - How to visualise **X1(t) trajectories** (full-record and yearly decomposition)
+# - How to compare TVP-GR4J against **all prior fixed-parameter methods**
+#   (SCE-UA, PyDREAM, NUTS-fixed) across 27 diagnostic metrics
+# - How to interpret **regime-based analysis** showing where TVP helps most
 #
 # ## Prerequisites
 #
-# - Notebooks 02, 06, 07, 12 (for pre-computed calibration reports)
+# - Notebooks 02, 06, 07, 13 (for pre-computed calibration reports)
 # - `jax`, `numpyro`, `arviz` installed
+#
+# ## Estimated Time
+#
+# - ~10-15 minutes for 4 TVP calibrations (500 warmup + 1000 samples × 2 chains)
+# - ~5 minutes for comparison analysis and visualisation
+#
+# ## Steps in This Notebook
+#
+# | Step | Topic | Description |
+# |------|--------|---------------|
+# | 1 | Setup and helpers | Imports, diagnostic metrics, simulation and plotting helpers. |
+# | 2 | Load gauge 410734 data | Rainfall, PET, observed flow; prepare calibration arrays. |
+# | 3 | TVP-GR4J calibration | GRW on X1 with 4 likelihood transforms (Q, √Q, log Q, 1/Q). |
+# | 4 | TVP transform comparison | Side-by-side metrics, hydrographs, and X1(t) trajectories. |
+# | 5 | Load prior fixed-parameter results | Reload SCE-UA, PyDREAM, and NUTS-fixed reports from NB02/06/07/13. |
+# | 6 | Grand comparison | TVP vs fixed across 27 metrics; regime analysis; heatmap. |
+# | 7 | Summary | Key findings, questions addressed, future work. |
+#
+# ## Key Insight
+#
+# > A simple 4-parameter model with time-varying X1 can capture catchment
+# > non-stationarity that fixed-parameter calibrations miss — the question is
+# > whether the improvement justifies the additional computational cost and
+# > the risk of overfitting.
 
 # %% [markdown]
 # ---
-# ## Part 1 — Setup
+# ## Step 1: Setup and Helpers
 
 # %%
 import os
@@ -120,10 +139,10 @@ print(f"Devices     : {jax.devices()}")
 WARMUP = 365
 
 # Report directories from previous notebooks
-REPORTS_NB02 = Path('../test_data/reports')          # NB02 SCE-UA
-REPORTS_PYDREAM = Path('../test_data/reports/pydream')  # NB06 PyDREAM
-REPORTS_MODELS = Path('../test_data/reports/models')    # NB07 Model comparison
-REPORTS_NUTS = Path('../test_data/reports/nuts')        # NB12 NUTS fixed
+REPORTS_NB02 = Path('../test_data/reports')             # Notebook 02 SCE-UA
+REPORTS_PYDREAM = Path('../test_data/reports/pydream')  # Notebook 06 PyDREAM
+REPORTS_MODELS = Path('../test_data/reports/models')    # Notebook 07 Model comparison
+REPORTS_NUTS = Path('../test_data/reports/nuts')        # Notebook 13 NUTS fixed
 
 TVP_REPORTS_DIR = Path('../test_data/reports/tvp')
 TVP_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -140,7 +159,7 @@ CATCHMENT_INFO_410734 = {
 # ### Helper Functions
 #
 # Reusable analysis and plotting helpers.  The `compute_metrics` function
-# produces the same 27-metric diagnostic suite used in NB12.
+# produces the same 27-metric diagnostic suite used in Notebook 13.
 
 # %%
 # =============================================================================
@@ -533,7 +552,7 @@ def _load_result(report_name, reports_dir=TVP_REPORTS_DIR):
 
 # %% [markdown]
 # ---
-# ## Part 2 — Load and Prepare Gauge 410734 Data
+# ## Step 2: Load Gauge 410734 Data
 
 # %%
 DATA_DIR = Path('../data/410734')
@@ -608,7 +627,7 @@ print(f"Effective period   : {len(cal_inputs_410734) - WARMUP:,} days")
 
 # %% [markdown]
 # ---
-# ## Part 3 — TVP-GR4J Calibration (GRW on X1)
+# ## Step 3: TVP-GR4J Calibration
 #
 # We run four experiments, one per likelihood transform, with X1 as a
 # time-varying parameter using a Gaussian Random Walk prior.
@@ -654,7 +673,7 @@ tvp_params = {}
 tvp_metrics = {}
 
 # %% [markdown]
-# ### 3.1 TVP-GR4J — Q transform (no transform)
+# ### Calibration Loop — All 4 Transforms
 
 # %%
 for transform, pkl_name in TRANSFORMS.items():
@@ -722,9 +741,10 @@ for transform, pkl_name in TRANSFORMS.items():
 
 # %% [markdown]
 # ---
-# ## Part 4 — TVP Transform Comparison
+# ## Step 4: TVP Transform Comparison
 #
-# Side-by-side comparison of the 4 TVP transforms.
+# Side-by-side comparison of the 4 TVP transforms across all 27 diagnostic
+# metrics, runtimes, hyperparameters, and X1(t) trajectories.
 
 # %%
 obs_w = cal_obs_mm[WARMUP:]
@@ -802,7 +822,7 @@ plt.show()
 
 # %% [markdown]
 # ---
-# ## Part 5 — Reload All Prior Fixed-Parameter Calibrations
+# ## Step 5: Load Prior Fixed-Parameter Results
 #
 # We load calibration reports from previous notebooks **without re-running**
 # the calibrations.  This follows the "single source of truth" pattern:
@@ -810,10 +830,10 @@ plt.show()
 #
 # | Source | Method | Model | Reports |
 # |--------|--------|-------|---------|
-# | NB02 | SCE-UA | Sacramento | 13 objectives |
-# | NB06 | PyDREAM | Sacramento | 13 objectives |
-# | NB07 | SCE-UA | GR4J | 13 objectives |
-# | NB12 | NUTS fixed | GR4J | 4 transforms |
+# | Notebook 02 | SCE-UA | Sacramento | 13 objectives |
+# | Notebook 06 | PyDREAM | Sacramento | 13 objectives |
+# | Notebook 07 | SCE-UA | GR4J | 13 objectives |
+# | Notebook 13 | NUTS fixed | GR4J | 4 transforms |
 
 # %%
 OBJECTIVES_13 = [
@@ -827,8 +847,8 @@ TRANSFORM_SUFFIX = {"none": "", "sqrt": "_sqrt", "log": "_log", "inverse": "_inv
 
 prior_results = OrderedDict()
 
-# --- NB02: SCE-UA Sacramento on 410734 (13 objectives) ---
-print("Loading NB02 SCE-UA Sacramento reports...")
+# --- Notebook 02: SCE-UA Sacramento on 410734 (13 objectives) ---
+print("Loading Notebook 02 SCE-UA Sacramento reports...")
 for obj in OBJECTIVES_13:
     name = f"410734_sacramento_{obj}_sceua"
     pkl = REPORTS_NB02 / f'{name}.pkl'
@@ -847,8 +867,8 @@ for obj in OBJECTIVES_13:
     else:
         print(f"  Not found: {name}.pkl")
 
-# --- NB06: PyDREAM Sacramento on 410734 (13 objectives) ---
-print("\nLoading NB06 PyDREAM Sacramento reports...")
+# --- Notebook 06: PyDREAM Sacramento on 410734 (13 objectives) ---
+print("\nLoading Notebook 06 PyDREAM Sacramento reports...")
 for obj in OBJECTIVES_13:
     name = f"410734_sacramento_{obj}_dream"
     pkl = REPORTS_PYDREAM / f'{name}.pkl'
@@ -867,8 +887,8 @@ for obj in OBJECTIVES_13:
     else:
         print(f"  Not found: {name}.pkl")
 
-# --- NB07: SCE-UA GR4J on 410734 (13 objectives) ---
-print("\nLoading NB07 SCE-UA GR4J reports...")
+# --- Notebook 07: SCE-UA GR4J on 410734 (13 objectives) ---
+print("\nLoading Notebook 07 SCE-UA GR4J reports...")
 for obj in OBJECTIVES_13:
     name = f"410734_gr4j_{obj}_sceua"
     pkl = REPORTS_MODELS / f'{name}.pkl'
@@ -887,8 +907,8 @@ for obj in OBJECTIVES_13:
     else:
         print(f"  Not found: {name}.pkl")
 
-# --- NB12: NUTS fixed GR4J on 410734 (4 transforms) ---
-print("\nLoading NB12 NUTS fixed GR4J reports...")
+# --- Notebook 13: NUTS fixed GR4J on 410734 (4 transforms) ---
+print("\nLoading Notebook 13 NUTS fixed GR4J reports...")
 for t in TRANSFORMS_4:
     suffix = TRANSFORM_SUFFIX[t]
     name = f"410734_gr4j_gaussian_nuts{suffix}"
@@ -912,7 +932,7 @@ print(f"\nTotal prior calibrations loaded: {len(prior_results)}")
 
 # %% [markdown]
 # ---
-# ## Part 6 — Grand Comparison: TVP vs Fixed-Parameter
+# ## Step 6: Grand Comparison — TVP vs Fixed-Parameter
 #
 # ### 6.1 TVP vs NUTS-fixed (same model, same algorithm, same transforms)
 #
@@ -950,7 +970,7 @@ for t in TRANSFORMS_4:
             print(f"  {mn:<20} {fv:12.4f} {tv:12.4f} {delta:+14.4f} {better}")
 
 # %% [markdown]
-# ### 6.2 TVP vs best-of-all SCE-UA and PyDREAM
+# ### 6.2 TVP vs Best-of-All SCE-UA and PyDREAM
 
 # %%
 sceua_entries = {k: v for k, v in prior_results.items() if k.startswith("SCE-UA")}
@@ -1129,7 +1149,7 @@ plt.show()
 
 # %% [markdown]
 # ---
-# ## Part 7 — Summary
+# ## Step 7: Summary
 #
 # ### What We Accomplished
 #
@@ -1140,8 +1160,8 @@ plt.show()
 #    et al. Figure 8-style yearly decompositions
 # 3. **Compared across transforms** to see how the likelihood space
 #    affects the inferred X1 trajectory
-# 4. **Loaded all prior fixed-parameter calibrations** from NB02 (SCE-UA),
-#    NB06 (PyDREAM), NB07 (model comparison), and NB12 (NUTS fixed)
+# 4. **Loaded all prior fixed-parameter calibrations** from Notebook 02 (SCE-UA),
+#    Notebook 06 (PyDREAM), Notebook 07 (model comparison), and Notebook 13 (NUTS fixed)
 # 5. **Produced a comprehensive grand comparison** of TVP vs fixed across
 #    27 diagnostic metrics, grouped by flow regime
 #
