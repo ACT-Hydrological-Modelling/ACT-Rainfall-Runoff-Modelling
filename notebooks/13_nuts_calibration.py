@@ -16,8 +16,6 @@
 # %% [markdown]
 # # Bayesian Calibration with NumPyro NUTS — Comparison with SCE-UA & PyDREAM
 #
-# ---
-#
 # ## Purpose
 #
 # This notebook demonstrates **Bayesian calibration** of rainfall-runoff
@@ -33,7 +31,7 @@
 #
 # ## How NUTS Improves on Existing Methods
 #
-# ### SCE-UA → NUTS
+# ### SCE-UA to NUTS
 #
 # SCE-UA is a **deterministic optimiser** that returns a single point
 # estimate.  It answers *"what are the best parameters?"* but says nothing
@@ -45,7 +43,7 @@
 # - **Formal convergence diagnostics** (R-hat, ESS) rather than heuristic
 #   termination criteria
 #
-# ### PyDREAM → NUTS
+# ### PyDREAM to NUTS
 #
 # PyDREAM (MT-DREAM(ZS)) is already a Bayesian sampler, but it is a
 # **random-walk** MCMC method.  NUTS improves on it by:
@@ -80,24 +78,36 @@
 #
 # ## Prerequisites
 #
-# - Notebooks 01–02 (model basics, SCE-UA calibration)
+# - Notebooks 01-02 (model basics, SCE-UA calibration)
 # - `jax`, `numpyro`, `arviz`, and `pydream` installed
 #
-# ## Notebook Structure
+# ## Estimated Time
 #
-# | Part | Description |
-# |------|-------------|
-# | **1** | Setup & helper functions |
-# | **2** | JAX / NumPy equivalence verification (GR4J + Sacramento) |
-# | **3** | Synthetic GR4J — SCE-UA vs PyDREAM vs NUTS |
-# | **4** | Synthetic Sacramento — SCE-UA vs PyDREAM vs NUTS |
-# | **5** | Gauge 410734 — GR4J — SCE-UA vs PyDREAM vs NUTS |
-# | **6** | Gauge 410734 — Sacramento — SCE-UA vs PyDREAM vs NUTS |
-# | **7** | Grand comparison & summary |
+# - ~1-2 hours for full calibrations (synthetic + gauge 410734)
+# - ~10 minutes for analysis if loading pre-computed results
+#
+# ## Steps in This Notebook
+#
+# | Step | Topic | Description |
+# |------|--------|---------------|
+# | 1 | Setup and helpers | Imports, diagnostic metrics, simulation and plotting helpers. |
+# | 2 | JAX / NumPy equivalence | Verify JAX models match NumPy implementations (GR4J + Sacramento). |
+# | 3 | Synthetic GR4J | SCE-UA vs PyDREAM vs NUTS on synthetic data. |
+# | 4 | Synthetic Sacramento | SCE-UA vs PyDREAM vs NUTS on synthetic data. |
+# | 5 | Gauge 410734 GR4J | NUTS with 4 likelihood transforms on real data. |
+# | 6 | Gauge 410734 Sacramento | SCE-UA vs PyDREAM vs NUTS on real data. |
+# | 7 | Grand comparison and summary | Cross-method metrics, regime analysis, conclusions. |
+#
+# ## Key Insight
+#
+# > NUTS exploits gradients to navigate the posterior landscape far more
+# > efficiently than random-walk samplers, but requires a differentiable
+# > (JAX) model implementation.  The trade-off between SCE-UA speed,
+# > PyDREAM flexibility, and NUTS efficiency depends on your application.
 
 # %% [markdown]
 # ---
-# ## Part 1 — Setup
+# ## Step 1: Setup and Helpers
 
 # %%
 import os
@@ -579,7 +589,7 @@ def _load_result(report_name):
 
 # %% [markdown]
 # ---
-# ## Part 2 — JAX / NumPy Equivalence Verification
+# ## Step 2: JAX / NumPy Equivalence Verification
 #
 # Before trusting JAX-based NUTS calibration we must confirm that the
 # pure-JAX implementations produce **identical** output to the reference
@@ -791,7 +801,7 @@ print(f"      NUTS also compensates by needing far fewer total evaluations "
 
 # %% [markdown]
 # ---
-# ## Part 3 — Synthetic GR4J: SCE-UA vs PyDREAM vs NUTS
+# ## Step 3: Synthetic GR4J — SCE-UA vs PyDREAM vs NUTS
 #
 # We generate synthetic data with **known GR4J parameters**, add 5% noise,
 # then calibrate with all three methods.  This controlled experiment lets
@@ -1027,7 +1037,7 @@ plot_three_method_fdc(
 
 # %% [markdown]
 # ---
-# ## Part 4 — Synthetic Sacramento: SCE-UA vs PyDREAM vs NUTS
+# ## Step 4: Synthetic Sacramento — SCE-UA vs PyDREAM vs NUTS
 #
 # Sacramento has **22 parameters** — a far more challenging calibration
 # target.  This tests each method's ability to navigate a high-dimensional
@@ -1300,7 +1310,7 @@ plot_three_method_fdc(
 
 # %% [markdown]
 # ---
-# ## Part 5 — Gauge 410734: GR4J NUTS — Likelihood Transform Comparison
+# ## Step 5: Gauge 410734 GR4J — NUTS Likelihood Transform Comparison
 #
 # Now we move to **real observations** from the Queanbeyan River
 # (NSW/ACT border, Australia).  SCE-UA and PyDREAM calibrations for this
@@ -1635,7 +1645,7 @@ plot_three_method_fdc(
 
 # %% [markdown]
 # ---
-# ## Part 6 — Gauge 410734: Sacramento — SCE-UA vs PyDREAM vs NUTS
+# ## Step 6: Gauge 410734 Sacramento — SCE-UA vs PyDREAM vs NUTS
 #
 # Sacramento with 22 parameters is the most demanding test.  Can NUTS
 # efficiently explore the posterior where random-walk methods struggle?
@@ -1801,7 +1811,7 @@ plot_three_method_fdc(
 
 # %% [markdown]
 # ---
-# ## Part 7 — Grand Comparison & Summary
+# ## Step 7: Grand Comparison and Summary
 #
 # ### 7.1 All Experiments — Metrics Summary
 
