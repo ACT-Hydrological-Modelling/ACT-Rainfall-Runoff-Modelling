@@ -1,0 +1,72 @@
+---
+description: Enforces standard intro structure for Jupyter notebooks (Jupytext .py scripts)
+globs: notebooks/*.py
+alwaysApply: false
+---
+
+# Notebook Structure Standard
+
+Every notebook in `notebooks/` must follow this intro and section structure.
+
+## Required Intro Sections (in order)
+
+1. **Title** — H1 markdown heading (`# Title`)
+2. **Purpose** — H2, 2-4 sentences explaining why this notebook exists
+3. **What You'll Learn** — H2, bullet list of learning outcomes
+4. **Prerequisites** — H2, notebooks and packages needed
+5. **Estimated Time** — H2, rough runtime
+6. **Steps in This Notebook** — H2, with a markdown table:
+
+```
+| Step | Topic | Description |
+|------|--------|---------------|
+| 1 | ... | ... |
+| 2 | ... | ... |
+```
+
+7. **Key Insight** — H2, blockquote summarising the notebook's main takeaway
+8. **Setup** — H2, imports and configuration
+
+## Body Sections
+
+- Use `## Step N: <Topic>` headers that match the steps table exactly
+- Subsections use `### N.M <Title>` (e.g. `### 6.1 TVP vs NUTS-fixed`)
+
+## Summary
+
+- End with `## Summary` containing a recap table and key takeaways list
+
+## Example Intro (abbreviated)
+
+```python
+# %% [markdown]
+# # Batch Experiment Runners
+#
+# ## Purpose
+#
+# This notebook focuses on ...
+#
+# ## What You'll Learn
+#
+# - How to define ...
+# - How to run ...
+#
+# ## Prerequisites
+#
+# - Notebook 02 (CalibrationRunner)
+#
+# ## Estimated Time
+#
+# - ~5 minutes
+#
+# ## Steps in This Notebook
+#
+# | Step | Topic | Description |
+# |------|--------|---------------|
+# | 1 | Setup and data | Imports; synthetic data |
+# | 2 | Experiment grid | Define ExperimentGrid |
+#
+# ## Key Insight
+#
+# > The batch runner eliminates manual for loops ...
+```
