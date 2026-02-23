@@ -2006,7 +2006,7 @@ plt.show()
 # - Consider **cloud GPU** (NVIDIA CUDA) for production Sacramento NUTS runs
 #   where the one-time JIT cost is amortised over many catchments
 #
-# ### Time-Varying Parameters (TVP) — see Notebook 13
+# ### Time-Varying Parameters (TVP) — see Notebook 14
 #
 # All experiments in this notebook use **fixed (static) parameters** — a
 # single constant value per parameter across the entire calibration period.
@@ -2027,7 +2027,7 @@ plt.show()
 #                          num_warmup=500, num_samples=1000, num_chains=2)
 # ```
 #
-# **Notebook 13** provides a complete demonstration of TVP-GR4J on gauge
+# **Notebook 14** provides a complete demonstration of TVP-GR4J on gauge
 # 410734, including calibration with all four likelihood transforms,
 # seasonal decomposition of the X1 trajectory, and a comprehensive
 # comparison against the fixed-parameter calibrations from this notebook.
