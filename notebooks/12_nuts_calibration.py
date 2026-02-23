@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.18.1
+#       jupytext_version: 1.19.1
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -366,30 +366,50 @@ def simulate_numpy_model(model_class, params, inputs_df, warmup,
     return flow[warmup:]
 
 
-def simulate_jax_from_idata(jax_model_fn, idata, precip, pet, warmup):
+def simulate_jax_from_idata(jax_model_fn, idata, precip, pet, warmup,
+                            tvp_config=None):
     """Run JAX model with posterior-median params, return sim after warmup.
 
     Handles both standard and reparameterized posteriors: when the
     ``deterministic`` group exists, physical parameter medians are taken
     from there; otherwise they come from the ``posterior`` group.
+
+    When *tvp_config* is provided, TVP parameters are reconstructed as
+    full time-series arrays (posterior-median trajectory) from the
+    deterministic group, while static parameters remain scalars.
     """
+    tvp_names = set(tvp_config.keys()) if tvp_config else set()
     skip = {"sigma", "phi"}
     median_params = {}
 
     if hasattr(idata, "deterministic") and len(idata.deterministic.data_vars) > 0:
         for v in idata.deterministic.data_vars:
-            if v not in skip:
-                median_params[v] = float(np.median(idata.deterministic[v].values))
-    else:
-        for v in idata.posterior.data_vars:
-            if v not in skip:
-                median_params[v] = float(np.median(idata.posterior[v].values))
+            if v in skip:
+                continue
+            vals = idata.deterministic[v].values
+            if v in tvp_names:
+                median_params[v] = jnp.array(np.median(vals, axis=(0, 1)))
+            elif vals.ndim <= 2:
+                median_params[v] = float(np.median(vals))
+
+    for v in idata.posterior.data_vars:
+        if v in skip or v in median_params:
+            continue
+        if v.endswith("_unit") or v.endswith("_intercept") or v.endswith("_sigma_delta") or v.endswith("_delta"):
+            continue
+        vals = idata.posterior[v].values
+        if vals.ndim <= 2:
+            median_params[v] = float(np.median(vals))
+
+    params_for_sim = {}
+    for k, v in median_params.items():
+        if isinstance(v, (float, int)):
+            params_for_sim[k] = jnp.float64(v)
+        else:
+            params_for_sim[k] = v
 
     sim = np.array(
-        jax_model_fn(
-            {k: jnp.float64(v) for k, v in median_params.items()},
-            jnp.array(precip), jnp.array(pet),
-        )["simulated_flow"]
+        jax_model_fn(params_for_sim, jnp.array(precip), jnp.array(pet))["simulated_flow"]
     )
     return sim[warmup:], median_params
 
@@ -1985,3 +2005,29 @@ plt.show()
 # - Re-evaluate **Apple Metal GPU** once `jax-metallib` fixes gradient support
 # - Consider **cloud GPU** (NVIDIA CUDA) for production Sacramento NUTS runs
 #   where the one-time JIT cost is amortised over many catchments
+#
+# ### Time-Varying Parameters (TVP) — see Notebook 13
+#
+# All experiments in this notebook use **fixed (static) parameters** — a
+# single constant value per parameter across the entire calibration period.
+# However, catchment properties (vegetation, soil moisture capacity) can
+# change over time due to land-use change, fire, drought, and seasonal
+# dynamics.
+#
+# `pyrrm` now supports **time-varying parameter (TVP)** calibration via
+# the `tvp_config` argument to `CalibrationRunner.run_nuts()`.  For
+# example, to allow the production store capacity (X1) to vary over time
+# using a Gaussian Random Walk prior:
+#
+# ```python
+# from pyrrm.calibration.tvp_priors import GaussianRandomWalk
+#
+# tvp_config = {"X1": GaussianRandomWalk(lower=1, upper=1500, resolution=5)}
+# result = runner.run_nuts(tvp_config=tvp_config, transform="sqrt",
+#                          num_warmup=500, num_samples=1000, num_chains=2)
+# ```
+#
+# **Notebook 13** provides a complete demonstration of TVP-GR4J on gauge
+# 410734, including calibration with all four likelihood transforms,
+# seasonal decomposition of the X1 trajectory, and a comprehensive
+# comparison against the fixed-parameter calibrations from this notebook.
