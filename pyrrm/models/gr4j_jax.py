@@ -6,6 +6,11 @@ JAX automatic differentiation and NumPyro NUTS sampling.  Every equation
 and constant is identical to the NumPy version; only the control-flow
 and array mutation patterns are replaced with JAX equivalents.
 
+Supports **time-varying parameters**: any subset of {X1, X2, X3} may be
+passed as ``jnp.ndarray`` of shape ``(n_timesteps,)`` instead of a
+scalar.  X4 must remain scalar (unit-hydrograph ordinates are
+pre-computed once before the scan).
+
 Reference:
     Perrin, C., Michel, C., & Andréassian, V. (2003). Improvement of a
     parsimonious model for streamflow simulation. Journal of Hydrology,
@@ -29,6 +34,8 @@ _MAX_UH2_SIZE = 40
 _STORAGE_FRACTION = 0.9
 _EPS = 1e-10
 
+_TV_PARAM_NAMES = ("X1", "X2", "X3")
+
 
 def gr4j_run_jax(
     params: dict,
@@ -40,14 +47,20 @@ def gr4j_run_jax(
     """
     Run GR4J using JAX (JIT-able, differentiable via jax.grad).
 
+    Parameters X1, X2, X3 may each be either a scalar **or** a
+    ``jnp.ndarray`` of shape ``(n_timesteps,)`` for time-varying
+    parameter (TVP) calibration.  X4 must always be a scalar.
+
     Args:
-        params: ``{"X1": float, "X2": float, "X3": float, "X4": float}``
+        params: ``{"X1": ..., "X2": ..., "X3": ..., "X4": float}``
+            where X1/X2/X3 are scalars **or** arrays of length
+            ``n_timesteps``.
         precip: Daily precipitation [mm], shape ``(n_timesteps,)``.
         pet: Daily potential evapotranspiration [mm], shape ``(n_timesteps,)``.
         production_store_init: Initial production store [mm].
-            Default ``0.3 * X1`` (matches GR4J class).
+            Default ``0.3 * X1[0]`` (or ``0.3 * X1`` if scalar).
         routing_store_init: Initial routing store [mm].
-            Default ``0.5 * X3`` (matches GR4J class).
+            Default ``0.5 * X3[0]`` (or ``0.5 * X3`` if scalar).
 
     Returns:
         Dict with keys ``"simulated_flow"``, ``"production_store"``,
@@ -59,13 +72,48 @@ def gr4j_run_jax(
     x3 = params["X3"]
     x4 = params["X4"]
 
+    # Determine which of X1/X2/X3 are time-varying (arrays).
+    # Column indices are Python ints / None so all branching is
+    # resolved at JAX trace time -- zero overhead for the static case.
+    columns = [precip, pet]
+    col_idx = 2
+    x1_col = x2_col = x3_col = None
+    x1_static = x2_static = x3_static = None
+
+    if jnp.ndim(x1) > 0:
+        columns.append(x1)
+        x1_col = col_idx
+        col_idx += 1
+    else:
+        x1_static = x1
+
+    if jnp.ndim(x2) > 0:
+        columns.append(x2)
+        x2_col = col_idx
+        col_idx += 1
+    else:
+        x2_static = x2
+
+    if jnp.ndim(x3) > 0:
+        columns.append(x3)
+        x3_col = col_idx
+        col_idx += 1
+    else:
+        x3_static = x3
+
+    forcing = jnp.stack(columns, axis=-1)
+
+    # Initial stores -- use first element when array
+    x1_0 = x1[0] if x1_col is not None else x1
+    x3_0 = x3[0] if x3_col is not None else x3
+
     if production_store_init is None:
-        prod_store_0 = 0.3 * x1
+        prod_store_0 = 0.3 * x1_0
     else:
         prod_store_0 = production_store_init
 
     if routing_store_init is None:
-        rout_store_0 = 0.5 * x3
+        rout_store_0 = 0.5 * x3_0
     else:
         rout_store_0 = routing_store_init
 
@@ -76,13 +124,15 @@ def gr4j_run_jax(
     uh2_0 = jnp.zeros(_MAX_UH2_SIZE)
 
     init_carry = (prod_store_0, rout_store_0, uh1_0, uh2_0)
-    inputs = jnp.stack([precip, pet], axis=-1)  # (n_timesteps, 2)
 
     step_fn = partial(
-        _gr4j_step, x1=x1, x2=x2, x3=x3, o_uh1=o_uh1, o_uh2=o_uh2
+        _gr4j_step,
+        x1_static=x1_static, x2_static=x2_static, x3_static=x3_static,
+        x1_col=x1_col, x2_col=x2_col, x3_col=x3_col,
+        o_uh1=o_uh1, o_uh2=o_uh2,
     )
 
-    final_carry, outputs = lax.scan(step_fn, init_carry, inputs)
+    final_carry, outputs = lax.scan(step_fn, init_carry, forcing)
     sim_flow, prod_trace, rout_trace = outputs
 
     return {
@@ -92,11 +142,25 @@ def gr4j_run_jax(
     }
 
 
-def _gr4j_step(carry, input_t, x1, x2, x3, o_uh1, o_uh2):
-    """Single GR4J timestep -- mirrors _gr4j_core inner loop."""
+def _gr4j_step(
+    carry, input_t,
+    x1_static, x2_static, x3_static,
+    x1_col, x2_col, x3_col,
+    o_uh1, o_uh2,
+):
+    """Single GR4J timestep -- mirrors _gr4j_core inner loop.
+
+    Static parameters come from the ``partial`` closure; time-varying
+    parameters are extracted from ``input_t`` at the compile-time-known
+    column index.
+    """
     prod_store, rout_store, uh1, uh2 = carry
     rain = input_t[0]
     evap = input_t[1]
+
+    x1 = input_t[x1_col] if x1_col is not None else x1_static
+    x2 = input_t[x2_col] if x2_col is not None else x2_static
+    x3 = input_t[x3_col] if x3_col is not None else x3_static
 
     psf = prod_store / (x1 + _EPS)
 

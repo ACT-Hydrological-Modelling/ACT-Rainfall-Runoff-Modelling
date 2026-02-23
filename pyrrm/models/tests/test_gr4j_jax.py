@@ -15,7 +15,7 @@ import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
 from pyrrm.models.gr4j import _gr4j_core
-from pyrrm.models.gr4j_jax import gr4j_run_jax, _MAX_UH1_SIZE, _MAX_UH2_SIZE
+from pyrrm.models.gr4j_jax import gr4j_run_jax, _MAX_UH1_SIZE, _MAX_UH2_SIZE, _TV_PARAM_NAMES
 from pyrrm.models.utils.s_curves_jax import (
     compute_uh1_ordinates_jax,
     compute_uh2_ordinates_jax,
@@ -182,6 +182,152 @@ class TestPhysicalValidity:
         pet = jnp.full(365, 3.0)
         result = gr4j_run_jax(standard_params, precip, pet)
         assert jnp.mean(result["simulated_flow"][-30:]) < 0.1
+
+
+# ---------------------------------------------------------------------------
+# Time-varying parameter (TVP) support
+# ---------------------------------------------------------------------------
+
+class TestTVPForward:
+    """Verify that gr4j_run_jax handles array-valued X1/X2/X3."""
+
+    def test_tvp_x1_output_shape(self, synthetic_inputs):
+        precip, pet = jnp.array(synthetic_inputs[0]), jnp.array(synthetic_inputs[1])
+        n = len(precip)
+        params = {"X1": jnp.full(n, 350.0), "X2": 0.5, "X3": 90.0, "X4": 1.7}
+        result = gr4j_run_jax(params, precip, pet)
+        assert result["simulated_flow"].shape == (n,)
+
+    def test_constant_tvp_matches_scalar(self, standard_params, synthetic_inputs):
+        """A constant array should produce the same result as the scalar."""
+        precip, pet = jnp.array(synthetic_inputs[0]), jnp.array(synthetic_inputs[1])
+        n = len(precip)
+        scalar_result = gr4j_run_jax(standard_params, precip, pet)
+
+        tvp_params = dict(standard_params)
+        tvp_params["X1"] = jnp.full(n, standard_params["X1"])
+        tvp_result = gr4j_run_jax(tvp_params, precip, pet)
+
+        np.testing.assert_allclose(
+            np.array(tvp_result["simulated_flow"]),
+            np.array(scalar_result["simulated_flow"]),
+            rtol=1e-10,
+        )
+
+    def test_tvp_x2_constant_matches(self, standard_params, synthetic_inputs):
+        precip, pet = jnp.array(synthetic_inputs[0]), jnp.array(synthetic_inputs[1])
+        n = len(precip)
+        scalar_result = gr4j_run_jax(standard_params, precip, pet)
+
+        tvp_params = dict(standard_params)
+        tvp_params["X2"] = jnp.full(n, standard_params["X2"])
+        tvp_result = gr4j_run_jax(tvp_params, precip, pet)
+
+        np.testing.assert_allclose(
+            np.array(tvp_result["simulated_flow"]),
+            np.array(scalar_result["simulated_flow"]),
+            rtol=1e-10,
+        )
+
+    def test_tvp_x3_constant_matches(self, standard_params, synthetic_inputs):
+        precip, pet = jnp.array(synthetic_inputs[0]), jnp.array(synthetic_inputs[1])
+        n = len(precip)
+        scalar_result = gr4j_run_jax(standard_params, precip, pet)
+
+        tvp_params = dict(standard_params)
+        tvp_params["X3"] = jnp.full(n, standard_params["X3"])
+        tvp_result = gr4j_run_jax(tvp_params, precip, pet)
+
+        np.testing.assert_allclose(
+            np.array(tvp_result["simulated_flow"]),
+            np.array(scalar_result["simulated_flow"]),
+            rtol=1e-10,
+        )
+
+    def test_tvp_multiple_params_constant(self, standard_params, synthetic_inputs):
+        """X1 and X2 both as constant arrays still match scalar."""
+        precip, pet = jnp.array(synthetic_inputs[0]), jnp.array(synthetic_inputs[1])
+        n = len(precip)
+        scalar_result = gr4j_run_jax(standard_params, precip, pet)
+
+        tvp_params = dict(standard_params)
+        tvp_params["X1"] = jnp.full(n, standard_params["X1"])
+        tvp_params["X2"] = jnp.full(n, standard_params["X2"])
+        tvp_result = gr4j_run_jax(tvp_params, precip, pet)
+
+        np.testing.assert_allclose(
+            np.array(tvp_result["simulated_flow"]),
+            np.array(scalar_result["simulated_flow"]),
+            rtol=1e-10,
+        )
+
+    def test_tvp_all_three_constant(self, standard_params, synthetic_inputs):
+        """X1, X2, X3 all as constant arrays."""
+        precip, pet = jnp.array(synthetic_inputs[0]), jnp.array(synthetic_inputs[1])
+        n = len(precip)
+        scalar_result = gr4j_run_jax(standard_params, precip, pet)
+
+        tvp_params = {
+            "X1": jnp.full(n, standard_params["X1"]),
+            "X2": jnp.full(n, standard_params["X2"]),
+            "X3": jnp.full(n, standard_params["X3"]),
+            "X4": standard_params["X4"],
+        }
+        tvp_result = gr4j_run_jax(tvp_params, precip, pet)
+
+        np.testing.assert_allclose(
+            np.array(tvp_result["simulated_flow"]),
+            np.array(scalar_result["simulated_flow"]),
+            rtol=1e-10,
+        )
+
+    def test_varying_x1_changes_output(self, standard_params, synthetic_inputs):
+        precip, pet = jnp.array(synthetic_inputs[0]), jnp.array(synthetic_inputs[1])
+        n = len(precip)
+        scalar_result = gr4j_run_jax(standard_params, precip, pet)
+
+        ramp = jnp.linspace(200.0, 500.0, n)
+        tvp_params = dict(standard_params)
+        tvp_params["X1"] = ramp
+        tvp_result = gr4j_run_jax(tvp_params, precip, pet)
+
+        assert not jnp.allclose(
+            tvp_result["simulated_flow"],
+            scalar_result["simulated_flow"],
+        )
+
+    def test_tvp_nonnegative_flows(self, synthetic_inputs):
+        precip, pet = jnp.array(synthetic_inputs[0]), jnp.array(synthetic_inputs[1])
+        n = len(precip)
+        ramp = jnp.linspace(100.0, 800.0, n)
+        params = {"X1": ramp, "X2": 0.5, "X3": 90.0, "X4": 1.7}
+        result = gr4j_run_jax(params, precip, pet)
+        assert jnp.all(result["simulated_flow"] >= 0.0)
+
+    def test_tvp_jit_compiles(self, synthetic_inputs):
+        precip, pet = jnp.array(synthetic_inputs[0]), jnp.array(synthetic_inputs[1])
+        n = len(precip)
+        params = {"X1": jnp.full(n, 350.0), "X2": 0.5, "X3": 90.0, "X4": 1.7}
+        jitted = jax.jit(lambda: gr4j_run_jax(params, precip, pet))
+        result = jitted()
+        assert result["simulated_flow"].shape == (n,)
+
+    def test_tvp_gradient_x1_intercept(self, synthetic_inputs):
+        """Gradient flows through a TVP X1 trajectory."""
+        precip, pet = jnp.array(synthetic_inputs[0]), jnp.array(synthetic_inputs[1])
+        n = len(precip)
+
+        def sum_flow(intercept):
+            x1_traj = jnp.full(n, intercept)
+            p = {"X1": x1_traj, "X2": 0.5, "X3": 90.0, "X4": 1.7}
+            return jnp.sum(gr4j_run_jax(p, precip, pet)["simulated_flow"])
+
+        grad = jax.grad(sum_flow)(350.0)
+        assert jnp.isfinite(grad)
+        assert grad != 0.0
+
+    def test_tv_param_names_constant(self):
+        assert _TV_PARAM_NAMES == ("X1", "X2", "X3")
 
 
 # ---------------------------------------------------------------------------
