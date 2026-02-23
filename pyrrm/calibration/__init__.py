@@ -111,6 +111,9 @@ except ImportError:
     NUMPYRO_AVAILABLE = False
     run_nuts = None
 
+# TVP priors (always importable; NumPyro check is internal)
+from pyrrm.calibration.tvp_priors import TVPPrior, GaussianRandomWalk
+
 # Import checkpoint manager
 from pyrrm.calibration.checkpoint import CheckpointManager, CheckpointInfo
 
@@ -197,6 +200,9 @@ __all__ = [
     # Checkpointing
     "CheckpointManager",
     "CheckpointInfo",
+    # TVP priors
+    "TVPPrior",
+    "GaussianRandomWalk",
     # Batch experiment runner and naming helpers
     "DEFAULT_CATCHMENT",
     "make_experiment_key",
