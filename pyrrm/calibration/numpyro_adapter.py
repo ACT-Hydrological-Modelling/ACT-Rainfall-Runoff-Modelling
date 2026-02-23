@@ -105,6 +105,7 @@ def _build_numpyro_model(
     reparameterize: bool = False,
     max_ninc: Optional[int] = None,
     fast_mode: bool = False,
+    tvp_config: Optional[Dict[str, Any]] = None,
 ) -> Callable:
     """
     Return a NumPyro model function suitable for ``MCMC``.
@@ -120,6 +121,12 @@ def _build_numpyro_model(
 
     When *fast_mode* is True, it is forwarded to the JAX model to
     bypass the inner sub-daily ``lax.scan`` entirely (ninc=1).
+
+    When *tvp_config* is provided, the named parameters are sampled as
+    time-varying trajectories via their ``TVPPrior.sample_numpyro``
+    method instead of as scalars.  The resulting ``params`` dict will
+    contain a mix of scalars and ``(T,)`` arrays -- which is exactly
+    what the updated ``gr4j_run_jax`` expects.
     """
     from pyrrm.calibration.likelihoods_jax import (
         gaussian_log_likelihood_jax,
@@ -128,6 +135,8 @@ def _build_numpyro_model(
     )
 
     prior_config = prior_config or {}
+    tvp_config = tvp_config or {}
+    n_timesteps = int(precip.shape[0])
 
     extra_kwargs = {}
     if max_ninc is not None:
@@ -143,7 +152,9 @@ def _build_numpyro_model(
     def numpyro_model():
         params = {}
         for name, (lo, hi) in param_bounds.items():
-            if name in prior_config:
+            if name in tvp_config:
+                params[name] = tvp_config[name].sample_numpyro(name, n_timesteps)
+            elif name in prior_config:
                 params[name] = numpyro.sample(name, prior_config[name])
             elif reparameterize:
                 unit = numpyro.sample(f"{name}_unit", dist.Uniform(0.0, 1.0))
@@ -202,6 +213,7 @@ def run_nuts(
     use_float64: bool = True,
     max_ninc: Optional[int] = None,
     fast_mode: bool = False,
+    tvp_config: Optional[Dict[str, Any]] = None,
     seed: int = 42,
     progress_bar: bool = True,
     verbose: bool = True,
@@ -249,6 +261,10 @@ def run_nuts(
             the XLA graph by ~10-16× and dramatically speeding up
             JIT compilation and gradient evaluation.  Recommended
             for calibration; validate posterior with ``fast_mode=False``.
+        tvp_config: Optional dict mapping parameter names to
+            ``TVPPrior`` instances (e.g. ``GaussianRandomWalk``).
+            Named parameters are sampled as time-varying trajectories
+            instead of scalars.  See :mod:`pyrrm.calibration.tvp_priors`.
         seed: PRNG seed for reproducibility.
         progress_bar: Show NumPyro progress bar.
         verbose: Print summary.
@@ -283,10 +299,15 @@ def run_nuts(
     pet_jax = jnp.array(pet_np.astype(dtype))
     obs_jax = jnp.array(np.asarray(observed).flatten().astype(dtype))
 
+    tvp_config = tvp_config or {}
+
     if verbose:
         print(f"Running NumPyro NUTS")
         print(f"  Model:          {model_name}")
         print(f"  Parameters:     {len(param_names)}")
+        if tvp_config:
+            tvp_names = ", ".join(sorted(tvp_config.keys()))
+            print(f"  TVP params:     {tvp_names}")
         print(f"  Warmup iters:   {num_warmup}")
         print(f"  Sample iters:   {num_samples}")
         print(f"  Chains:         {num_chains}")
@@ -316,6 +337,7 @@ def run_nuts(
         reparameterize=reparameterize,
         max_ninc=max_ninc,
         fast_mode=fast_mode,
+        tvp_config=tvp_config,
     )
 
     # NUTS kernel — init_to_median starts chains from the midpoint
@@ -350,9 +372,13 @@ def run_nuts(
     # Posterior medians as best parameters
     flat_samples = mcmc.get_samples(group_by_chain=False)
 
+    # Identify which parameters are static (scalar) vs TVP
+    static_param_names = [n for n in param_names if n not in tvp_config]
+
     if reparameterize:
         physical_samples = {}
-        for name, (lo, hi) in parameter_bounds.items():
+        for name in static_param_names:
+            lo, hi = parameter_bounds[name]
             if name in (prior_config or {}):
                 physical_samples[name] = np.array(flat_samples[name])
             else:
@@ -360,26 +386,55 @@ def run_nuts(
                 physical_samples[name] = lo + (hi - lo) * unit_arr
         best_parameters = {
             name: float(np.median(physical_samples[name]))
-            for name in param_names
+            for name in static_param_names
         }
     else:
         physical_samples = {
-            name: np.array(flat_samples[name]) for name in param_names
+            name: np.array(flat_samples[name]) for name in static_param_names
         }
         best_parameters = {
             name: float(jnp.median(flat_samples[name]))
-            for name in param_names
+            for name in static_param_names
         }
 
+    # TVP hyperparameter medians
+    tvp_hyperparams = {}
+    for tvp_name, tvp_prior in tvp_config.items():
+        hp_names = tvp_prior.hyperparameter_names(tvp_name)
+        for hp in hp_names:
+            if hp in flat_samples:
+                arr = np.array(flat_samples[hp])
+                if arr.ndim == 1:
+                    tvp_hyperparams[hp] = float(np.median(arr))
+                else:
+                    tvp_hyperparams[hp] = np.median(arr, axis=0).tolist()
+
+    best_parameters.update(tvp_hyperparams)
+
     # "Best objective" = log-likelihood at posterior median
+    # For TVP params we reconstruct the median trajectory
     from pyrrm.calibration.likelihoods_jax import (
         gaussian_log_likelihood_jax,
         transformed_gaussian_log_likelihood_jax,
         ar1_log_likelihood_jax,
     )
+
+    median_params_for_sim = {}
+    for name in static_param_names:
+        median_params_for_sim[name] = jnp.float64(
+            best_parameters[name]
+        )
+    for tvp_name in tvp_config:
+        if tvp_name in flat_samples:
+            median_params_for_sim[tvp_name] = jnp.array(
+                np.median(np.array(flat_samples[tvp_name]), axis=0)
+            )
+        else:
+            median_params_for_sim[tvp_name] = best_parameters.get(tvp_name, 0.0)
+
     median_sigma = float(jnp.median(flat_samples["sigma"]))
     median_sim = jax_model_fn(
-        {k: jnp.float64(v) for k, v in best_parameters.items()},
+        median_params_for_sim,
         precip_jax, pet_jax,
     )["simulated_flow"]
 
@@ -403,31 +458,55 @@ def run_nuts(
         ))
 
     # Build all_samples DataFrame (stacked across chains, physical scale)
+    # For static params, include physical samples; for TVP, include hyperparams.
     records = {}
-    for name in param_names:
+    for name in static_param_names:
         records[name] = physical_samples[name]
+    for tvp_name, tvp_prior in tvp_config.items():
+        for hp in tvp_prior.hyperparameter_names(tvp_name):
+            if hp in flat_samples:
+                arr = np.array(flat_samples[hp])
+                if arr.ndim == 1:
+                    records[hp] = arr
     records["sigma"] = np.array(flat_samples["sigma"])
     if error_model == "ar1":
         records["phi"] = np.array(flat_samples["phi"])
-    n_total = len(records[param_names[0]])
+
+    first_key = next(iter(records))
+    n_total = len(records[first_key])
     records["chain"] = np.repeat(np.arange(num_chains), num_samples)[:n_total]
     records["iteration"] = np.tile(np.arange(num_samples), num_chains)[:n_total]
     all_samples_df = pd.DataFrame(records)
 
     # Convergence diagnostics via ArviZ
-    # When reparameterize=True, physical names live in the deterministic
-    # group while the _unit samples live in posterior. We compute
-    # diagnostics on the _unit variables (which are the actual MCMC
-    # samples) and report them under their physical names.
+    # For static params: diagnose on _unit (if reparameterized) or physical.
+    # For TVP params: diagnose on the scalar hyperparameters (intercept, sigma_delta).
     try:
+        diag_names = []
+        rename_map = {}
+
         if reparameterize:
-            unit_names = [f"{n}_unit" for n in param_names]
-            diag_names = unit_names + ["sigma"]
-            summary = az.summary(inference_data, var_names=diag_names)
-            rename_map = {f"{n}_unit": n for n in param_names}
-            summary = summary.rename(index=rename_map)
+            for n in static_param_names:
+                if n not in (prior_config or {}):
+                    diag_names.append(f"{n}_unit")
+                    rename_map[f"{n}_unit"] = n
+                else:
+                    diag_names.append(n)
         else:
-            summary = az.summary(inference_data, var_names=param_names + ["sigma"])
+            diag_names.extend(static_param_names)
+
+        for tvp_name, tvp_prior in tvp_config.items():
+            for hp in tvp_prior.hyperparameter_names(tvp_name):
+                if hp.endswith("_delta"):
+                    continue
+                if hp in flat_samples:
+                    diag_names.append(hp)
+
+        diag_names.append("sigma")
+
+        summary = az.summary(inference_data, var_names=diag_names)
+        if rename_map:
+            summary = summary.rename(index=rename_map)
 
         convergence_diagnostics = {
             "rhat": {k: float(summary.loc[k, "r_hat"]) for k in summary.index},
@@ -450,7 +529,10 @@ def run_nuts(
             print(f"  Divergences:     {convergence_diagnostics['divergences']}")
         print("  Posterior median parameters:")
         for k, v in best_parameters.items():
-            print(f"    {k}: {v:.4f}")
+            if isinstance(v, float):
+                print(f"    {k}: {v:.4f}")
+            else:
+                print(f"    {k}: [array of length {len(v)}]")
 
     return {
         "best_parameters": best_parameters,
@@ -461,4 +543,5 @@ def run_nuts(
         "parameter_names": param_names,
         "inference_data": inference_data,
         "mcmc": mcmc,
+        "tvp_config": tvp_config if tvp_config else None,
     }

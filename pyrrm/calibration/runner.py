@@ -992,6 +992,7 @@ class CalibrationRunner:
         use_float64: bool = True,
         max_ninc: Optional[int] = None,
         fast_mode: bool = False,
+        tvp_config: Optional[dict] = None,
         seed: int = 42,
         progress_bar: bool = True,
         verbose: bool = True,
@@ -1035,6 +1036,13 @@ class CalibrationRunner:
                 Dramatically faster JIT compilation and gradient
                 evaluation.  Recommended for calibration; validate
                 posterior with ``fast_mode=False``.
+            tvp_config: Optional dict mapping parameter names to
+                ``TVPPrior`` instances for time-varying parameter
+                calibration.  Example::
+
+                    from pyrrm.calibration.tvp_priors import GaussianRandomWalk
+                    tvp_config = {"X1": GaussianRandomWalk(lower=1, upper=1500)}
+
             seed: PRNG seed for reproducibility.
             progress_bar: Show NumPyro sampling progress bar.
             verbose: Print summary to stdout.
@@ -1087,6 +1095,7 @@ class CalibrationRunner:
             use_float64=use_float64,
             max_ninc=max_ninc,
             fast_mode=fast_mode,
+            tvp_config=tvp_config,
             seed=seed,
             progress_bar=progress_bar,
             verbose=verbose,
