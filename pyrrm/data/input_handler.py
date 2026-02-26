@@ -2,17 +2,234 @@
 Input data handling for rainfall-runoff models.
 
 This module provides utilities for validating and preparing input data
-for pyrrm models.
+for pyrrm models, including a single source of truth for column-name
+aliases used across the entire library.
 """
 
+import logging
 import warnings
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional, Tuple, List
+from pathlib import Path
+from typing import TYPE_CHECKING, Dict, Optional, Tuple, List, Union
+
 import pandas as pd
 import numpy as np
 
 if TYPE_CHECKING:
     from pyrrm.models.base import BaseRainfallRunoffModel
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Canonical column-name aliases  (SINGLE SOURCE OF TRUTH)
+# ---------------------------------------------------------------------------
+# Keys are the canonical column names that pyrrm uses internally.
+# Values are ordered lists of accepted aliases (case-sensitive first pass,
+# case-insensitive fallback).
+
+COLUMN_ALIASES: Dict[str, List[str]] = {
+    "precipitation": [
+        "precipitation", "rainfall", "precip", "rain",
+        "Precipitation", "Rainfall", "P",
+    ],
+    "pet": [
+        "pet", "evapotranspiration", "evap",
+        "PET", "ET", "Evapotranspiration",
+    ],
+    "observed_flow": [
+        "observed_flow", "flow", "runoff", "discharge", "streamflow",
+        "Q", "observed",
+    ],
+    "date": [
+        "date", "Date", "datetime", "Datetime", "time", "timestamp",
+    ],
+}
+
+
+def resolve_column(
+    df: pd.DataFrame,
+    canonical_name: str,
+    *,
+    raise_on_missing: bool = False,
+) -> Optional[str]:
+    """Return the actual column name in *df* that matches *canonical_name*.
+
+    Lookup is performed in two passes:
+      1. Exact match against every alias in ``COLUMN_ALIASES[canonical_name]``.
+      2. Case-insensitive match if the first pass finds nothing.
+
+    Args:
+        df: DataFrame whose columns are searched.
+        canonical_name: One of the keys in ``COLUMN_ALIASES``
+            (``'precipitation'``, ``'pet'``, ``'observed_flow'``, ``'date'``).
+        raise_on_missing: If *True*, raise ``ValueError`` when no match is
+            found instead of returning *None*.
+
+    Returns:
+        The matching column name as it appears in *df*, or *None*.
+
+    Raises:
+        KeyError: If *canonical_name* is not in ``COLUMN_ALIASES``.
+        ValueError: If *raise_on_missing* is True and no match is found.
+    """
+    aliases = COLUMN_ALIASES[canonical_name]
+
+    # Pass 1 – exact match
+    for alias in aliases:
+        if alias in df.columns:
+            return alias
+
+    # Pass 2 – case-insensitive fallback
+    lower_map = {c.lower(): c for c in df.columns}
+    for alias in aliases:
+        actual = lower_map.get(alias.lower())
+        if actual is not None:
+            return actual
+
+    if raise_on_missing:
+        raise ValueError(
+            f"Could not find a '{canonical_name}' column in the DataFrame. "
+            f"Columns present: {list(df.columns)}. "
+            f"Accepted aliases: {aliases}"
+        )
+    return None
+
+
+def load_catchment_data(
+    precipitation_file: Union[str, Path],
+    pet_file: Union[str, Path],
+    observed_file: Union[str, Path],
+    *,
+    date_column: str = "Date",
+    observed_value_column: Optional[str] = None,
+    missing_values: Optional[List[float]] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Tuple[pd.DataFrame, np.ndarray]:
+    """Load precipitation, PET, and observed flow CSVs into a ready-to-use pair.
+
+    This is the **recommended** entry-point for preparing data in pyrrm.
+    It replaces the ~30 lines of boilerplate that were previously repeated
+    in every notebook.
+
+    The function:
+      1. Reads each CSV, auto-detects the value column via
+         :data:`COLUMN_ALIASES`, and renames to the canonical name.
+      2. Joins on the date index (inner join).
+      3. Replaces sentinel missing values with NaN and drops NaN rows.
+      4. Optionally slices to ``[start_date, end_date]``.
+
+    Args:
+        precipitation_file: Path to daily precipitation CSV (mm/day).
+        pet_file: Path to daily PET CSV (mm/day).
+        observed_file: Path to daily observed flow CSV.
+        date_column: Name of the date column in each CSV.
+        observed_value_column: Explicit name of the observed flow column.
+            If *None*, the first column matching the ``'observed_flow'``
+            alias family is used; failing that, the first numeric column
+            after the date index.
+        missing_values: Sentinel values to treat as missing (default
+            ``[-9999]``).
+        start_date: Optional start of period (inclusive, ISO-8601 string).
+        end_date: Optional end of period (inclusive, ISO-8601 string).
+
+    Returns:
+        ``(inputs, observed)`` where:
+          - **inputs** is a DataFrame with ``DatetimeIndex`` and columns
+            ``'precipitation'`` and ``'pet'``.
+          - **observed** is a 1-D ``numpy.ndarray`` of observed flow values.
+
+    Example:
+        >>> from pyrrm.data import load_catchment_data
+        >>> inputs, observed = load_catchment_data(
+        ...     'rain.csv', 'pet.csv', 'flow.csv',
+        ...     start_date='2000-01-01', end_date='2024-12-31',
+        ... )
+    """
+    if missing_values is None:
+        missing_values = [-9999]
+
+    def _read(path: Union[str, Path]) -> pd.DataFrame:
+        df = pd.read_csv(path)
+        # Auto-detect date column
+        dcol = resolve_column(df, "date")
+        if dcol is None and date_column in df.columns:
+            dcol = date_column
+        if dcol is None:
+            raise ValueError(
+                f"No date column found in {path}. "
+                f"Accepted aliases: {COLUMN_ALIASES['date']}"
+            )
+        df[dcol] = pd.to_datetime(df[dcol])
+        df = df.set_index(dcol)
+        df.index.name = None
+        return df
+
+    def _pick_value_column(
+        df: pd.DataFrame,
+        canonical: str,
+        explicit: Optional[str] = None,
+    ) -> str:
+        if explicit and explicit in df.columns:
+            return explicit
+        col = resolve_column(df, canonical)
+        if col is not None:
+            return col
+        # Fallback: first numeric column
+        numeric = df.select_dtypes(include="number").columns
+        if len(numeric) == 0:
+            raise ValueError(
+                f"No numeric column found in DataFrame for '{canonical}'. "
+                f"Columns: {list(df.columns)}"
+            )
+        return numeric[0]
+
+    # --- Load each file ---
+    precip_df = _read(precipitation_file)
+    pcol = _pick_value_column(precip_df, "precipitation")
+    precip_df = precip_df[[pcol]].rename(columns={pcol: "precipitation"})
+
+    pet_df = _read(pet_file)
+    ecol = _pick_value_column(pet_df, "pet")
+    pet_df = pet_df[[ecol]].rename(columns={ecol: "pet"})
+
+    obs_df = _read(observed_file)
+    ocol = _pick_value_column(obs_df, "observed_flow", explicit=observed_value_column)
+    obs_df = obs_df[[ocol]].rename(columns={ocol: "observed_flow"})
+
+    # --- Sentinel replacement & clean-up ---
+    for val in missing_values:
+        obs_df["observed_flow"] = obs_df["observed_flow"].replace(val, np.nan)
+    obs_df.loc[obs_df["observed_flow"] < 0, "observed_flow"] = np.nan
+    obs_df = obs_df.dropna(subset=["observed_flow"])
+
+    # --- Merge (inner join) ---
+    merged = precip_df.join(pet_df, how="inner").join(obs_df, how="inner")
+
+    # --- Date slicing ---
+    if start_date is not None:
+        merged = merged.loc[start_date:]
+    if end_date is not None:
+        merged = merged.loc[:end_date]
+
+    if len(merged) == 0:
+        raise ValueError(
+            "After merging and filtering, no data remains. "
+            "Check date ranges and sentinel values."
+        )
+
+    logger.info(
+        "Loaded %d days  (%s to %s)  |  columns: %s",
+        len(merged),
+        merged.index[0].date(),
+        merged.index[-1].date(),
+        list(merged.columns),
+    )
+
+    inputs = merged[["precipitation", "pet"]]
+    observed = merged["observed_flow"].values
+
+    return inputs, observed
 
 
 class InputDataHandler:
@@ -40,10 +257,9 @@ class InputDataHandler:
         >>> train, test = handler.split_train_test(0.7)
     """
     
-    # Standard column names
-    PRECIPITATION_COLUMNS = ['precipitation', 'rainfall', 'precip', 'rain', 'P']
-    PET_COLUMNS = ['evapotranspiration', 'pet', 'evap', 'ET', 'PET']
-    FLOW_COLUMNS = ['flow', 'runoff', 'discharge', 'Q', 'streamflow']
+    PRECIPITATION_COLUMNS = COLUMN_ALIASES["precipitation"]
+    PET_COLUMNS = COLUMN_ALIASES["pet"]
+    FLOW_COLUMNS = COLUMN_ALIASES["observed_flow"]
     
     def __init__(
         self, 
