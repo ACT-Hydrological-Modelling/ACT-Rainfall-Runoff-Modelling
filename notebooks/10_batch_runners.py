@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -81,7 +81,7 @@ plt.rcParams['figure.figsize'] = (14, 6)
 plt.rcParams['figure.dpi'] = 100
 
 # pyrrm models and objectives
-from pyrrm.models import GR4J, Sacramento
+from pyrrm.models import GR4J, Sacramento, NUMBA_AVAILABLE
 from pyrrm.objectives import NSE, KGE
 
 # Batch experiment runner
@@ -93,10 +93,14 @@ from pyrrm.calibration.batch import (
     BatchResult,
 )
 
+OUTPUT_DIR = Path('../test_data/11_batch_runners')
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 print("=" * 70)
 print("BATCH EXPERIMENT RUNNERS")
 print("=" * 70)
 print("\nAll imports loaded successfully!")
+print(f"Numba JIT acceleration: {'ACTIVE' if NUMBA_AVAILABLE else 'not available (pip install numba)'}")
 
 # %% [markdown]
 # ---
@@ -183,7 +187,7 @@ runner = BatchExperimentRunner(
     inputs=inputs_df,
     observed=observed,
     grid=grid,
-    output_dir='../test_data/batch_demo',
+    output_dir=str(OUTPUT_DIR / 'batch_demo'),
     warmup_period=365,
     catchment_info={'name': 'Synthetic Catchment', 'gauge_id': 'DEMO'},
     backend='sequential',
@@ -311,7 +315,7 @@ runner_resume = BatchExperimentRunner(
     inputs=inputs_df,
     observed=observed,
     grid=grid,
-    output_dir='../test_data/batch_demo',
+    output_dir=str(OUTPUT_DIR / 'batch_demo'),
     warmup_period=365,
     catchment_info={'name': 'Synthetic Catchment', 'gauge_id': 'DEMO'},
     backend='sequential',
@@ -378,7 +382,7 @@ list_runner = BatchExperimentRunner(
     inputs=inputs_df,
     observed=observed,
     grid=exp_list,
-    output_dir='../test_data/batch_demo_list',
+    output_dir=str(OUTPUT_DIR / 'batch_demo_list'),
     warmup_period=365,
     catchment_info={'name': 'Synthetic Catchment', 'gauge_id': 'DEMO'},
     backend='sequential',

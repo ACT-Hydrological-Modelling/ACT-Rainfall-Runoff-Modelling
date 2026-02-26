@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -81,7 +81,7 @@ plt.rcParams['figure.figsize'] = (14, 6)
 plt.rcParams['figure.dpi'] = 100
 
 # pyrrm models and objectives
-from pyrrm.models import GR4J
+from pyrrm.models import GR4J, NUMBA_AVAILABLE
 from pyrrm.objectives import NSE, KGE
 
 # Network runner
@@ -94,10 +94,16 @@ from pyrrm.network import (
     NodeCalibrationConfig,
 )
 
+OUTPUT_DIR = Path('../test_data/12_network_runners')
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+FIGURES_DIR = OUTPUT_DIR / 'figures'
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
 print("=" * 70)
 print("CATCHMENT NETWORK RUNNERS")
 print("=" * 70)
 print("\nAll imports loaded successfully!")
+print(f"Numba JIT acceleration: {'ACTIVE' if NUMBA_AVAILABLE else 'not available (pip install numba)'}")
 
 # %% [markdown]
 # ---
@@ -220,7 +226,7 @@ print(mermaid_str)
 
 # %%
 fig = plot_network(network)
-fig.savefig('../figures/network_topology_demo.png', dpi=150, bbox_inches='tight')
+fig.savefig(FIGURES_DIR / 'network_topology_demo.png', dpi=150, bbox_inches='tight')
 print("Network topology plot saved")
 plt.show()
 
@@ -240,7 +246,7 @@ net_runner = CatchmentNetworkRunner(
     default_objective=NSE(),
     default_algorithm={'method': 'sceua_direct', 'max_evals': 2000, 'seed': 42},
     default_warmup_period=365,
-    output_dir='../test_data/network_demo',
+    output_dir=str(OUTPUT_DIR / 'network_demo'),
     strategy='incremental',
     link_routing=True,
     backend='sequential',
@@ -294,12 +300,12 @@ print(result_mermaid)
 
 # %%
 fig = plot_network_hydrographs(net_result)
-fig.savefig('../figures/network_hydrographs_demo.png', dpi=150, bbox_inches='tight')
+fig.savefig(FIGURES_DIR / 'network_hydrographs_demo.png', dpi=150, bbox_inches='tight')
 plt.show()
 
 # %%
 fig = plot_network_fdc(net_result)
-fig.savefig('../figures/network_fdc_demo.png', dpi=150, bbox_inches='tight')
+fig.savefig(FIGURES_DIR / 'network_fdc_demo.png', dpi=150, bbox_inches='tight')
 plt.show()
 
 # %% [markdown]
@@ -359,8 +365,8 @@ for nid, report in net_result.node_results.items():
 # re-running calibration.
 
 # %%
-net_result.save('../test_data/network_demo/network_result.pkl')
-reloaded_net = NetworkCalibrationResult.load('../test_data/network_demo/network_result.pkl')
+net_result.save(str(OUTPUT_DIR / 'network_demo' / 'network_result.pkl'))
+reloaded_net = NetworkCalibrationResult.load(str(OUTPUT_DIR / 'network_demo' / 'network_result.pkl'))
 print(f"Reloaded: {reloaded_net}")
 
 # %% [markdown]
@@ -412,7 +418,7 @@ net_runner_v2 = CatchmentNetworkRunner(
     default_objective=NSE(),
     default_algorithm={'method': 'sceua_direct', 'max_evals': 2000, 'seed': 42},
     default_warmup_period=365,
-    output_dir='../test_data/network_demo_v2',
+    output_dir=str(OUTPUT_DIR / 'network_demo_v2'),
     strategy='incremental',
     link_routing=False,
     backend='sequential',

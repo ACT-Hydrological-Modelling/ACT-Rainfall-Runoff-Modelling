@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -78,7 +78,7 @@
 # | 3 | TVP-GR4J calibration | GRW on X1 with 4 likelihood transforms (Q, √Q, log Q, 1/Q). |
 # | 4 | TVP transform comparison | Side-by-side metrics, hydrographs, and X1(t) trajectories. |
 # | 5 | Load prior fixed-parameter results | Reload SCE-UA, PyDREAM, and NUTS-fixed reports from NB02/06/07/13. |
-# | 6 | Grand comparison | TVP vs fixed across 27 metrics; regime analysis; heatmap. |
+# | 6 | Grand comparison | TVP vs fixed across 48 metrics; regime analysis; heatmap. |
 # | 7 | Summary | Key findings, questions addressed, future work. |
 #
 # ## Key Insight
@@ -139,12 +139,14 @@ print(f"Devices     : {jax.devices()}")
 WARMUP = 365
 
 # Report directories from previous notebooks
-REPORTS_NB02 = Path('../test_data/reports')             # Notebook 02 SCE-UA
-REPORTS_PYDREAM = Path('../test_data/reports/pydream')  # Notebook 06 PyDREAM
-REPORTS_MODELS = Path('../test_data/reports/models')    # Notebook 07 Model comparison
-REPORTS_NUTS = Path('../test_data/reports/nuts')        # Notebook 13 NUTS fixed
+REPORTS_NB02 = Path('../test_data/02_calibration_quickstart/reports')   # Notebook 02 SCE-UA
+REPORTS_PYDREAM = Path('../test_data/06_algorithm_comparison/reports')  # Notebook 06 PyDREAM
+REPORTS_MODELS = Path('../test_data/07_model_comparison/reports')       # Notebook 07 Model comparison
+REPORTS_NUTS = Path('../test_data/13_nuts_calibration/reports')         # Notebook 13 NUTS fixed
 
-TVP_REPORTS_DIR = Path('../test_data/reports/tvp')
+OUTPUT_DIR = Path('../test_data/14_tvp_gr4j')
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+TVP_REPORTS_DIR = OUTPUT_DIR / 'reports'
 TVP_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 LOAD_FROM_PICKLE = False
@@ -159,147 +161,17 @@ CATCHMENT_INFO_410734 = {
 # ### Helper Functions
 #
 # Reusable analysis and plotting helpers.  The `compute_metrics` function
-# produces the same 27-metric diagnostic suite used in Notebook 13.
+# produces the canonical 48-metric diagnostic suite used across all notebooks.
 
 # %%
 # =============================================================================
-# DIAGNOSTIC HELPERS
+# DIAGNOSTIC HELPERS — imported from the canonical pyrrm module
 # =============================================================================
-
-def compute_metrics(sim, obs):
-    """Compute the full suite of 27 diagnostic metrics."""
-    sim = np.asarray(sim).flatten()
-    obs = np.asarray(obs).flatten()
-    mask = ~(np.isnan(sim) | np.isnan(obs) | np.isinf(sim) | np.isinf(obs))
-    s, o = sim[mask], obs[mask]
-    if len(s) == 0:
-        return {}
-
-    m = OrderedDict()
-    eps_flow = 0.01
-
-    ss_res = np.sum((o - s) ** 2)
-    ss_tot = np.sum((o - np.mean(o)) ** 2)
-    m['NSE'] = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
-
-    pos = o > 0
-    if pos.sum() > 0:
-        lo, ls = np.log(o[pos] + 1), np.log(np.maximum(s[pos], 0) + 1)
-        m['LogNSE'] = 1 - np.sum((lo - ls)**2) / np.sum((lo - lo.mean())**2)
-    else:
-        m['LogNSE'] = np.nan
-
-    sqo, sqs = np.sqrt(np.maximum(o, 0)), np.sqrt(np.maximum(s, 0))
-    ss_r_sq = np.sum((sqo - sqs)**2)
-    ss_t_sq = np.sum((sqo - sqo.mean())**2)
-    m['SqrtNSE'] = 1 - ss_r_sq / ss_t_sq if ss_t_sq > 0 else np.nan
-
-    inv_mask = o > eps_flow
-    if inv_mask.sum() > 0:
-        io, is_ = 1.0 / o[inv_mask], 1.0 / np.maximum(s[inv_mask], eps_flow)
-        m['InvNSE'] = 1 - np.sum((io - is_)**2) / np.sum((io - io.mean())**2)
-    else:
-        m['InvNSE'] = np.nan
-
-    def _kge(a, b):
-        if len(a) < 2:
-            return np.nan, np.nan, np.nan, np.nan
-        r = np.corrcoef(a, b)[0, 1]
-        alpha = np.std(b) / np.std(a) if np.std(a) > 0 else np.nan
-        beta = np.mean(b) / np.mean(a) if np.mean(a) != 0 else np.nan
-        kge = 1 - np.sqrt((r-1)**2 + (alpha-1)**2 + (beta-1)**2)
-        return kge, r, alpha, beta
-
-    kge, r, alpha, beta = _kge(o, s)
-    m['KGE']       = kge
-    m['KGE_r']     = r
-    m['KGE_alpha'] = alpha
-    m['KGE_beta']  = beta
-
-    if pos.sum() > 0:
-        kge_l, r_l, a_l, b_l = _kge(np.log(o[pos]+1), np.log(np.maximum(s[pos],0)+1))
-    else:
-        kge_l = r_l = a_l = b_l = np.nan
-    m['KGE_log']       = kge_l
-    m['KGE_log_r']     = r_l
-    m['KGE_log_alpha'] = a_l
-    m['KGE_log_beta']  = b_l
-
-    kge_s, r_s, a_s, b_s = _kge(sqo, sqs)
-    m['KGE_sqrt']       = kge_s
-    m['KGE_sqrt_r']     = r_s
-    m['KGE_sqrt_alpha'] = a_s
-    m['KGE_sqrt_beta']  = b_s
-
-    if inv_mask.sum() > 0:
-        kge_i, r_i, a_i, b_i = _kge(1.0/o[inv_mask], 1.0/np.maximum(s[inv_mask], eps_flow))
-    else:
-        kge_i = r_i = a_i = b_i = np.nan
-    m['KGE_inv']       = kge_i
-    m['KGE_inv_r']     = r_i
-    m['KGE_inv_alpha'] = a_i
-    m['KGE_inv_beta']  = b_i
-
-    m['RMSE']  = np.sqrt(np.mean((s - o)**2))
-    m['MAE']   = np.mean(np.abs(s - o))
-    m['PBIAS'] = 100 * np.sum(s - o) / np.sum(o) if np.sum(o) != 0 else np.nan
-
-    obs_sorted = np.sort(o)[::-1]
-    sim_sorted = np.sort(s)[::-1]
-    n = len(obs_sorted)
-
-    h = max(int(0.02 * n), 1)
-    sum_obs_h = np.sum(obs_sorted[:h])
-    m['FHV'] = 100 * (np.sum(sim_sorted[:h]) - sum_obs_h) / sum_obs_h if sum_obs_h > 0 else np.nan
-
-    i20 = int(0.20 * n)
-    i70 = min(int(0.70 * n), n)
-    sum_obs_m = np.sum(obs_sorted[i20:i70])
-    m['FMV'] = 100 * (np.sum(sim_sorted[i20:i70]) - sum_obs_m) / sum_obs_m if sum_obs_m > 0 else np.nan
-
-    i70_start = int(0.70 * n)
-    obs_low = obs_sorted[i70_start:]
-    sim_low = sim_sorted[i70_start:]
-    low_pos = obs_low > eps_flow
-    if low_pos.sum() > 0:
-        log_obs_low = np.log(obs_low[low_pos])
-        log_sim_low = np.log(np.maximum(sim_low[low_pos], eps_flow))
-        sum_log_obs = np.sum(log_obs_low - np.min(log_obs_low))
-        sum_log_sim = np.sum(log_sim_low - np.min(log_obs_low))
-        m['FLV'] = 100 * (sum_log_sim - sum_log_obs) / sum_log_obs if sum_log_obs > 0 else np.nan
-    else:
-        m['FLV'] = np.nan
-
-    return m
-
-
-METRIC_GROUPS = OrderedDict([
-    ("NSE variants", ["NSE", "LogNSE", "SqrtNSE", "InvNSE"]),
-    ("KGE(Q)", ["KGE", "KGE_r", "KGE_alpha", "KGE_beta"]),
-    ("KGE(log Q)", ["KGE_log", "KGE_log_r", "KGE_log_alpha", "KGE_log_beta"]),
-    ("KGE(√Q)", ["KGE_sqrt", "KGE_sqrt_r", "KGE_sqrt_alpha", "KGE_sqrt_beta"]),
-    ("KGE(1/Q)", ["KGE_inv", "KGE_inv_r", "KGE_inv_alpha", "KGE_inv_beta"]),
-    ("Error metrics", ["RMSE", "MAE", "PBIAS"]),
-    ("FDC volume bias", ["FHV", "FMV", "FLV"]),
-])
-
-
-def print_metrics_table(metrics, label=""):
-    """Print a grouped metrics table."""
-    print(f"\n{'=' * 60}")
-    print(f"  DIAGNOSTIC METRICS{f'  —  {label}' if label else ''}")
-    print(f"{'=' * 60}")
-    print(f"  {'Metric':<25} {'Value':>12}")
-    for group_name, keys in METRIC_GROUPS.items():
-        print(f"  {'-' * 40}")
-        print(f"  {group_name}")
-        for k in keys:
-            v = metrics.get(k, np.nan)
-            if np.isnan(v):
-                print(f"    {k:<23} {'N/A':>12}")
-            else:
-                print(f"    {k:<23} {v:>12.4f}")
-    print(f"{'=' * 60}")
+from pyrrm.analysis.diagnostics import (
+    compute_diagnostics as compute_metrics,
+    DIAGNOSTIC_GROUPS as METRIC_GROUPS,
+    print_diagnostics as print_metrics_table,
+)
 
 
 def print_multi_method_comparison(metrics_dict, label=""):
@@ -555,47 +427,34 @@ def _load_result(report_name, reports_dir=TVP_REPORTS_DIR):
 # ## Step 2: Load Gauge 410734 Data
 
 # %%
+from pyrrm.data import load_catchment_data, ml_per_day_to_mm
+
 DATA_DIR = Path('../data/410734')
 CATCHMENT_AREA_KM2 = 516.62667
 
-rainfall_df = pd.read_csv(
-    DATA_DIR / 'Default Input Set - Rain_QBN01.csv',
-    parse_dates=['Date'], index_col='Date',
+inputs_410734, obs_ml = load_catchment_data(
+    precipitation_file=DATA_DIR / 'Default Input Set - Rain_QBN01.csv',
+    pet_file=DATA_DIR / 'Default Input Set - Mwet_QBN01.csv',
+    observed_file=DATA_DIR / '410734_output_SDmodel.csv',
+    observed_value_column='Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)',
 )
-rainfall_df.columns = ['rainfall']
 
-pet_df = pd.read_csv(
-    DATA_DIR / 'Default Input Set - Mwet_QBN01.csv',
-    parse_dates=['Date'], index_col='Date',
-)
-pet_df.columns = ['pet']
-
-flow_df = pd.read_csv(
-    DATA_DIR / '410734_output_SDmodel.csv',
-    parse_dates=['Date'], index_col='Date',
-)
-obs_col = 'Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)'
-observed_df = flow_df[[obs_col]].copy()
-observed_df.columns = ['observed_flow']
-observed_df['observed_flow'] = observed_df['observed_flow'].replace(-9999, np.nan)
-observed_df.loc[observed_df['observed_flow'] < 0, 'observed_flow'] = np.nan
-observed_df = observed_df.dropna()
-
-data = rainfall_df.join(pet_df, how='inner').join(observed_df, how='inner')
-data['observed_mm'] = data['observed_flow'] / CATCHMENT_AREA_KM2
+data = inputs_410734.copy()
+data['observed_flow'] = obs_ml
+data['observed_mm'] = ml_per_day_to_mm(obs_ml, CATCHMENT_AREA_KM2)
 
 print("GAUGE 410734 — QUEANBEYAN RIVER")
 print("=" * 55)
 print(f"  Catchment area  : {CATCHMENT_AREA_KM2:.2f} km²")
 print(f"  Records         : {len(data):,} days")
 print(f"  Period          : {data.index.min().date()} → {data.index.max().date()}")
-print(f"  Mean rainfall   : {data['rainfall'].mean():.2f} mm/d")
+print(f"  Mean precip     : {data['precipitation'].mean():.2f} mm/d")
 print(f"  Mean PET        : {data['pet'].mean():.2f} mm/d")
 print(f"  Mean flow (mm)  : {data['observed_mm'].mean():.3f} mm/d")
 
 # %%
 fig, axes = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
-axes[0].bar(data.index, data['rainfall'], color='steelblue', width=1.0)
+axes[0].bar(data.index, data['precipitation'], color='steelblue', width=1.0)
 axes[0].invert_yaxis()
 axes[0].set_ylabel('Rainfall (mm/d)')
 axes[0].set_title('Input Data — Gauge 410734, Queanbeyan Catchment', fontweight='bold')
@@ -614,8 +473,7 @@ plt.tight_layout()
 plt.show()
 
 # %%
-cal_inputs_410734 = data[['rainfall', 'pet']].copy()
-cal_inputs_410734.columns = ['precipitation', 'pet']
+cal_inputs_410734 = data[['precipitation', 'pet']].copy()
 cal_obs_mm = data['observed_mm'].values
 precip_410734 = cal_inputs_410734['precipitation'].values
 pet_410734 = cal_inputs_410734['pet'].values
@@ -836,11 +694,21 @@ plt.show()
 # | Notebook 13 | NUTS fixed | GR4J | 4 transforms |
 
 # %%
-OBJECTIVES_13 = [
-    "nse", "kge", "rmse", "mae", "pbias", "lognse",
-    "kge_log", "kge_sqrt", "kge_inv",
-    "fdc_high", "fdc_mid", "fdc_low", "flow_sig",
+SCEUA_CANONICAL_SUFFIXES = [
+    "nse_sceua", "nse_sceua_log", "nse_sceua_inverse", "nse_sceua_sqrt",
+    "kge_sceua", "kge_sceua_inverse", "kge_sceua_sqrt", "kge_sceua_log",
+    "kgenp_sceua", "kgenp_sceua_inverse", "kgenp_sceua_sqrt", "kgenp_sceua_log",
+    "sdeb_sceua",
 ]
+
+DREAM_CANONICAL_SUFFIXES = [
+    "nse_dream", "nse_dream_log", "nse_dream_inverse", "nse_dream_sqrt",
+    "kge_dream", "kge_dream_inverse", "kge_dream_sqrt", "kge_dream_log",
+    "kgenp_dream", "kgenp_dream_inverse", "kgenp_dream_sqrt", "kgenp_dream_log",
+    "sdeb_dream",
+]
+
+GR4J_SCEUA_CANONICAL_SUFFIXES = SCEUA_CANONICAL_SUFFIXES
 
 TRANSFORMS_4 = ["none", "sqrt", "log", "inverse"]
 TRANSFORM_SUFFIX = {"none": "", "sqrt": "_sqrt", "log": "_log", "inverse": "_inverse"}
@@ -849,13 +717,13 @@ prior_results = OrderedDict()
 
 # --- Notebook 02: SCE-UA Sacramento on 410734 (13 objectives) ---
 print("Loading Notebook 02 SCE-UA Sacramento reports...")
-for obj in OBJECTIVES_13:
-    name = f"410734_sacramento_{obj}_sceua"
+for suffix in SCEUA_CANONICAL_SUFFIXES:
+    name = f"410734_sacramento_{suffix}"
     pkl = REPORTS_NB02 / f'{name}.pkl'
     if pkl.exists():
         try:
             report = CalibrationReport.load(str(pkl))
-            prior_results[f"SCE-UA Sac {obj}"] = {
+            prior_results[f"SCE-UA Sac {suffix}"] = {
                 "result": report.result,
                 "sim": report.simulated,
                 "obs": report.observed,
@@ -869,13 +737,13 @@ for obj in OBJECTIVES_13:
 
 # --- Notebook 06: PyDREAM Sacramento on 410734 (13 objectives) ---
 print("\nLoading Notebook 06 PyDREAM Sacramento reports...")
-for obj in OBJECTIVES_13:
-    name = f"410734_sacramento_{obj}_dream"
+for suffix in DREAM_CANONICAL_SUFFIXES:
+    name = f"410734_sacramento_{suffix}"
     pkl = REPORTS_PYDREAM / f'{name}.pkl'
     if pkl.exists():
         try:
             report = CalibrationReport.load(str(pkl))
-            prior_results[f"PyDREAM Sac {obj}"] = {
+            prior_results[f"PyDREAM Sac {suffix}"] = {
                 "result": report.result,
                 "sim": report.simulated,
                 "obs": report.observed,
@@ -889,13 +757,13 @@ for obj in OBJECTIVES_13:
 
 # --- Notebook 07: SCE-UA GR4J on 410734 (13 objectives) ---
 print("\nLoading Notebook 07 SCE-UA GR4J reports...")
-for obj in OBJECTIVES_13:
-    name = f"410734_gr4j_{obj}_sceua"
+for suffix in GR4J_SCEUA_CANONICAL_SUFFIXES:
+    name = f"410734_gr4j_{suffix}"
     pkl = REPORTS_MODELS / f'{name}.pkl'
     if pkl.exists():
         try:
             report = CalibrationReport.load(str(pkl))
-            prior_results[f"SCE-UA GR4J {obj}"] = {
+            prior_results[f"SCE-UA GR4J {suffix}"] = {
                 "result": report.result,
                 "sim": report.simulated,
                 "obs": report.observed,
@@ -1034,17 +902,17 @@ else:
 # %% [markdown]
 # ### 6.3 Regime-Based Analysis
 #
-# Group the 27 metrics by flow regime to see where TVP helps most.
+# Group the 48 metrics by flow regime to see where TVP helps most.
 
 # %%
 REGIME_GROUPS = OrderedDict([
     ("Very High",  ["FHV"]),
     ("High",       ["NSE", "KGE", "KGE_r", "KGE_alpha", "KGE_beta", "RMSE"]),
-    ("Mid",        ["SqrtNSE", "KGE_sqrt", "KGE_sqrt_r", "KGE_sqrt_alpha",
+    ("Mid",        ["NSE_sqrt", "KGE_sqrt", "KGE_sqrt_r", "KGE_sqrt_alpha",
                     "KGE_sqrt_beta", "MAE", "FMV"]),
-    ("Low",        ["LogNSE", "KGE_log", "KGE_log_r", "KGE_log_alpha",
+    ("Low",        ["NSE_log", "KGE_log", "KGE_log_r", "KGE_log_alpha",
                     "KGE_log_beta", "PBIAS"]),
-    ("Very Low",   ["InvNSE", "KGE_inv", "KGE_inv_r", "KGE_inv_alpha",
+    ("Very Low",   ["NSE_inv", "KGE_inv", "KGE_inv_r", "KGE_inv_alpha",
                     "KGE_inv_beta", "FLV"]),
 ])
 
@@ -1118,9 +986,21 @@ if sceua_entries:
 if dream_entries:
     heatmap_methods["Best PyDREAM"] = best_dream
 
-display_metrics = ["NSE", "LogNSE", "SqrtNSE", "InvNSE",
-                   "KGE", "KGE_log", "KGE_sqrt", "KGE_inv",
-                   "RMSE", "MAE", "PBIAS", "FHV", "FMV", "FLV"]
+display_metrics = [
+    "NSE", "NSE_sqrt", "NSE_log", "NSE_inv",
+    "KGE", "KGE_sqrt", "KGE_log", "KGE_inv",
+    "KGE_np", "KGE_np_sqrt", "KGE_np_log", "KGE_np_inv",
+    "RMSE", "MAE", "PBIAS", "FHV", "FMV", "FLV",
+    "BFI_obs", "BFI_sim",
+    "Sig_BFI", "Sig_Flash", "Sig_Q95", "Sig_Q5",
+]
+
+_HIGHER_IS_BETTER_14 = {
+    'NSE', 'NSE_sqrt', 'NSE_log', 'NSE_inv',
+    'KGE', 'KGE_sqrt', 'KGE_log', 'KGE_inv',
+    'KGE_np', 'KGE_np_sqrt', 'KGE_np_log', 'KGE_np_inv',
+}
+_CLOSER_TO_ZERO_14 = {'PBIAS', 'FHV', 'FMV', 'FLV', 'Sig_BFI', 'Sig_Flash', 'Sig_Q95', 'Sig_Q5'}
 
 method_names = list(heatmap_methods.keys())
 data_matrix = np.full((len(display_metrics), len(method_names)), np.nan)
@@ -1128,8 +1008,28 @@ for j, method in enumerate(method_names):
     for i, mn in enumerate(display_metrics):
         data_matrix[i, j] = heatmap_methods[method].get(mn, np.nan)
 
-fig, ax = plt.subplots(figsize=(max(12, len(method_names) * 1.4), 10))
-im = ax.imshow(data_matrix, cmap='RdYlGn', aspect='auto')
+z_norm = np.full_like(data_matrix, 0.5)
+for i, mn in enumerate(display_metrics):
+    row = data_matrix[i, :]
+    if mn in _CLOSER_TO_ZERO_14:
+        abs_row = np.abs(row)
+        v_min, v_max = np.nanmin(abs_row), np.nanmax(abs_row)
+        if v_max > v_min:
+            z_norm[i, :] = 1.0 - (abs_row - v_min) / (v_max - v_min)
+    else:
+        v_min, v_max = np.nanmin(row), np.nanmax(row)
+        if v_max > v_min:
+            normed = (row - v_min) / (v_max - v_min)
+            if mn not in _HIGHER_IS_BETTER_14:
+                normed = 1.0 - normed
+            z_norm[i, :] = normed
+
+from matplotlib.colors import LinearSegmentedColormap
+_cmap_14 = LinearSegmentedColormap.from_list(
+    'rank', ['#d32f2f', '#fff9c4', '#1565c0'], N=256)
+
+fig, ax = plt.subplots(figsize=(max(12, len(method_names) * 1.6), 14))
+im = ax.imshow(z_norm, cmap=_cmap_14, vmin=0, vmax=1, aspect='auto')
 ax.set_xticks(range(len(method_names)))
 ax.set_xticklabels(method_names, rotation=45, ha='right', fontsize=9)
 ax.set_yticks(range(len(display_metrics)))
@@ -1139,11 +1039,15 @@ for i in range(len(display_metrics)):
     for j in range(len(method_names)):
         v = data_matrix[i, j]
         if not np.isnan(v):
-            ax.text(j, i, f'{v:.2f}', ha='center', va='center', fontsize=7,
-                    color='white' if abs(v) > 0.7 * np.nanmax(np.abs(data_matrix)) else 'black')
+            rank_val = z_norm[i, j]
+            txt_color = 'white' if rank_val < 0.25 or rank_val > 0.75 else 'black'
+            ax.text(j, i, f'{v:.3f}', ha='center', va='center', fontsize=6.5, color=txt_color)
 
-ax.set_title('Diagnostic Metrics — TVP vs Fixed-Parameter Methods', fontweight='bold')
-plt.colorbar(im, ax=ax, shrink=0.8)
+cbar = plt.colorbar(im, ax=ax, shrink=0.6, ticks=[0, 0.5, 1])
+cbar.ax.set_yticklabels(['worst', 'mid', 'best'])
+ax.set_title('Diagnostic Metrics — TVP vs Fixed-Parameter Methods\n'
+             '(Blue = best, Red = worst; bias/signature metrics ranked by closeness to zero)',
+             fontweight='bold', fontsize=12)
 plt.tight_layout()
 plt.show()
 
@@ -1167,7 +1071,7 @@ plt.show()
 #
 # ### Key Questions Addressed
 #
-# - **Does TVP improve fit quality?** Compare the 27-metric suite across
+# - **Does TVP improve fit quality?** Compare the 48-metric suite across
 #   TVP and all fixed-parameter methods
 # - **For which flow regimes?** The regime-based analysis shows where TVP
 #   gains (or loses) ground
