@@ -8,6 +8,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Define Sig_Q95 and Sig_Q5 when observed percentile is zero (ephemeral catchments): use 0% if sim also low, else 100% (`analysis/diagnostics.py`)
+- Define FLV for degenerate low-flow regimes: constant observed low flows (zero log-spread) and no observed flow above epsilon (`analysis/diagnostics.py`)
+
 ### Added
 
 - Add `dream_result_to_inference_data()` converter to build ArviZ `InferenceData` from PyDREAM `CalibrationResult` chain data (`visualization/mcmc_plots.py`)
