@@ -8,7 +8,13 @@ Provides:
 """
 
 from pyrrm.analysis.sensitivity import SobolSensitivityAnalysis, SobolResult
-from pyrrm.analysis.diagnostics import ModelDiagnostics
+from pyrrm.analysis.diagnostics import (
+    ModelDiagnostics,
+    compute_diagnostics,
+    DIAGNOSTIC_GROUPS,
+    print_diagnostics,
+    lyne_hollick_baseflow,
+)
 
 try:
     from pyrrm.analysis.mcmc_diagnostics import (
@@ -27,6 +33,10 @@ __all__ = [
     "SobolSensitivityAnalysis",
     "SobolResult",
     "ModelDiagnostics",
+    "compute_diagnostics",
+    "DIAGNOSTIC_GROUPS",
+    "print_diagnostics",
+    "lyne_hollick_baseflow",
     "ARVIZ_AVAILABLE",
     "check_convergence",
     "posterior_summary",
