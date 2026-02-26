@@ -23,8 +23,8 @@ A web-based graphical user interface for the pyrrm (Python Rainfall-Runoff Model
 
 - **SCE-UA Direct** - Shuffled Complex Evolution (recommended)
 - **Differential Evolution** - SciPy global optimization
-- **DREAM** - Bayesian MCMC (requires SpotPy)
-- **PyDREAM** - MT-DREAM(ZS) (requires PyDREAM)
+- **PyDREAM** - MT-DREAM(ZS) Bayesian MCMC (requires PyDREAM)
+- **NumPyro NUTS** - No-U-Turn Sampler (requires JAX + NumPyro)
 
 ## Quick Start
 

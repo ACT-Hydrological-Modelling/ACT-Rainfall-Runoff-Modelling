@@ -242,7 +242,7 @@ All visualisation methods are also available as plain DataFrames (without stylin
 | Ray | New (optional) | Parallel task scheduling |
 | tqdm | New (optional) | Progress bars |
 
-Ray is handled as an optional dependency using the same try/except pattern as SpotPy and PyDREAM. The library works fully without it; Ray only unlocks the `backend='ray'` option.
+Ray is handled as an optional dependency using the same try/except pattern as PyDREAM and NumPyro. The library works fully without it; Ray only unlocks the `backend='ray'` option.
 
 ---
 
