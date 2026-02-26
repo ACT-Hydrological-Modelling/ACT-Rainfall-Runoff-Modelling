@@ -758,6 +758,7 @@ The `notebooks/` directory contains 13 educational notebooks (Jupytext-paired `.
 | [Data Preparation Guide](docs/data_preparation.md) | How to prepare input data for single-catchment, batch, and network workflows |
 | [APEX Guide](docs/APEX_GUIDE.md) | Detailed APEX objective function documentation |
 | [Benchmark Scripts](benchmark/) | Sacramento verification against C# reference implementation |
+| [Testing Guide](TESTING.md) | Test strategy, 547-test inventory, and instructions for running the test suite |
 | [Changelog](CHANGELOG.md) | All notable changes to pyrrm |
 | [Lessons Learnt](LESSONS_LEARNT.md) | Development insights and pitfalls |
 
@@ -816,10 +817,13 @@ Contributions are welcome! Whether you're fixing bugs, adding new models, improv
 ```bash
 git clone https://github.com/ACTGovernment/ACT-Rainfall-Runoff-Modelling.git
 cd ACT-Rainfall-Runoff-Modelling
-pip install -e ".[dev]"
+pip install -e ".[dev,numba,jax]"
 
-# Run tests
-pytest tests/
+# Run tests (excluding slow benchmarks)
+pytest pyrrm/ -m "not slow"
+
+# Run all tests including benchmarks
+pytest pyrrm/
 ```
 
 ### Guidelines
