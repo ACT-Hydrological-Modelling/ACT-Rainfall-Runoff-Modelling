@@ -61,6 +61,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add parameter identifiability heatmap (normalised HDI width / parameter range, 22 params x 4 transforms) in NB06 (`notebooks/06_algorithm_comparison.py`)
 - Add SCE-UA point-in-posterior heatmap (position within PyDREAM 94% HDI, 22 params x 13 objectives) in NB06 (`notebooks/06_algorithm_comparison.py`)
 - Add compact convergence summary table (max/mean R-hat, min ESS) for 4 PyDREAM transforms in NB06 (`notebooks/06_algorithm_comparison.py`)
+- Add comprehensive test documentation for reviewer confidence (`TESTING.md`)
+- Add GitHub Actions CI workflow for automated test execution (`.github/workflows/tests.yml`)
+- Add coverage reporting via pytest-cov in default pytest configuration (`pyproject.toml`)
 
 ### Changed
 
