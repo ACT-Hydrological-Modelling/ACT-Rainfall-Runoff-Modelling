@@ -107,7 +107,7 @@ try:
         run_nuts,
         NUMPYRO_AVAILABLE,
     )
-except ImportError:
+except (ImportError, NameError):
     NUMPYRO_AVAILABLE = False
     run_nuts = None
 
@@ -119,6 +119,9 @@ from pyrrm.calibration.checkpoint import CheckpointManager, CheckpointInfo
 
 # Import CalibrationReport for comprehensive result storage
 from pyrrm.calibration.report import CalibrationReport
+
+# Export report to Excel/CSV for sharing
+from pyrrm.calibration.export import export_report, export_batch
 
 # Batch experiment runner and naming convention helpers
 from pyrrm.calibration.batch import (
@@ -148,6 +151,8 @@ __all__ = [
     "CalibrationRunner",
     "CalibrationResult",
     "CalibrationReport",
+    "export_report",
+    "export_batch",
     # Legacy objective functions
     "ObjectiveFunction",
     "NSE",
