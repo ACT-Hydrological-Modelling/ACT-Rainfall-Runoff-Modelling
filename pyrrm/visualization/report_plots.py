@@ -132,9 +132,9 @@ def _calculate_basic_metrics(obs: np.ndarray, sim: np.ndarray) -> dict:
         log_sim = np.log(np.maximum(sim_pos, 0) + 1)
         ss_res_log = np.sum((log_obs - log_sim) ** 2)
         ss_tot_log = np.sum((log_obs - np.mean(log_obs)) ** 2)
-        metrics['LogNSE'] = 1 - ss_res_log / ss_tot_log if ss_tot_log > 0 else np.nan
+        metrics['NSE_log'] = 1 - ss_res_log / ss_tot_log if ss_tot_log > 0 else np.nan
     else:
-        metrics['LogNSE'] = np.nan
+        metrics['NSE_log'] = np.nan
     
     # Inverse NSE (1/Q transformation)
     obs_pos_inv = obs_v[obs_v > 0.01]
@@ -144,16 +144,16 @@ def _calculate_basic_metrics(obs: np.ndarray, sim: np.ndarray) -> dict:
         inv_sim = 1.0 / np.maximum(sim_pos_inv, 0.01)
         ss_res_inv = np.sum((inv_obs - inv_sim) ** 2)
         ss_tot_inv = np.sum((inv_obs - np.mean(inv_obs)) ** 2)
-        metrics['InvNSE'] = 1 - ss_res_inv / ss_tot_inv if ss_tot_inv > 0 else np.nan
+        metrics['NSE_inv'] = 1 - ss_res_inv / ss_tot_inv if ss_tot_inv > 0 else np.nan
     else:
-        metrics['InvNSE'] = np.nan
+        metrics['NSE_inv'] = np.nan
     
     # Sqrt NSE
     sqrt_obs = np.sqrt(np.maximum(obs_v, 0))
     sqrt_sim = np.sqrt(np.maximum(sim_v, 0))
     ss_res_sqrt = np.sum((sqrt_obs - sqrt_sim) ** 2)
     ss_tot_sqrt = np.sum((sqrt_obs - np.mean(sqrt_obs)) ** 2)
-    metrics['SqrtNSE'] = 1 - ss_res_sqrt / ss_tot_sqrt if ss_tot_sqrt > 0 else np.nan
+    metrics['NSE_sqrt'] = 1 - ss_res_sqrt / ss_tot_sqrt if ss_tot_sqrt > 0 else np.nan
     
     # ==========================================================================
     # KGE (standard) and components
@@ -329,8 +329,8 @@ def _get_metric_color(value: float, metric_name: str) -> str:
     # Efficiency metrics (higher is better, 1.0 is perfect)
     # Include all NSE variants with their display names
     efficiency_metrics = [
-        'NSE', 'KGE', 'LogNSE', 'SqrtNSE', 'InvNSE', 
-        'NSE (high flows)', 'LogNSE (low flows)', 'SqrtNSE (balanced)', 'InvNSE (very low flows)',
+        'NSE', 'KGE', 'NSE_log', 'NSE_sqrt', 'NSE_inv',
+        'NSE (high flows)', 'NSE_log (low flows)', 'NSE_sqrt (balanced)', 'NSE_inv (very low flows)',
         'KGE_log', 'KGE_sqrt', 'KGE_inv', 'KGE(log)', 'KGE(√Q)', 'KGE(1/Q)',
         'KGE_r', 'r', 'R2', 'R²', 'r (corr)', 'R² (variance explained)'
     ]
@@ -657,9 +657,9 @@ def plot_report_card_matplotlib(
     table_sections = [
         ('NSE Variants (Flow Regime Focus)', [
             ('NSE (high flows)', metrics.get('NSE', np.nan), 'efficiency'),
-            ('LogNSE (low flows)', metrics.get('LogNSE', np.nan), 'efficiency'),
-            ('SqrtNSE (balanced)', metrics.get('SqrtNSE', np.nan), 'efficiency'),
-            ('InvNSE (very low flows)', metrics.get('InvNSE', np.nan), 'efficiency'),
+            ('NSE_log (low flows)', metrics.get('NSE_log', np.nan), 'efficiency'),
+            ('NSE_sqrt (balanced)', metrics.get('NSE_sqrt', np.nan), 'efficiency'),
+            ('NSE_inv (very low flows)', metrics.get('NSE_inv', np.nan), 'efficiency'),
         ]),
         ('KGE (Q) - High Flows', [
             ('KGE', metrics.get('KGE', np.nan), 'efficiency'),
@@ -1229,9 +1229,9 @@ def plot_report_card_plotly(
         # NSE Variants
         ('<b>NSE Variants</b>', '', '', True),
         ('NSE', f"{metrics.get('NSE', np.nan):.4f}" if not np.isnan(metrics.get('NSE', np.nan)) else "N/A", 'Nash-Sutcliffe Efficiency', False),
-        ('LogNSE', f"{metrics.get('LogNSE', np.nan):.4f}" if not np.isnan(metrics.get('LogNSE', np.nan)) else "N/A", 'NSE on log(Q)', False),
-        ('SqrtNSE', f"{metrics.get('SqrtNSE', np.nan):.4f}" if not np.isnan(metrics.get('SqrtNSE', np.nan)) else "N/A", 'NSE on √Q', False),
-        ('InvNSE', f"{metrics.get('InvNSE', np.nan):.4f}" if not np.isnan(metrics.get('InvNSE', np.nan)) else "N/A", 'NSE on 1/Q', False),
+        ('NSE_log', f"{metrics.get('NSE_log', np.nan):.4f}" if not np.isnan(metrics.get('NSE_log', np.nan)) else "N/A", 'NSE on log(Q)', False),
+        ('NSE_sqrt', f"{metrics.get('NSE_sqrt', np.nan):.4f}" if not np.isnan(metrics.get('NSE_sqrt', np.nan)) else "N/A", 'NSE on √Q', False),
+        ('NSE_inv', f"{metrics.get('NSE_inv', np.nan):.4f}" if not np.isnan(metrics.get('NSE_inv', np.nan)) else "N/A", 'NSE on 1/Q', False),
         # KGE Variants
         ('<b>KGE Variants</b>', '', '', True),
         ('KGE', f"{metrics.get('KGE', np.nan):.4f}" if not np.isnan(metrics.get('KGE', np.nan)) else "N/A", 'Kling-Gupta Efficiency', False),

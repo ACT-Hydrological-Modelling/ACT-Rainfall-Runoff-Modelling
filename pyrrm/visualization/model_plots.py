@@ -5,13 +5,20 @@ This module provides plotting functions for rainfall-runoff model outputs,
 including hydrographs, flow duration curves, scatter plots, and more.
 """
 
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, Union
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
+
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
 
 # Dark theme styling
 DARK_STYLE = {
@@ -646,4 +653,384 @@ def create_calibration_dashboard(
     
     fig.suptitle(f'Calibration Results ({result.method})', fontsize=14, fontweight='bold', y=0.98)
     
+    return fig
+
+
+# =========================================================================
+# Integrated precipitation–flow plots (single-axis with twin y-axis)
+# =========================================================================
+
+def plot_precip_flow(
+    dates: pd.DatetimeIndex,
+    precipitation: np.ndarray,
+    observed_flow: np.ndarray,
+    *,
+    title: Optional[str] = None,
+    flow_units: str = 'ML/d',
+    precip_units: str = 'mm/d',
+    figsize: Tuple[int, int] = (14, 5),
+    dark_theme: bool = False,
+    precip_color: str = '#45b7d1',
+    flow_color: str = '#1f77b4',
+    flow_linewidth: float = 0.6,
+    precip_alpha: float = 0.65,
+    flow_alpha: float = 0.85,
+    precip_max_factor: float = 3.0,
+    ax: Optional[Axes] = None,
+) -> Figure:
+    """Integrated precipitation and observed-flow plot on a single axis.
+
+    Precipitation is drawn as inverted bars from the top of the plot and
+    observed flow is drawn as a line from the bottom, sharing the x-axis.
+    This avoids the visual clutter of two vertically-stacked subplots while
+    keeping the rainfall–runoff relationship visually clear.
+
+    Args:
+        dates: DatetimeIndex for the x-axis.
+        precipitation: Daily precipitation array (mm/d).
+        observed_flow: Daily observed flow array (ML/d or mm/d).
+        title: Plot title.
+        flow_units: Label for the flow y-axis.
+        precip_units: Label for the precipitation y-axis.
+        figsize: Figure size (width, height) when *ax* is ``None``.
+        dark_theme: Apply the dark background theme.
+        precip_color: Bar colour for precipitation.
+        flow_color: Line colour for observed flow.
+        flow_linewidth: Line width for the flow trace.
+        precip_alpha: Opacity for the precipitation bars.
+        flow_alpha: Opacity for the flow line.
+        precip_max_factor: The precipitation y-axis limit is set to
+            ``max(precipitation) * precip_max_factor`` so that the bars
+            occupy only the upper portion of the plot.
+        ax: Optional pre-existing matplotlib Axes to draw on. If ``None``
+            a new Figure and Axes are created.
+
+    Returns:
+        The matplotlib Figure containing the plot.
+
+    Example:
+        >>> from pyrrm.visualization import plot_precip_flow
+        >>> fig = plot_precip_flow(df.index, df['precipitation'].values,
+        ...                        observed, title='410734')
+        >>> fig.savefig('precip_flow.png', dpi=150)
+    """
+    if dark_theme:
+        _apply_dark_style()
+
+    own_figure = ax is None
+    if own_figure:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    if dark_theme:
+        fig.patch.set_facecolor(DARK_STYLE['figure.facecolor'])
+        ax.set_facecolor(DARK_STYLE['axes.facecolor'])
+
+    ax_precip = ax.twinx()
+
+    ax.plot(
+        dates, observed_flow,
+        color=flow_color, linewidth=flow_linewidth, alpha=flow_alpha,
+        zorder=3,
+    )
+    ax.set_ylabel(f'Flow ({flow_units})', color=flow_color, fontsize=10)
+    ax.tick_params(axis='y', labelcolor=flow_color)
+    ax.set_xlim(dates[0], dates[-1])
+
+    ax_precip.bar(
+        dates, precipitation,
+        width=1.0, color=precip_color, alpha=precip_alpha,
+        zorder=2,
+    )
+    ax_precip.invert_yaxis()
+    pmax = np.nanmax(precipitation) if np.any(~np.isnan(precipitation)) else 1.0
+    ax_precip.set_ylim(pmax * precip_max_factor, 0)
+    ax_precip.set_ylabel(f'P ({precip_units})', color=precip_color, fontsize=10)
+    ax_precip.tick_params(axis='y', labelcolor=precip_color)
+
+    if title:
+        ax.set_title(title, fontsize=12, fontweight='bold')
+
+    if own_figure:
+        fig.tight_layout()
+
+    return fig
+
+
+def plot_precip_flow_grid(
+    gauge_datasets: Dict[str, Dict[str, Any]],
+    *,
+    ncols: int = 1,
+    per_row_height: float = 3.5,
+    width: float = 16,
+    dark_theme: bool = False,
+    **kwargs,
+) -> Figure:
+    """Grid of integrated precipitation–flow plots for multiple gauges.
+
+    Args:
+        gauge_datasets: Mapping of ``gauge_id`` to a dict with keys
+            ``dates`` (DatetimeIndex), ``precipitation`` (array),
+            ``observed_flow`` (array), and optionally ``title`` (str).
+        ncols: Number of columns in the grid.
+        per_row_height: Height per row in inches.
+        width: Total figure width in inches.
+        dark_theme: Apply dark theme.
+        **kwargs: Extra keyword arguments forwarded to
+            :func:`plot_precip_flow`.
+
+    Returns:
+        matplotlib Figure.
+    """
+    n = len(gauge_datasets)
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(width, per_row_height * nrows),
+        squeeze=False,
+    )
+
+    if dark_theme:
+        _apply_dark_style()
+        fig.patch.set_facecolor(DARK_STYLE['figure.facecolor'])
+
+    for idx, (gauge_id, data) in enumerate(gauge_datasets.items()):
+        row, col = divmod(idx, ncols)
+        ax = axes[row, col]
+        plot_precip_flow(
+            dates=data['dates'],
+            precipitation=data['precipitation'],
+            observed_flow=data['observed_flow'],
+            title=data.get('title', gauge_id),
+            ax=ax,
+            dark_theme=dark_theme,
+            **kwargs,
+        )
+
+    for idx in range(n, nrows * ncols):
+        row, col = divmod(idx, ncols)
+        axes[row, col].set_visible(False)
+
+    fig.tight_layout()
+    return fig
+
+
+# ---- Plotly versions ----------------------------------------------------
+
+def plot_precip_flow_plotly(
+    dates: pd.DatetimeIndex,
+    precipitation: np.ndarray,
+    observed_flow: np.ndarray,
+    *,
+    title: Optional[str] = None,
+    flow_units: str = 'ML/d',
+    precip_units: str = 'mm/d',
+    height: int = 400,
+    width: Optional[int] = None,
+    precip_color: str = 'rgba(69,183,209,0.55)',
+    flow_color: str = '#1f77b4',
+    precip_max_factor: float = 3.0,
+) -> 'go.Figure':
+    """Interactive Plotly version of the integrated precipitation–flow plot.
+
+    Creates a single subplot with two y-axes: observed flow (left, bottom
+    origin) and precipitation (right, inverted so bars hang from the top).
+
+    Args:
+        dates: DatetimeIndex for the x-axis.
+        precipitation: Daily precipitation array (mm/d).
+        observed_flow: Daily observed flow array.
+        title: Plot title.
+        flow_units: Units shown on the left y-axis label.
+        precip_units: Units shown on the right y-axis label.
+        height: Figure height in pixels.
+        width: Figure width in pixels (``None`` → Plotly default / responsive).
+        precip_color: Colour for precipitation bars (RGBA string recommended).
+        flow_color: Colour for the flow trace.
+        precip_max_factor: Controls how much vertical space the precip bars
+            occupy (higher values push bars into a thinner band at the top).
+
+    Returns:
+        Plotly Figure object.
+
+    Example:
+        >>> from pyrrm.visualization import plot_precip_flow_plotly
+        >>> fig = plot_precip_flow_plotly(df.index, precip, flow,
+        ...                               title='Gauge 410734')
+        >>> fig.show()
+    """
+    if not PLOTLY_AVAILABLE:
+        raise ImportError(
+            "Plotly is required for this function. Install with: pip install plotly"
+        )
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(
+        go.Scatter(
+            x=dates, y=observed_flow,
+            name=f'Observed Flow ({flow_units})',
+            line=dict(color=flow_color, width=1),
+            hovertemplate='%{x|%d %b %Y}<br>Flow: %{y:,.1f} ' + flow_units + '<extra></extra>',
+        ),
+        secondary_y=False,
+    )
+
+    fig.add_trace(
+        go.Bar(
+            x=dates, y=precipitation,
+            name=f'Precipitation ({precip_units})',
+            marker_color=precip_color,
+            hovertemplate='%{x|%d %b %Y}<br>P: %{y:.1f} ' + precip_units + '<extra></extra>',
+        ),
+        secondary_y=True,
+    )
+
+    pmax = float(np.nanmax(precipitation)) if np.any(~np.isnan(precipitation)) else 1.0
+
+    fig.update_layout(
+        title=dict(text=title or '', x=0.5, font=dict(size=14)),
+        height=height,
+        width=width,
+        margin=dict(l=60, r=60, t=50, b=40),
+        legend=dict(
+            orientation='h', yanchor='bottom', y=1.02,
+            xanchor='center', x=0.5,
+        ),
+        hovermode='x unified',
+        bargap=0,
+    )
+
+    fig.update_yaxes(
+        title_text=f'Flow ({flow_units})',
+        secondary_y=False,
+        rangemode='tozero',
+    )
+    fig.update_yaxes(
+        title_text=f'P ({precip_units})',
+        secondary_y=True,
+        autorange='reversed',
+        range=[pmax * precip_max_factor, 0],
+    )
+
+    return fig
+
+
+def plot_precip_flow_grid_plotly(
+    gauge_datasets: Dict[str, Dict[str, Any]],
+    *,
+    ncols: int = 1,
+    per_row_height: int = 300,
+    width: Optional[int] = None,
+    flow_units: str = 'ML/d',
+    precip_units: str = 'mm/d',
+    precip_color: str = 'rgba(69,183,209,0.55)',
+    flow_color: str = '#1f77b4',
+    precip_max_factor: float = 3.0,
+    shared_xaxes: bool = False,
+) -> 'go.Figure':
+    """Multi-gauge grid of integrated precipitation–flow plots in Plotly.
+
+    Args:
+        gauge_datasets: Mapping of ``gauge_id`` to a dict with keys
+            ``dates``, ``precipitation``, ``observed_flow``, and optionally
+            ``title``.
+        ncols: Number of columns in the grid.
+        per_row_height: Height per row in pixels.
+        width: Total figure width in pixels (``None`` → responsive).
+        flow_units: Units for the flow y-axis.
+        precip_units: Units for the precipitation y-axis.
+        precip_color: Colour for precipitation bars.
+        flow_color: Colour for the flow line.
+        precip_max_factor: Controls vertical space for precipitation.
+        shared_xaxes: Share x-axes across rows.
+
+    Returns:
+        Plotly Figure object.
+    """
+    if not PLOTLY_AVAILABLE:
+        raise ImportError(
+            "Plotly is required for this function. Install with: pip install plotly"
+        )
+
+    n = len(gauge_datasets)
+    nrows = int(np.ceil(n / ncols))
+    items = list(gauge_datasets.items())
+
+    subplot_specs = [
+        [{"secondary_y": True} for _ in range(ncols)]
+        for _ in range(nrows)
+    ]
+    subplot_titles = []
+    for gauge_id, data in items:
+        subplot_titles.append(data.get('title', gauge_id))
+    while len(subplot_titles) < nrows * ncols:
+        subplot_titles.append('')
+
+    fig = make_subplots(
+        rows=nrows, cols=ncols,
+        subplot_titles=subplot_titles,
+        specs=subplot_specs,
+        shared_xaxes=shared_xaxes,
+        vertical_spacing=0.08,
+    )
+
+    for idx, (gauge_id, data) in enumerate(items):
+        row = idx // ncols + 1
+        col = idx % ncols + 1
+        show_legend = idx == 0
+
+        dates = data['dates']
+        precip = data['precipitation']
+        flow = data['observed_flow']
+
+        fig.add_trace(
+            go.Scatter(
+                x=dates, y=flow,
+                name=f'Observed Flow ({flow_units})',
+                line=dict(color=flow_color, width=1),
+                legendgroup='flow',
+                showlegend=show_legend,
+                hovertemplate='%{x|%d %b %Y}<br>Flow: %{y:,.1f} ' + flow_units + '<extra></extra>',
+            ),
+            row=row, col=col, secondary_y=False,
+        )
+
+        fig.add_trace(
+            go.Bar(
+                x=dates, y=precip,
+                name=f'Precipitation ({precip_units})',
+                marker_color=precip_color,
+                legendgroup='precip',
+                showlegend=show_legend,
+                hovertemplate='%{x|%d %b %Y}<br>P: %{y:.1f} ' + precip_units + '<extra></extra>',
+            ),
+            row=row, col=col, secondary_y=True,
+        )
+
+        pmax = float(np.nanmax(precip)) if np.any(~np.isnan(precip)) else 1.0
+        yaxis_key = f'yaxis{2 * ((row - 1) * ncols + col)}'
+        fig.update_yaxes(
+            rangemode='tozero',
+            row=row, col=col, secondary_y=False,
+        )
+        fig.update_yaxes(
+            autorange='reversed',
+            range=[pmax * precip_max_factor, 0],
+            row=row, col=col, secondary_y=True,
+        )
+
+    fig.update_layout(
+        height=per_row_height * nrows,
+        width=width,
+        legend=dict(
+            orientation='h', yanchor='bottom', y=1.01,
+            xanchor='center', x=0.5,
+        ),
+        hovermode='x unified',
+        bargap=0,
+        margin=dict(l=60, r=60, t=60, b=40),
+    )
+
     return fig

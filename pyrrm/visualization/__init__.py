@@ -15,6 +15,11 @@ from pyrrm.visualization.model_plots import (
     plot_residuals,
     plot_monthly_boxplot,
     create_calibration_dashboard,
+    # Integrated precipitation–flow plots
+    plot_precip_flow,
+    plot_precip_flow_grid,
+    plot_precip_flow_plotly,
+    plot_precip_flow_grid_plotly,
 )
 from pyrrm.visualization.calibration_plots import (
     plot_mcmc_traces,
@@ -59,6 +64,11 @@ __all__ = [
     "plot_residuals",
     "plot_monthly_boxplot",
     "create_calibration_dashboard",
+    # Integrated precipitation–flow plots
+    "plot_precip_flow",
+    "plot_precip_flow_grid",
+    "plot_precip_flow_plotly",
+    "plot_precip_flow_grid_plotly",
     # Calibration plots
     "plot_mcmc_traces",
     "plot_posterior_distributions",
@@ -90,8 +100,16 @@ __all__ = [
     "plot_mcmc_traces_nuts",
     "plot_mcmc_rank",
     "plot_posterior_pairs",
+    "plot_mcmc_forest",
     "plot_hydrograph_with_uncertainty",
     "plot_mcmc_diagnostics_nuts",
+    "dream_result_to_inference_data",
+    "plot_dream_traces",
+    "plot_rhat_summary",
+    "plot_rhat_from_pydream",
+    "plot_forest_grid",
+    "plot_forest_grid_plotly",
+    "plot_forest_interactive",
 ]
 
 try:
@@ -99,8 +117,16 @@ try:
         plot_mcmc_traces as plot_mcmc_traces_nuts,
         plot_mcmc_rank,
         plot_posterior_pairs,
+        plot_mcmc_forest,
         plot_hydrograph_with_uncertainty,
         plot_mcmc_diagnostics as plot_mcmc_diagnostics_nuts,
+        dream_result_to_inference_data,
+        plot_dream_traces,
+        plot_rhat_summary,
+        plot_rhat_from_pydream,
+        plot_forest_grid,
+        plot_forest_grid_plotly,
+        plot_forest_interactive,
     )
 except ImportError:
     pass
