@@ -49,13 +49,15 @@ Use the project's conventional commit format: `type(scope): subject`
 Types: feat, fix, docs, refactor, test, perf, style, chore, ci
 Scopes: models, calibration, routing, analysis, visualization, data, notebooks, benchmark, examples
 
-**Wait for user confirmation before proceeding** (unless the user passed extra context like "go ahead" or "no confirmation needed").
+**STOP. Do not run Step 4 until the user confirms.** Ask: "Confirm to proceed with these commits (or say which to change)." Exception: if the user already said "go ahead", "no confirmation needed", or "just do it", proceed to Step 4 without waiting.
 
 ## Step 4: Execute Commits Sequentially
 
-For each group, in dependency order (foundations first, dependents later):
+**Do not include CHANGELOG.md or LESSONS_LEARNT.md in any of these groups** — they are committed only in Step 5.
 
-1. **Reset staging area** if needed: `git reset HEAD`
+For each group, in **ordering preference** order (see Ordering Preference below): config → core lib → analysis/viz → test → notebooks. Within that, dependency order (foundations first).
+
+1. **Reset staging area**: `git reset HEAD` (so only the next `git add` is staged)
 2. **Stage only the group's files**: `git add <file1> <file2> ...`
 3. **Commit** with a well-formed message using HEREDOC:
 
@@ -70,17 +72,18 @@ EOF
 
 4. **Verify**: `git status` after each commit to confirm clean staging
 
-## Step 5: Update CHANGELOG and LESSONS_LEARNT
+## Step 5: Update CHANGELOG and LESSONS_LEARNT (one final commit only)
 
-After all code commits are done:
+**Do not commit CHANGELOG or LESSONS_LEARNT in Step 4.** Only after all code/config/notebook commits are done:
 
-- If any commit is `feat`, `fix`, `perf`, or breaking `refactor`, add entries to `CHANGELOG.md` under `[Unreleased]`
+- If any commit was `feat`, `fix`, `perf`, or breaking `refactor`, add entries to `CHANGELOG.md` under `[Unreleased]`
 - If any lesson-worthy insight was encountered, add to `LESSONS_LEARNT.md`
-- Commit documentation updates as a separate final commit: `docs: update CHANGELOG and LESSONS_LEARNT`
+- Stage only these docs: `git add CHANGELOG.md LESSONS_LEARNT.md` (omit if unchanged)
+- Create **one** final commit: `docs: update CHANGELOG and LESSONS_LEARNT` (or `docs: update CHANGELOG` / `docs: update LESSONS_LEARNT` if only one changed)
 
 ## Step 6: Summary
 
-Print a summary table:
+Print a summary table with exactly these columns: **#**, **Hash** (short), **Message** (subject line), **Files** (count), **Type**:
 
 ```
 | # | Hash    | Message                        | Files | Type |
@@ -99,6 +102,12 @@ Commit in this order when possible:
 4. Test additions or updates
 5. Notebook updates
 6. Documentation (README, CHANGELOG, LESSONS_LEARNT, rules)
+
+## Common mistakes to avoid
+
+- **Do not skip Step 3 confirmation** — present the plan and wait unless the user already said to proceed.
+- **Do not commit CHANGELOG/LESSONS_LEARNT in the middle** — they are one final docs commit only (Step 5).
+- **Do not mix documentation-only changes** into code commits (group docs separately and commit last).
 
 ## Safety
 
