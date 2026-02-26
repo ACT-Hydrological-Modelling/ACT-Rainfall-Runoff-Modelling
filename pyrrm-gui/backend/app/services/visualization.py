@@ -330,7 +330,7 @@ class VisualizationService:
         """
         def get_color(metric_name: str, value: float) -> str:
             """Get color based on metric value."""
-            if metric_name in ['NSE', 'KGE', 'LogNSE', 'InvNSE', 'SqrtNSE']:
+            if metric_name in ['NSE', 'KGE', 'NSE_log', 'NSE_inv', 'NSE_sqrt']:
                 if value >= 0.75:
                     return 'green'
                 elif value >= 0.5:

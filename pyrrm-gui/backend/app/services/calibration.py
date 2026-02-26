@@ -69,7 +69,7 @@ OBJECTIVE_CLASSES = {
     'RMSE': RMSE,
     'MAE': MAE,
     'PBIAS': PBIAS,
-    'LogNSE': LogNSE,
+    'NSE_log': LogNSE,
 }
 
 

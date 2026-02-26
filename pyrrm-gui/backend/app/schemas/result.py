@@ -28,9 +28,9 @@ class MetricsResponse(BaseModel):
     RMSE: Optional[float] = None
     MAE: Optional[float] = None
     PBIAS: Optional[float] = None
-    LogNSE: Optional[float] = Field(None, alias="NSE (log Q)")
-    InvNSE: Optional[float] = Field(None, alias="NSE (1/Q)")
-    SqrtNSE: Optional[float] = Field(None, alias="NSE (√Q)")
+    NSE_log: Optional[float] = Field(None, alias="NSE (log Q)")
+    NSE_inv: Optional[float] = Field(None, alias="NSE (1/Q)")
+    NSE_sqrt: Optional[float] = Field(None, alias="NSE (√Q)")
     
     # KGE components
     KGE_r: Optional[float] = None
