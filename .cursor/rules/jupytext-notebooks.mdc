@@ -1,17 +1,31 @@
 ---
 description: "Rule for working with Jupyter notebooks using Jupytext pairing"
-globs: ["**/*.ipynb", "**/*.py"]
-alwaysApply: false
+globs: ["**/*.ipynb", "**/*.py", "notebooks_ACT/**/*.py"]
+alwaysApply: true
 ---
 
 # Jupytext Notebook Workflow
+
+## For AI Agents: Mandatory Workflow (No Exceptions)
+
+**You must NEVER edit `.ipynb` files in this project.** This is a hard constraint.
+
+- **Do NOT use the EditNotebook tool** (or any tool that modifies `.ipynb`) for notebooks that have a Jupytext-paired `.py` script.
+- **ALWAYS edit the paired `.py` script only** — use normal text/code edit tools (e.g. StrReplace, Write) on the `.py` file with percent-format cells (`# %%`, `# %% [markdown]`).
+- After editing the `.py` file, sync to the notebook by running:  
+  `conda activate pyrrm && jupytext --to notebook --update path/to/script.py`  
+  (or instruct the user to run it). The `.ipynb` is generated/updated from the `.py`; the `.py` is the single source of truth.
+
+This applies to all notebooks under `notebooks/`, `notebooks_ACT/`, and anywhere else that uses Jupytext pairing (same base name: `name.py` and `name.ipynb`).
+
+---
 
 When working with Jupyter notebooks in this project, **always use the Jupytext paired Python script workflow**.
 
 ## Core Principle: `.py` is the Source of Truth
 
 - The **`.py` script is always the canonical source** for notebook content
-- **NEVER directly edit `.ipynb` notebook files**
+- **NEVER directly edit `.ipynb` notebook files** — no exceptions
 - **ALWAYS edit the paired `.py` script** and sync to the notebook
 - This ensures clean version control diffs and prevents accidental overwrites
 

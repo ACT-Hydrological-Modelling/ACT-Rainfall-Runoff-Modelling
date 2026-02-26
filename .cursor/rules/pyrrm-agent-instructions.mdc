@@ -20,9 +20,11 @@ This document provides high-level guidance for AI agents working on the `pyrrm` 
 
 **IMPORTANT**: When working with Jupyter notebooks, use the Jupytext paired workflow:
 
-1. **NEVER directly edit `.ipynb` files**
-2. **ALWAYS edit the paired `.py` script** using percent format (`# %%` cell delimiters)
-3. The user will sync changes using `jupytext --to notebook --update`
+1. **NEVER directly edit `.ipynb` files** — do not use the EditNotebook tool or any tool that modifies `.ipynb`. This is forbidden.
+2. **ALWAYS edit the paired `.py` script only** using percent format (`# %%` cell delimiters) and normal code-edit tools (StrReplace, Write, etc.).
+3. After editing the `.py` file, sync to the notebook (e.g. `jupytext --to notebook --update path/to/script.py`). The `.ipynb` is derived from the `.py`; the `.py` is the single source of truth.
+
+See **jupytext-notebooks.mdc** for the full workflow and commands.
 
 Example Python script format:
 ```python
