@@ -83,7 +83,6 @@ class TestRunNuts:
         assert "best_parameters" in result
         assert "all_samples" in result
         assert "inference_data" in result
-        assert "mcmc" in result
         assert isinstance(result["all_samples"], pd.DataFrame)
         for name in ["X1", "X2", "X3", "X4"]:
             assert name in result["best_parameters"]

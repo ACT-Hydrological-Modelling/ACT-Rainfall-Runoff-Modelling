@@ -270,10 +270,10 @@ def run_nuts(
         verbose: Print summary.
 
     Returns:
-        Dict with keys matching the pydream adapter contract:
-        ``best_parameters``, ``best_objective``, ``all_samples``,
-        ``convergence_diagnostics``, ``runtime_seconds``,
-        ``inference_data``, ``mcmc``.
+        Dict with keys: ``best_parameters``, ``best_objective``, ``all_samples``,
+        ``convergence_diagnostics``, ``runtime_seconds``, ``parameter_names``,
+        ``inference_data``, ``tvp_config``. The MCMC object is not stored so that
+        the result remains picklable (e.g. for CalibrationReport.save()).
     """
     if not NUMPYRO_AVAILABLE:
         raise ImportError(
@@ -534,6 +534,9 @@ def run_nuts(
             else:
                 print(f"    {k}: [array of length {len(v)}]")
 
+    # Do not include "mcmc": it holds a reference to the NumPyro model (a local
+    # function from _build_numpyro_model), which is not picklable and would
+    # break CalibrationReport.save() and CalibrationResult serialization.
     return {
         "best_parameters": best_parameters,
         "best_objective": best_objective,
@@ -542,6 +545,5 @@ def run_nuts(
         "runtime_seconds": runtime,
         "parameter_names": param_names,
         "inference_data": inference_data,
-        "mcmc": mcmc,
         "tvp_config": tvp_config if tvp_config else None,
     }

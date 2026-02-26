@@ -922,18 +922,25 @@ class CustomObjective(ObjectiveFunction):
 # =============================================================================
 
 def calculate_metrics(
-    simulated: np.ndarray, 
+    simulated: np.ndarray,
     observed: np.ndarray
 ) -> dict:
     """
-    Calculate multiple performance metrics at once.
-    
+    Calculate a basic set of 6 performance metrics.
+
+    .. deprecated::
+        Use ``pyrrm.analysis.diagnostics.compute_diagnostics`` instead for the
+        full 48-metric canonical diagnostic suite (NSE variants, KGE variants
+        with components, KGE non-parametric variants, error metrics, FDC volume
+        biases, raw signatures, and hydrological signature errors).
+
     Args:
         simulated: Simulated values
         observed: Observed values
-        
+
     Returns:
-        Dictionary with metric names and values
+        Dictionary with metric names and values (NSE, KGE, RMSE, MAE, PBIAS,
+        LogNSE).
     """
     metrics = {
         'NSE': NSE(),
@@ -943,7 +950,7 @@ def calculate_metrics(
         'PBIAS': PBIAS(),
         'LogNSE': LogNSE(),
     }
-    
+
     return {name: obj.calculate(simulated, observed) for name, obj in metrics.items()}
 
 

@@ -25,6 +25,7 @@ References
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from numbers import Number
@@ -40,6 +41,8 @@ try:
 except ImportError:
     TQDM_AVAILABLE = False
     tqdm = None
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -449,15 +452,12 @@ def minimize(
     # When True, the displayed values are negated to show actual objective values
     display_max = display_maximize
     
-    # Print initial status if verbose
     if verbose:
         display_f = -best_f if display_max else best_f
         display_mode = "maximizing" if display_max else "minimizing"
-        print(f"SCE-UA Optimization Started")
-        print(f"  Parameters: {len(lo_bounds)}, Complexes: {n_complexes}, Population: {n_pop}")
-        print(f"  Max evaluations: {max_evals}, Max iterations: {max_iter}")
-        print(f"  Initial best ({display_mode}): {display_f:.6f}")
-        print("-" * 60)
+        _log.info("SCE-UA started | params=%d complexes=%d pop=%d max_evals=%d",
+                  len(lo_bounds), n_complexes, n_pop, max_evals)
+        _log.info("Initial best (%s): %.6f", display_mode, display_f)
     
     try:
         while n_evals < max_evals and iters < max_iter and no_change_count < max_tolerant_iter:
@@ -496,10 +496,10 @@ def minimize(
                 pbar.set_postfix_str(f"{best_f:.4f}")
                 pbar.refresh()
             
-            # Verbose output every 10 iterations
             if verbose and iters % 10 == 0:
                 display_best = -best_f if display_max else best_f
-                print(f"  Iter {iters:4d}: nfev={n_evals:6d}, best={display_best:.6f}, no_improve={no_change_count}")
+                _log.info("Iter %4d: nfev=%6d, best=%.6f, no_improve=%d",
+                          iters, n_evals, display_best, no_change_count)
             
             # Call user callback if provided
             if callback is not None:
@@ -524,12 +524,9 @@ def minimize(
     elif no_change_count >= max_tolerant_iter:
         message = f"No improvement for {max_tolerant_iter} iterations (< {tolerance})"
     
-    # Final verbose output
     if verbose:
-        print("-" * 60)
-        print(f"Optimization Complete: {message}")
-        print(f"  Iterations: {iters}, Evaluations: {n_evals}")
-        print(f"  Best objective (minimizing): {best_f:.6f}")
+        _log.info("SCE-UA complete: %s | iters=%d nfev=%d best=%.6f",
+                  message, iters, n_evals, best_f)
 
     return Result(
         x=best_x,

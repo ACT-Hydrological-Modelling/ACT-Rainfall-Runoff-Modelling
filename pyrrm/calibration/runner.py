@@ -13,10 +13,13 @@ from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING, Literal, Uni
 from datetime import datetime
 from pathlib import Path
 import json
+import logging
 import os
 import numpy as np
 import pandas as pd
 import warnings
+
+_log = logging.getLogger(__name__)
 
 # Check for optional parquet support
 try:
@@ -765,7 +768,7 @@ class CalibrationRunner:
                 method='PyDREAM (MT-DREAM(ZS))'
             )
             if verbose:
-                print(f"Checkpoint saved to {checkpoint_dir}")
+                _log.info("Checkpoint saved to %s", checkpoint_dir)
         
         # Determine convergence status
         converged = result.get('convergence_diagnostics', {}).get('converged', None)
@@ -1305,17 +1308,16 @@ class CalibrationRunner:
             # Create dummy date range
             dates = pd.date_range(start='2000-01-01', periods=len(obs), freq='D')
         
-        # Extract precipitation and PET if available
+        from pyrrm.data import resolve_column
+
         precip = None
         pet = None
-        for col in ['precipitation', 'Precipitation', 'P', 'Rain', 'rain']:
-            if col in self.inputs.columns:
-                precip = self.inputs[col].values[self.warmup_period:]
-                break
-        for col in ['pet', 'PET', 'evapotranspiration', 'ET']:
-            if col in self.inputs.columns:
-                pet = self.inputs[col].values[self.warmup_period:]
-                break
+        pcol = resolve_column(self.inputs, "precipitation")
+        if pcol is not None:
+            precip = self.inputs[pcol].values[self.warmup_period:]
+        ecol = resolve_column(self.inputs, "pet")
+        if ecol is not None:
+            pet = self.inputs[ecol].values[self.warmup_period:]
         
         # Determine calibration period
         cal_start = str(dates[0].date()) if hasattr(dates[0], 'date') else str(dates[0])

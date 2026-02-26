@@ -136,8 +136,8 @@ class CalibrationReport:
             Path to the saved file
             
         Example:
-            >>> report.save('calibrations/410734_lognse')
-            'calibrations/410734_lognse.pkl'
+            >>> report.save('calibrations/410734_sacramento_nse_sceua_log')
+            'calibrations/410734_sacramento_nse_sceua_log.pkl'
         """
         path = Path(path)
         
@@ -166,7 +166,7 @@ class CalibrationReport:
             CalibrationReport instance
             
         Example:
-            >>> report = CalibrationReport.load('calibrations/410734_lognse.pkl')
+            >>> report = CalibrationReport.load('calibrations/410734_sacramento_nse_sceua_log.pkl')
             >>> print(report.result.best_objective)
         """
         path = Path(path)
@@ -292,130 +292,25 @@ class CalibrationReport:
     
     def calculate_comprehensive_metrics(self) -> Dict[str, float]:
         """
-        Calculate comprehensive performance metrics including all NSE and KGE variants.
-        
+        Calculate the canonical 48-metric diagnostic suite.
+
         Returns:
-            Dictionary with extended metrics including:
-            - NSE variants: NSE, LogNSE, SqrtNSE, InvNSE
-            - KGE variants: KGE, KGE_log, KGE_sqrt, KGE_inv
-            - KGE components: r, alpha, beta
-            - Error metrics: RMSE, MAE, PBIAS, R²
-            
+            OrderedDict with:
+            - NSE variants: NSE, NSE_log, NSE_sqrt, NSE_inv
+            - KGE(Q) + components: KGE, KGE_r, KGE_alpha, KGE_beta
+            - KGE(log Q) + components
+            - KGE(sqrt Q) + components
+            - KGE(1/Q) + components
+            - Error metrics: RMSE, MAE, PBIAS
+            - FDC volume biases: FHV, FMV, FLV
+
         Example:
             >>> metrics = report.calculate_comprehensive_metrics()
             >>> for name, value in metrics.items():
             ...     print(f"{name}: {value:.4f}")
         """
-        from pyrrm.calibration.objective_functions import (
-            NSE, KGE, RMSE, MAE, PBIAS, LogNSE
-        )
-        
-        obs = self.observed
-        sim = self.simulated
-        
-        # Filter valid data
-        mask = ~(np.isnan(obs) | np.isnan(sim) | np.isinf(obs) | np.isinf(sim))
-        obs_valid = obs[mask]
-        sim_valid = sim[mask]
-        
-        metrics = {}
-        
-        # ==========================================================================
-        # NSE and variants
-        # ==========================================================================
-        metrics['NSE'] = NSE().calculate(sim_valid, obs_valid)
-        
-        try:
-            metrics['LogNSE'] = LogNSE().calculate(sim_valid, obs_valid)
-        except Exception:
-            metrics['LogNSE'] = np.nan
-        
-        # SqrtNSE (calculated directly)
-        try:
-            sqrt_obs = np.sqrt(np.maximum(obs_valid, 0))
-            sqrt_sim = np.sqrt(np.maximum(sim_valid, 0))
-            ss_res_sqrt = np.sum((sqrt_obs - sqrt_sim) ** 2)
-            ss_tot_sqrt = np.sum((sqrt_obs - np.mean(sqrt_obs)) ** 2)
-            metrics['SqrtNSE'] = 1 - ss_res_sqrt / ss_tot_sqrt if ss_tot_sqrt > 0 else np.nan
-        except Exception:
-            metrics['SqrtNSE'] = np.nan
-        
-        # InvNSE (calculated directly)
-        try:
-            obs_pos_inv = obs_valid[obs_valid > 0.01]
-            sim_pos_inv = sim_valid[obs_valid > 0.01]
-            if len(obs_pos_inv) > 0:
-                inv_obs = 1.0 / obs_pos_inv
-                inv_sim = 1.0 / np.maximum(sim_pos_inv, 0.01)
-                ss_res_inv = np.sum((inv_obs - inv_sim) ** 2)
-                ss_tot_inv = np.sum((inv_obs - np.mean(inv_obs)) ** 2)
-                metrics['InvNSE'] = 1 - ss_res_inv / ss_tot_inv if ss_tot_inv > 0 else np.nan
-            else:
-                metrics['InvNSE'] = np.nan
-        except Exception:
-            metrics['InvNSE'] = np.nan
-        
-        # ==========================================================================
-        # KGE (standard) and components
-        # ==========================================================================
-        metrics['KGE'] = KGE().calculate(sim_valid, obs_valid)
-        
-        # KGE components
-        r = np.corrcoef(obs_valid, sim_valid)[0, 1] if len(obs_valid) > 1 else np.nan
-        alpha = np.std(sim_valid) / np.std(obs_valid) if np.std(obs_valid) > 0 else np.nan
-        beta = np.mean(sim_valid) / np.mean(obs_valid) if np.mean(obs_valid) != 0 else np.nan
-        
-        metrics['KGE_r'] = r
-        metrics['KGE_alpha'] = alpha
-        metrics['KGE_beta'] = beta
-        
-        # ==========================================================================
-        # KGE with transformations
-        # ==========================================================================
-        # KGE(log Q)
-        obs_pos_mask = obs_valid > 0
-        obs_pos = obs_valid[obs_pos_mask]
-        sim_pos = sim_valid[obs_pos_mask]
-        if len(obs_pos) > 0:
-            log_obs = np.log(obs_pos + 1)
-            log_sim = np.log(np.maximum(sim_pos, 0) + 1)
-            r_log = np.corrcoef(log_obs, log_sim)[0, 1] if len(log_obs) > 1 else np.nan
-            alpha_log = np.std(log_sim) / np.std(log_obs) if np.std(log_obs) > 0 else np.nan
-            beta_log = np.mean(log_sim) / np.mean(log_obs) if np.mean(log_obs) != 0 else np.nan
-            metrics['KGE_log'] = 1 - np.sqrt((r_log - 1)**2 + (alpha_log - 1)**2 + (beta_log - 1)**2) if not np.isnan(r_log) else np.nan
-        else:
-            metrics['KGE_log'] = np.nan
-        
-        # KGE(sqrt Q)
-        sqrt_obs = np.sqrt(np.maximum(obs_valid, 0))
-        sqrt_sim = np.sqrt(np.maximum(sim_valid, 0))
-        r_sqrt = np.corrcoef(sqrt_obs, sqrt_sim)[0, 1] if len(sqrt_obs) > 1 else np.nan
-        alpha_sqrt = np.std(sqrt_sim) / np.std(sqrt_obs) if np.std(sqrt_obs) > 0 else np.nan
-        beta_sqrt = np.mean(sqrt_sim) / np.mean(sqrt_obs) if np.mean(sqrt_obs) != 0 else np.nan
-        metrics['KGE_sqrt'] = 1 - np.sqrt((r_sqrt - 1)**2 + (alpha_sqrt - 1)**2 + (beta_sqrt - 1)**2) if not np.isnan(r_sqrt) else np.nan
-        
-        # KGE(1/Q)
-        obs_pos_inv = obs_valid[obs_valid > 0.01]
-        sim_pos_inv = sim_valid[obs_valid > 0.01]
-        if len(obs_pos_inv) > 0:
-            inv_obs = 1.0 / obs_pos_inv
-            inv_sim = 1.0 / np.maximum(sim_pos_inv, 0.01)
-            r_inv = np.corrcoef(inv_obs, inv_sim)[0, 1] if len(inv_obs) > 1 else np.nan
-            alpha_inv = np.std(inv_sim) / np.std(inv_obs) if np.std(inv_obs) > 0 else np.nan
-            beta_inv = np.mean(inv_sim) / np.mean(inv_obs) if np.mean(inv_obs) != 0 else np.nan
-            metrics['KGE_inv'] = 1 - np.sqrt((r_inv - 1)**2 + (alpha_inv - 1)**2 + (beta_inv - 1)**2) if not np.isnan(r_inv) else np.nan
-        else:
-            metrics['KGE_inv'] = np.nan
-        
-        # ==========================================================================
-        # Other metrics
-        # ==========================================================================
-        metrics['RMSE'] = RMSE().calculate(sim_valid, obs_valid)
-        metrics['MAE'] = MAE().calculate(sim_valid, obs_valid)
-        metrics['PBIAS'] = PBIAS().calculate(sim_valid, obs_valid)
-        metrics['R2'] = r ** 2 if not np.isnan(r) else np.nan
-        
-        return metrics
+        from pyrrm.analysis.diagnostics import compute_diagnostics
+        return compute_diagnostics(self.simulated, self.observed)
     
     # =========================================================================
     # Summary and Display
@@ -453,12 +348,19 @@ class CalibrationReport:
         lines.append(f"  {self.result.objective_name}: {self.result.best_objective:.6f}")
         lines.append("")
         
-        # Performance metrics
+        # Performance metrics (canonical 48-metric suite)
         try:
-            metrics = self.calculate_metrics()
+            from pyrrm.analysis.diagnostics import compute_diagnostics, DIAGNOSTIC_GROUPS
+            metrics = compute_diagnostics(self.simulated, self.observed)
             lines.append("Performance Metrics:")
-            for name, value in metrics.items():
-                lines.append(f"  {name}: {value:.4f}")
+            for group_name, keys in DIAGNOSTIC_GROUPS.items():
+                lines.append(f"  {group_name}:")
+                for k in keys:
+                    v = metrics.get(k, float('nan'))
+                    if isinstance(v, float) and np.isnan(v):
+                        lines.append(f"    {k:<23} {'N/A':>10}")
+                    else:
+                        lines.append(f"    {k:<23} {v:>10.4f}")
             lines.append("")
         except Exception as e:
             lines.append(f"Could not calculate metrics: {e}")
@@ -481,7 +383,53 @@ class CalibrationReport:
             f"method='{self.result.method}', "
             f"best_{self.result.objective_name}={self.result.best_objective:.4f})"
         )
-    
+
+    # =========================================================================
+    # Export (Excel / CSV)
+    # =========================================================================
+
+    def export(
+        self,
+        path: str,
+        format: str = 'excel',
+        exceedance_pct_resolution: float = 1.0,
+        csv_prefix: Optional[str] = None,
+    ) -> List[str]:
+        """
+        Export this report to Excel and/or CSV files for sharing.
+
+        Excel: single file with sheets TimeSeries, Best_Calibration, Diagnostics, FDC.
+        Requires optional dependency: pip install pyrrm[export]
+
+        CSV: four files (timeseries, best_calibration, diagnostics, fdc) with
+        the same content as the Excel sheets.
+
+        Args:
+            path: For format='excel': path to .xlsx file. For format='csv' or 'both':
+                directory or file prefix (e.g. 'out/410734' -> out/410734.xlsx and
+                out/410734_timeseries.csv, etc.). If path is a directory, output
+                filename uses experiment_name or 'calibration_report'.
+            format: 'excel', 'csv', or 'both'.
+            exceedance_pct_resolution: FDC grid step in percent (default 1.0).
+            csv_prefix: Override prefix for CSV filenames (default: derived from path).
+
+        Returns:
+            List of created file paths.
+
+        Example:
+            >>> report = CalibrationReport.load('calibrations/410734.pkl')
+            >>> report.export('output/410734_report.xlsx', format='excel')
+            >>> report.export('output/410734', format='both')
+        """
+        from pyrrm.calibration.export import export_report
+        return export_report(
+            self,
+            path,
+            format=format,
+            exceedance_pct_resolution=exceedance_pct_resolution,
+            csv_prefix=csv_prefix,
+        )
+
     # =========================================================================
     # Visualization Methods (delegate to report_plots module)
     # =========================================================================

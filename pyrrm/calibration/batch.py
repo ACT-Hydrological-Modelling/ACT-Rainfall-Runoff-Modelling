@@ -109,11 +109,12 @@ def make_experiment_key(
 
     Format::
 
-        {catchment}_{model}_{objective}_{algorithm}[_{transformation}[-{tag1}-{tag2}...]]
+        {catchment}_{model}_{objective}[_{transformation}[-{tag}...]]_{algorithm}
 
-    Always exactly 4 underscore-separated fields (5 with transformation).
-    APEX-specific parameter tags are dash-separated after the
-    transformation.
+    The algorithm is always the **last** underscore-separated field.
+    When no transformation is present the key has 4 fields; with a
+    transformation it has 5.  APEX-specific parameter tags are
+    dash-separated *within* the transformation field.
 
     Args:
         model: Model name (e.g. ``'GR4J'``, ``'Sacramento'``).
@@ -138,19 +139,19 @@ def make_experiment_key(
         >>> make_experiment_key('Sacramento', 'apex', 'sceua',
         ...     catchment='410734', transformation='sqrt',
         ...     extra_tags=['k05', 'uniform'])
-        '410734_sacramento_apex_sceua_sqrt-k05-uniform'
+        '410734_sacramento_apex_sqrt-k05-uniform_sceua'
     """
     parts = [
         _sanitise(catchment),
         _sanitise(model),
         _sanitise(objective),
-        _sanitise(algorithm),
     ]
     if transformation or extra_tags:
         suffix = _sanitise(transformation or 'none')
         if extra_tags:
             suffix += '-' + '-'.join(_sanitise(t) for t in extra_tags)
         parts.append(suffix)
+    parts.append(_sanitise(algorithm))
     return '_'.join(parts)
 
 
@@ -181,6 +182,10 @@ def make_apex_tags(
 def parse_experiment_key(key: str) -> Dict[str, Any]:
     """Parse a canonical experiment key into its components.
 
+    The algorithm is always the **last** underscore-separated field.
+    When 4 fields are present: catchment, model, objective, algorithm.
+    When 5 fields: catchment, model, objective, transformation, algorithm.
+
     Args:
         key: Canonical key string.
 
@@ -190,10 +195,13 @@ def parse_experiment_key(key: str) -> Dict[str, Any]:
         ``apex_tags``.
 
     Example:
-        >>> parse_experiment_key('410734_gr4j_nse_sceua_sqrt')
+        >>> parse_experiment_key('410734_gr4j_nse_sceua')
+        {'catchment': '410734', 'model': 'gr4j', 'objective': 'nse',
+         'algorithm': 'sceua'}
+        >>> parse_experiment_key('410734_gr4j_nse_sqrt_sceua')
         {'catchment': '410734', 'model': 'gr4j', 'objective': 'nse',
          'algorithm': 'sceua', 'transformation': 'sqrt'}
-        >>> parse_experiment_key('410734_sacramento_apex_sceua_sqrt-k05-uniform')
+        >>> parse_experiment_key('410734_sacramento_apex_sqrt-k05-uniform_sceua')
         {'catchment': '410734', 'model': 'sacramento', 'objective': 'apex',
          'algorithm': 'sceua', 'transformation': 'sqrt',
          'apex_tags': ['k05', 'uniform']}
@@ -204,15 +212,15 @@ def parse_experiment_key(key: str) -> Dict[str, Any]:
         result['catchment'] = parts[0]
         result['model'] = parts[1]
         result['objective'] = parts[2]
-        result['algorithm'] = parts[3]
+        result['algorithm'] = parts[-1]
     if len(parts) >= 5:
-        last = parts[4]
-        if '-' in last:
-            segments = last.split('-')
+        middle = parts[3]
+        if '-' in middle:
+            segments = middle.split('-')
             result['transformation'] = segments[0]
             result['apex_tags'] = segments[1:]
         else:
-            result['transformation'] = last
+            result['transformation'] = middle
     return result
 
 try:
@@ -574,16 +582,37 @@ ExperimentSource = Union[ExperimentGrid, ExperimentList]
 # ---------------------------------------------------------------------------
 # BatchLogger -- structured logging for batch runs
 # ---------------------------------------------------------------------------
+class _BatchOnlyFilter(logging.Filter):
+    """Pass only records emitted by the batch orchestrator logger.
+
+    The batch.log file should contain concise start/complete/summary lines
+    only.  Iteration-level progress from SCE-UA, PyDREAM, etc. is captured
+    by the per-experiment log handlers instead.
+    """
+
+    _BATCH_LOGGER_NAME = __name__  # 'pyrrm.calibration.batch'
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.name == self._BATCH_LOGGER_NAME
+
+
 class _BatchLogger:
     """Manages file-based and console logging for a batch run.
 
     Creates:
-      - ``run_dir/batch.log``: All INFO+ messages.
-      - ``run_dir/logs/<key>.log``: Per-experiment log files.
+      - ``run_dir/batch.log``: Concise batch-level messages only (start,
+        complete, summary) from the ``pyrrm.calibration.batch`` logger.
+      - ``run_dir/logs/<key>.log``: Full per-experiment log files including
+        iteration-level progress from child loggers.
 
-    Attaches handlers to the ``pyrrm.calibration.batch`` logger and
-    removes them on ``close()``.
+    All handlers are attached to the ``pyrrm.calibration`` **parent** logger
+    so that log messages emitted by child loggers (``runner``,
+    ``sceua_adapter``, ``pydream_adapter``, ``_sceua.sceua``) are captured
+    by the per-experiment handlers.  The batch.log handler has a filter that
+    restricts it to batch orchestrator messages only.
     """
+
+    _PARENT_LOGGER_NAME = 'pyrrm.calibration'
 
     def __init__(
         self,
@@ -595,6 +624,7 @@ class _BatchLogger:
         self.logs_dir = run_dir / 'logs'
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
+        self._parent_logger = logging.getLogger(self._PARENT_LOGGER_NAME)
         self._handlers: List[logging.Handler] = []
         self._experiment_handlers: Dict[str, logging.FileHandler] = {}
 
@@ -604,22 +634,26 @@ class _BatchLogger:
             datefmt='%Y-%m-%d %H:%M:%S',
         )
 
+        # batch.log — only batch-orchestrator messages (start, complete, summary)
         batch_log_path = run_dir / 'batch.log'
         fh = logging.FileHandler(str(batch_log_path), mode='a')
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(formatter)
-        logger.addHandler(fh)
+        fh.addFilter(_BatchOnlyFilter())
+        self._parent_logger.addHandler(fh)
         self._handlers.append(fh)
 
+        # Console — also only batch-level to keep output readable
         if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
-                   for h in logger.handlers):
+                   for h in self._parent_logger.handlers):
             ch = logging.StreamHandler()
             ch.setLevel(numeric_level)
             ch.setFormatter(formatter)
-            logger.addHandler(ch)
+            ch.addFilter(_BatchOnlyFilter())
+            self._parent_logger.addHandler(ch)
             self._handlers.append(ch)
 
-        logger.setLevel(logging.DEBUG)
+        self._parent_logger.setLevel(logging.DEBUG)
 
         self._use_progress_bar = progress_bar and TQDM_AVAILABLE
         self._pbar: Any = None
@@ -647,7 +681,7 @@ class _BatchLogger:
             self._pbar = None
 
     def start_experiment_log(self, key: str) -> None:
-        """Open a per-experiment log file."""
+        """Open a per-experiment log file on the parent calibration logger."""
         log_path = self.logs_dir / f'{key}.log'
         formatter = logging.Formatter(
             '%(asctime)s | %(levelname)-8s | %(message)s',
@@ -656,25 +690,25 @@ class _BatchLogger:
         fh = logging.FileHandler(str(log_path), mode='w')
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(formatter)
-        logger.addHandler(fh)
+        self._parent_logger.addHandler(fh)
         self._experiment_handlers[key] = fh
 
     def end_experiment_log(self, key: str) -> None:
         """Close the per-experiment log file handler."""
         fh = self._experiment_handlers.pop(key, None)
         if fh is not None:
-            logger.removeHandler(fh)
+            self._parent_logger.removeHandler(fh)
             fh.close()
 
     def close(self) -> None:
         """Remove all handlers added by this logger."""
         self.close_progress()
         for fh in self._experiment_handlers.values():
-            logger.removeHandler(fh)
+            self._parent_logger.removeHandler(fh)
             fh.close()
         self._experiment_handlers.clear()
         for h in self._handlers:
-            logger.removeHandler(h)
+            self._parent_logger.removeHandler(h)
             h.close()
         self._handlers.clear()
 
@@ -783,6 +817,43 @@ class BatchResult:
         if not isinstance(obj, cls):
             raise TypeError(f"Expected BatchResult, got {type(obj).__name__}")
         return obj
+
+    # ------------------------------------------------------------------
+    # Export (Excel / CSV)
+    # ------------------------------------------------------------------
+
+    def export(
+        self,
+        output_dir: Union[str, Path],
+        format: str = 'excel',
+        exceedance_pct_resolution: float = 1.0,
+        skip_failures: bool = True,
+    ) -> Dict[str, List[str]]:
+        """Export every CalibrationReport to Excel and/or CSV.
+
+        Delegates to :func:`pyrrm.calibration.export.export_batch`.
+
+        Args:
+            output_dir: Directory for exported files.  Created if needed.
+            format: ``'excel'``, ``'csv'``, or ``'both'``.
+            exceedance_pct_resolution: FDC grid step in percent.
+            skip_failures: If *True*, skip experiments that fail to export.
+
+        Returns:
+            Dict mapping experiment key -> list of created file paths.
+
+        Example:
+            >>> batch = BatchResult.load('results/batch_result.pkl')
+            >>> batch.export('exports/', format='excel')
+        """
+        from pyrrm.calibration.export import export_batch
+        return export_batch(
+            self,
+            output_dir,
+            format=format,
+            exceedance_pct_resolution=exceedance_pct_resolution,
+            skip_failures=skip_failures,
+        )
 
     def __repr__(self) -> str:
         n_ok = len(self.results)
@@ -1014,6 +1085,12 @@ class BatchExperimentRunner:
         alg_kwargs = dict(spec.algorithm_kwargs)
         method = alg_kwargs.pop('method', 'sceua_direct')
 
+        # Enable verbose logging and disable tqdm progress bars inside
+        # individual experiments so that iteration-level progress is
+        # captured in the per-experiment log file.
+        alg_kwargs.setdefault('verbose', True)
+        alg_kwargs.setdefault('progress_bar', False)
+
         dispatch = {
             'sceua_direct': cal_runner.run_sceua_direct,
             'dream': cal_runner.run_dream,
@@ -1033,6 +1110,11 @@ class BatchExperimentRunner:
             )
 
         result = run_fn(**alg_kwargs)
+
+        if spec.transformation_name:
+            result.objective_name = (
+                f"{result.objective_name}({spec.transformation_name})"
+            )
 
         report = cal_runner.create_report(
             result,

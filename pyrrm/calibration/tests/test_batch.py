@@ -605,14 +605,14 @@ class TestMakeExperimentKey:
     def test_with_transformation(self):
         key = make_experiment_key('GR4J', 'nse', 'sceua',
                                   catchment='410734', transformation='sqrt')
-        assert key == '410734_gr4j_nse_sceua_sqrt'
+        assert key == '410734_gr4j_nse_sqrt_sceua'
 
     def test_with_extra_tags(self):
         tags = make_apex_tags(dynamics_strength=0.5, regime_emphasis='uniform')
         key = make_experiment_key('Sacramento', 'apex', 'sceua',
                                   catchment='410734', transformation='sqrt',
                                   extra_tags=tags)
-        assert key == '410734_sacramento_apex_sceua_sqrt-k05-uniform'
+        assert key == '410734_sacramento_apex_sqrt-k05-uniform_sceua'
 
     def test_sanitises_case_and_special_chars(self):
         key = make_experiment_key('GR4J', 'NSE', 'SCE-UA', catchment='Test 1')
@@ -622,7 +622,7 @@ class TestMakeExperimentKey:
         tags = ['k03', 'uniform']
         key = make_experiment_key('Sacramento', 'apex', 'sceua',
                                   catchment='410734', extra_tags=tags)
-        assert key == '410734_sacramento_apex_sceua_none-k03-uniform'
+        assert key == '410734_sacramento_apex_none-k03-uniform_sceua'
 
 
 class TestMakeApexTags:
@@ -654,15 +654,17 @@ class TestParseExperimentKey:
         }
 
     def test_five_fields_with_transformation(self):
-        parsed = parse_experiment_key('410734_sacramento_kge_dream_sqrt')
+        parsed = parse_experiment_key('410734_sacramento_kge_sqrt_dream')
         assert parsed['transformation'] == 'sqrt'
+        assert parsed['algorithm'] == 'dream'
         assert 'apex_tags' not in parsed
 
     def test_apex_tags(self):
         parsed = parse_experiment_key(
-            '410734_sacramento_apex_sceua_sqrt-k05-uniform'
+            '410734_sacramento_apex_sqrt-k05-uniform_sceua'
         )
         assert parsed['transformation'] == 'sqrt'
+        assert parsed['algorithm'] == 'sceua'
         assert parsed['apex_tags'] == ['k05', 'uniform']
 
     def test_roundtrip(self):
