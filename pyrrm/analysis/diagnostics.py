@@ -130,6 +130,20 @@ def compute_diagnostics(sim, obs) -> OrderedDict:
 
     Returns:
         OrderedDict of metric_name -> float.
+
+    Notes:
+        For ephemeral or low-flow catchments, some metrics use fallbacks:
+        - **Sig_Q95** (and **Sig_Q5**): Percent error in the 5th (resp. 95th)
+          percentile. When the observed percentile is zero or below epsilon,
+          returns 0 if simulated is also low, else 100 (sim has flow when obs
+          has none).
+        - **FLV** (low-flow volume bias): Uses the lowest 30% of flows by rank.
+          If no observed values in that segment exceed epsilon, returns 0 if
+          simulated low-flow volume is also negligible, else 100. If observed
+          low flows are constant (zero spread in log space), uses volume bias
+          in the low segment (same as FHV/FMV) so the metric is a continuous %.
+        - **FHV**, **FMV**: Return NaN if the corresponding observed segment
+          sum is zero (no fallback).
     """
     sim = np.asarray(sim).flatten()
     obs = np.asarray(obs).flatten()
@@ -282,14 +296,24 @@ def compute_diagnostics(sim, obs) -> OrderedDict:
     if low_pos.sum() > 0:
         log_obs_low = np.log(obs_low[low_pos])
         log_sim_low = np.log(np.maximum(sim_low[low_pos], eps_flow))
-        sum_log_obs = np.sum(log_obs_low - np.min(log_obs_low))
-        sum_log_sim = np.sum(log_sim_low - np.min(log_obs_low))
-        m['FLV'] = (
-            100 * (sum_log_sim - sum_log_obs) / sum_log_obs
-            if sum_log_obs > 0 else np.nan
-        )
+        min_log_obs = np.min(log_obs_low)
+        sum_log_obs = np.sum(log_obs_low - min_log_obs)
+        sum_log_sim = np.sum(log_sim_low - min_log_obs)
+        if sum_log_obs > 0:
+            m['FLV'] = 100 * (sum_log_sim - sum_log_obs) / sum_log_obs
+        else:
+            # Observed low flows are constant (zero spread in log space), e.g.
+            # small or ephemeral catchments. Use volume bias in the low segment
+            # (same idea as FHV/FMV) so FLV is a continuous % instead of ±100.
+            sum_obs_low = np.sum(obs_low[low_pos])
+            sum_sim_low = np.sum(sim_low[low_pos])
+            if sum_obs_low > 0:
+                m['FLV'] = 100 * (sum_sim_low - sum_obs_low) / sum_obs_low
+            else:
+                m['FLV'] = 0.0 if sum_sim_low <= eps_flow else 100.0
     else:
-        m['FLV'] = np.nan
+        # No observed flow above epsilon in low 30%: define as 0 if sim also none, else 100%
+        m['FLV'] = 100.0 if np.sum(sim_low) > eps_flow else 0.0
 
     # --- Hydrological signatures ------------------------------------------------
     def _bfi(q, alpha=0.925):
@@ -304,7 +328,10 @@ def compute_diagnostics(sim, obs) -> OrderedDict:
         return np.sum(np.abs(np.diff(q))) / total if total > 0 else np.nan
 
     def _sig_pct_error(sig_sim, sig_obs):
-        return 100 * (sig_sim - sig_obs) / sig_obs if sig_obs != 0 else np.nan
+        """Percent error; when obs is zero or below eps, use 0 if sim also low, else 100."""
+        if sig_obs > eps_flow:
+            return 100 * (sig_sim - sig_obs) / sig_obs
+        return 0.0 if sig_sim <= eps_flow else 100.0
 
     bfi_obs = _bfi(o)
     bfi_sim = _bfi(s)
