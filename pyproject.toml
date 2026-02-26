@@ -136,7 +136,7 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests", "pyrrm"]
 python_files = ["test_*.py"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short --cov=pyrrm --cov-report=term-missing"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
