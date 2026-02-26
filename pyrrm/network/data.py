@@ -26,16 +26,30 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from pyrrm.data import COLUMN_ALIASES, resolve_column
+
 logger = logging.getLogger(__name__)
 
-PRECIP_SYNONYMS = ['precipitation', 'rainfall', 'precip', 'rain', 'p']
-PET_SYNONYMS = ['evapotranspiration', 'pet', 'evap', 'et']
-FLOW_SYNONYMS = ['flow', 'runoff', 'discharge', 'q', 'streamflow', 'observed_flow']
-DATE_SYNONYMS = ['date', 'datetime', 'time', 'timestamp']
+# Backward-compatible aliases derived from the canonical source
+PRECIP_SYNONYMS = COLUMN_ALIASES["precipitation"]
+PET_SYNONYMS = COLUMN_ALIASES["pet"]
+FLOW_SYNONYMS = COLUMN_ALIASES["observed_flow"]
+DATE_SYNONYMS = COLUMN_ALIASES["date"]
 
 
 def _find_column(df: pd.DataFrame, synonyms: List[str]) -> Optional[str]:
-    """Case-insensitive column lookup."""
+    """Case-insensitive column lookup (delegates to resolve_column when possible)."""
+    # Map synonym lists to canonical names for direct delegation
+    _list_to_canonical = {
+        id(PRECIP_SYNONYMS): "precipitation",
+        id(PET_SYNONYMS): "pet",
+        id(FLOW_SYNONYMS): "observed_flow",
+        id(DATE_SYNONYMS): "date",
+    }
+    canonical = _list_to_canonical.get(id(synonyms))
+    if canonical is not None:
+        return resolve_column(df, canonical)
+    # Fallback for ad-hoc synonym lists
     lower_cols = {c.lower(): c for c in df.columns}
     for s in synonyms:
         if s.lower() in lower_cols:
