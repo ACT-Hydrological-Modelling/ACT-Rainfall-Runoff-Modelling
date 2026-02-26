@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: pyrrm (Python 3.11.14)
 #     language: python
@@ -86,7 +86,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # pyrrm imports
-from pyrrm.models import Sacramento
+from pyrrm.models import Sacramento, NUMBA_AVAILABLE
 from pyrrm.routing import NonlinearMuskingumRouter, RoutedModel, create_router
 from pyrrm.calibration import CalibrationRunner
 from pyrrm.objectives import NSE, FlowTransformation, SDEB
@@ -100,7 +100,7 @@ importlib.reload(pyrrm.visualization.report_plots)
 importlib.reload(pyrrm.calibration.report)
 importlib.reload(pyrrm.calibration.runner)
 
-# Create SqrtNSE objective for calibration (balanced high/low flow performance)
+# Create NSE_sqrt objective for calibration (balanced high/low flow performance)
 # Uses pyrrm.objectives.NSE which supports flow transformations
 SqrtNSE = lambda: NSE(transform=FlowTransformation('sqrt'))
 
@@ -109,7 +109,8 @@ plt.style.use('seaborn-v0_8-whitegrid')
 # %config InlineBackend.figure_format = 'retina'
 
 print("Imports successful!")
-print(f"Numba JIT compilation available: {NonlinearMuskingumRouter.is_jit_available()}")
+print(f"Sacramento Numba JIT acceleration: {'ACTIVE' if NUMBA_AVAILABLE else 'not available'}")
+print(f"Routing Numba JIT compilation:     {NonlinearMuskingumRouter.is_jit_available()}")
 
 # %% [markdown]
 # ---
@@ -793,7 +794,7 @@ print(f"{'n_subreaches':<20} {TRUE_ROUTING_PARAMS['n_subreaches']:>10d} {cal_n:>
 
 print("-" * 70)
 best_nse = -result_synth.best_objective
-print(f"\nFinal SqrtNSE: {best_nse:.4f}")
+print(f"\nFinal NSE_sqrt: {best_nse:.4f}")
 print(f"  (Perfect = 1.0, values > 0.9 indicate excellent fit)")
 
 if best_nse > 0.95:
@@ -905,19 +906,19 @@ print(f"  n error: {cal_n - TRUE_ROUTING_PARAMS['n_subreaches']:+d}")
 # | Report File | Objective | Flow Regime Focus |
 # |-------------|-----------|-------------------|
 # | `410734_sacramento_nse_sceua.pkl` | NSE | High flows |
-# | `410734_sacramento_nse_sceua_log.pkl` | LogNSE | Low flows |
-# | `410734_sacramento_nse_sceua_inv.pkl` | InvNSE | Very low flows |
-# | `410734_sacramento_nse_sceua_sqrt.pkl` | SqrtNSE | Balanced |
+# | `410734_sacramento_nse_sceua_log.pkl` | NSE_log | Low flows |
+# | `410734_sacramento_nse_sceua_inverse.pkl` | NSE_inv | Very low flows |
+# | `410734_sacramento_nse_sceua_sqrt.pkl` | NSE_sqrt | Balanced |
 #
 # **KGE-based Objectives:**
 #
 # | Report File | Objective | Flow Regime Focus |
 # |-------------|-----------|-------------------|
 # | `410734_sacramento_kge_sceua.pkl` | KGE | High flows |
-# | `410734_sacramento_kge_sceua_inv.pkl` | KGE (1/Q) | Very low flows |
+# | `410734_sacramento_kge_sceua_inverse.pkl` | KGE (1/Q) | Very low flows |
 # | `410734_sacramento_kge_sceua_sqrt.pkl` | KGE (√Q) | Balanced |
 # | `410734_sacramento_kge_sceua_log.pkl` | KGE (log Q) | Low flows |
-# | `410734_sacramento_kge_np_sceua.pkl` | KGE_np | Non-parametric |
+# | `410734_sacramento_kgenp_sceua.pkl` | KGE_np | Non-parametric |
 #
 # **Composite Objective:**
 #
@@ -947,49 +948,30 @@ print(f"  n error: {cal_n - TRUE_ROUTING_PARAMS['n_subreaches']:+d}")
 # Load real catchment data (same as Notebook 02)
 import warnings
 from pathlib import Path
-from pyrrm.data import load_parameter_bounds
+from pyrrm.data import load_catchment_data, load_parameter_bounds
 from pyrrm.calibration import CalibrationReport
 
 DATA_DIR = Path('../data/410734')
-REPORTS_DIR = Path('../test_data/reports')
+OUTPUT_DIR = Path('../test_data/03_routing_quickstart')
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+REPORTS_DIR = OUTPUT_DIR / 'reports'
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+NB02_REPORTS_DIR = Path('../test_data/02_calibration_quickstart/reports')
 CATCHMENT_AREA_KM2 = 516.62667
-
-# Load rainfall
-rainfall_df = pd.read_csv(DATA_DIR / 'Default Input Set - Rain_QBN01.csv', 
-                          parse_dates=['Date'], index_col='Date')
-rainfall_df.columns = ['rainfall']
-
-# Load PET
-pet_df = pd.read_csv(DATA_DIR / 'Default Input Set - Mwet_QBN01.csv', 
-                     parse_dates=['Date'], index_col='Date')
-pet_df.columns = ['pet']
-
-# Load observed flow
-flow_df = pd.read_csv(DATA_DIR / '410734_output_SDmodel.csv', 
-                      parse_dates=['Date'], index_col='Date')
-observed_col = 'Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)'
-observed_df = flow_df[[observed_col]].copy()
-observed_df.columns = ['observed_flow']
-
-# Handle missing values
-observed_df['observed_flow'] = observed_df['observed_flow'].replace(-9999, np.nan)
-observed_df.loc[observed_df['observed_flow'] < 0, 'observed_flow'] = np.nan
-observed_df = observed_df.dropna()
-
-# Merge datasets
-real_data = rainfall_df.join(pet_df, how='inner').join(observed_df, how='inner')
-real_data = real_data.rename(columns={'rainfall': 'precipitation'})
-
-# Prepare for calibration
-real_inputs = real_data[['precipitation', 'pet']].copy()
-real_observed = real_data['observed_flow'].values
 REAL_WARMUP = 365
+
+real_inputs, real_observed = load_catchment_data(
+    precipitation_file=DATA_DIR / 'Default Input Set - Rain_QBN01.csv',
+    pet_file=DATA_DIR / 'Default Input Set - Mwet_QBN01.csv',
+    observed_file=DATA_DIR / '410734_output_SDmodel.csv',
+    observed_value_column='Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)',
+)
 
 print("=" * 70)
 print("REAL CATCHMENT DATA (Gauge 410734)")
 print("=" * 70)
-print(f"Period: {real_data.index[0].date()} to {real_data.index[-1].date()}")
-print(f"Total days: {len(real_data)}")
+print(f"Period: {real_inputs.index[0].date()} to {real_inputs.index[-1].date()}")
+print(f"Total days: {len(real_inputs)}")
 print(f"Catchment area: {CATCHMENT_AREA_KM2} km²")
 print(f"Warmup period: {REAL_WARMUP} days")
 
@@ -997,7 +979,7 @@ print(f"Warmup period: {REAL_WARMUP} days")
 # ### Loading Calibration Results from Notebook 02
 #
 # We load ALL saved reports from Notebook 02, including:
-# - **NSE variants**: NSE, LogNSE, InvNSE, SqrtNSE
+# - **NSE variants**: NSE, NSE_log, NSE_inv, NSE_sqrt
 # - **KGE variants**: KGE, KGE_inv, KGE_sqrt, KGE_log
 # - **KGE_np variants**: KGE_np, KGE_np_inv, KGE_np_sqrt, KGE_np_log
 # - **Composite**: SDEB
@@ -1010,21 +992,21 @@ print("=" * 70)
 
 # All available reports from Notebook 02 (must match the exact filenames)
 report_files = {
-    # NSE variants
+    # NSE variants (canonical names)
     'NSE': '410734_sacramento_nse_sceua.pkl',
-    'LogNSE': '410734_sacramento_nse_sceua_log.pkl',
-    'InvNSE': '410734_sacramento_nse_sceua_inv.pkl',
-    'SqrtNSE': '410734_sacramento_nse_sceua_sqrt.pkl',
+    'NSE_log': '410734_sacramento_nse_sceua_log.pkl',
+    'NSE_inv': '410734_sacramento_nse_sceua_inverse.pkl',
+    'NSE_sqrt': '410734_sacramento_nse_sceua_sqrt.pkl',
     # KGE variants
     'KGE': '410734_sacramento_kge_sceua.pkl',
-    'KGE_inv': '410734_sacramento_kge_sceua_inv.pkl',
+    'KGE_inv': '410734_sacramento_kge_sceua_inverse.pkl',
     'KGE_sqrt': '410734_sacramento_kge_sceua_sqrt.pkl',
     'KGE_log': '410734_sacramento_kge_sceua_log.pkl',
     # KGE non-parametric variants
-    'KGE_np': '410734_sacramento_kge_np_sceua.pkl',
-    'KGE_np_inv': '410734_sacramento_kge_np_sceua_inv.pkl',
-    'KGE_np_sqrt': '410734_sacramento_kge_np_sceua_sqrt.pkl',
-    'KGE_np_log': '410734_sacramento_kge_np_sceua_log.pkl',
+    'KGE_np': '410734_sacramento_kgenp_sceua.pkl',
+    'KGE_np_inv': '410734_sacramento_kgenp_sceua_inverse.pkl',
+    'KGE_np_sqrt': '410734_sacramento_kgenp_sceua_sqrt.pkl',
+    'KGE_np_log': '410734_sacramento_kgenp_sceua_log.pkl',
     # Composite
     'SDEB': '410734_sacramento_sdeb_sceua.pkl',
 }
@@ -1032,7 +1014,7 @@ report_files = {
 # Try to load each report
 loaded_reports = {}
 for name, filename in report_files.items():
-    filepath = REPORTS_DIR / filename
+    filepath = NB02_REPORTS_DIR / filename
     if filepath.exists():
         try:
             report = CalibrationReport.load(filepath)
@@ -1091,17 +1073,17 @@ OBJECTIVE_CONFIGS = {
         'objective_fn': lambda: NSE(),
         'description': 'NSE (high flows)'
     },
-    'LogNSE': {
+    'NSE_log': {
         'objective_fn': lambda: NSE(transform=FlowTransformation('log', epsilon_value=0.01)),
-        'description': 'LogNSE (low flows)'
+        'description': 'NSE_log (low flows)'
     },
-    'InvNSE': {
+    'NSE_inv': {
         'objective_fn': lambda: NSE(transform=FlowTransformation('inverse', epsilon_value=0.01)),
-        'description': 'InvNSE (very low flows)'
+        'description': 'NSE_inv (very low flows)'
     },
-    'SqrtNSE': {
+    'NSE_sqrt': {
         'objective_fn': lambda: NSE(transform=FlowTransformation('sqrt')),
-        'description': 'SqrtNSE (balanced)'
+        'description': 'NSE_sqrt (balanced)'
     },
     'KGE': {
         'objective_fn': lambda: KGE(),
@@ -1181,22 +1163,21 @@ joint_bounds['routing_n_subreaches'] = (1, 10)
 
 CANONICAL_NAMES = {
     'NSE': '410734_sacramento_nse_sceua',
-    'LogNSE': '410734_sacramento_nse_sceua_log',
-    'InvNSE': '410734_sacramento_nse_sceua_inv',
-    'SqrtNSE': '410734_sacramento_nse_sceua_sqrt',
+    'NSE_log': '410734_sacramento_nse_sceua_log',
+    'NSE_inv': '410734_sacramento_nse_sceua_inverse',
+    'NSE_sqrt': '410734_sacramento_nse_sceua_sqrt',
     'KGE': '410734_sacramento_kge_sceua',
-    'KGE_inv': '410734_sacramento_kge_sceua_inv',
+    'KGE_inv': '410734_sacramento_kge_sceua_inverse',
     'KGE_sqrt': '410734_sacramento_kge_sceua_sqrt',
     'KGE_log': '410734_sacramento_kge_sceua_log',
-    'KGE_np': '410734_sacramento_kge_np_sceua',
-    'KGE_np_inv': '410734_sacramento_kge_np_sceua_inv',
-    'KGE_np_sqrt': '410734_sacramento_kge_np_sceua_sqrt',
-    'KGE_np_log': '410734_sacramento_kge_np_sceua_log',
+    'KGE_np': '410734_sacramento_kgenp_sceua',
+    'KGE_np_inv': '410734_sacramento_kgenp_sceua_inverse',
+    'KGE_np_sqrt': '410734_sacramento_kgenp_sceua_sqrt',
+    'KGE_np_log': '410734_sacramento_kgenp_sceua_log',
     'SDEB': '410734_sacramento_sdeb_sceua',
 }
 
-ROUTING_DIR = REPORTS_DIR / 'routing'
-ROUTING_DIR.mkdir(parents=True, exist_ok=True)
+ROUTING_DIR = REPORTS_DIR
 
 print("=" * 70)
 print("THREE-STAGE CALIBRATION FOR ALL OBJECTIVE FUNCTIONS")
@@ -1339,6 +1320,9 @@ print("=" * 70)
 print("GENERATING SIMULATIONS FOR ALL CALIBRATIONS")
 print("=" * 70)
 
+# Canonical diagnostic suite for consistent reporting
+from pyrrm.analysis.diagnostics import compute_diagnostics, print_diagnostics
+
 # Metrics calculators (FlowTransformation already imported above)
 nse_metric = NSE()
 kge_metric = KGE()
@@ -1404,8 +1388,8 @@ for obj_name, results in all_results.items():
             'KGE': kge_metric(obs, sim),
             'PBIAS': pbias_metric(obs, sim),
             'RMSE': rmse_metric(obs, sim),
-            'LogNSE': lognse_metric(obs, sim),
-            'SqrtNSE': sqrtnse_metric(obs, sim),
+            'NSE_log': lognse_metric(obs, sim),
+            'NSE_sqrt': sqrtnse_metric(obs, sim),
             'K': routing['K'] if routing else None,
             'm': routing['m'] if routing else None,
             'n': routing['n'] if routing else None,
@@ -1422,7 +1406,7 @@ print("COMPREHENSIVE RESULTS: ALL OBJECTIVES × ALL STAGES")
 print("=" * 90)
 
 # Create pivot tables
-metrics_to_compare = ['NSE', 'KGE', 'PBIAS', 'LogNSE', 'SqrtNSE']
+metrics_to_compare = ['NSE', 'KGE', 'PBIAS', 'NSE_log', 'NSE_sqrt']
 pivots = {}
 
 for metric in metrics_to_compare:
@@ -1441,8 +1425,17 @@ print(pivots['NSE'].round(4).to_string())
 print("\n=== KGE Comparison ===")
 print(pivots['KGE'].round(4).to_string())
 
-print("\n=== LogNSE Comparison (Low Flow Performance) ===")
-print(pivots['LogNSE'].round(4).to_string())
+print("\n=== NSE_log Comparison (Low Flow Performance) ===")
+print(pivots['NSE_log'].round(4).to_string())
+
+# %%
+# Print canonical diagnostic suite for the best Stage C (joint calibration) of each objective
+print("\n" + "=" * 70)
+print("CANONICAL DIAGNOSTICS: Stage C (Joint Calibration) per Objective")
+print("=" * 70)
+for obj_name, sim_data in simulations.items():
+    diag = compute_diagnostics(sim_data['C'], obs)
+    print_diagnostics(diag, label=f"{obj_name} -- Stage C")
 
 # %% [markdown]
 # ---
@@ -1528,9 +1521,9 @@ for obj_name in simulations.keys():
     # Performance metrics
     for stage in ['A', 'B', 'C']:
         stage_data = obj_metrics[obj_metrics['Stage'] == stage]
-        fig.add_trace(go.Bar(name=stage, showlegend=False, x=['NSE', 'KGE', 'LogNSE'],
+        fig.add_trace(go.Bar(name=stage, showlegend=False, x=['NSE', 'KGE', 'NSE_log'],
                              y=[stage_data['NSE'].values[0], stage_data['KGE'].values[0], 
-                                stage_data['LogNSE'].values[0]],
+                                stage_data['NSE_log'].values[0]],
                              marker_color=colors[stage]), row=2, col=1)
     
     # Improvement over A
@@ -1539,8 +1532,8 @@ for obj_name in simulations.keys():
     metrics_C = obj_metrics[obj_metrics['Stage'] == 'C']
     
     for stage, metrics_stage, color in [('B', metrics_B, colors['B']), ('C', metrics_C, colors['C'])]:
-        improvement = [metrics_stage[m].values[0] - metrics_A[m].values[0] for m in ['NSE', 'KGE', 'LogNSE']]
-        fig.add_trace(go.Bar(name=f'{stage}-A', showlegend=False, x=['NSE', 'KGE', 'LogNSE'],
+        improvement = [metrics_stage[m].values[0] - metrics_A[m].values[0] for m in ['NSE', 'KGE', 'NSE_log']]
+        fig.add_trace(go.Bar(name=f'{stage}-A', showlegend=False, x=['NSE', 'KGE', 'NSE_log'],
                              y=improvement, marker_color=color), row=2, col=2)
     
     # Routing parameters
@@ -1616,12 +1609,12 @@ print("=" * 90)
 # Best results
 best_nse = results_df.loc[results_df['NSE'].idxmax()]
 best_kge = results_df.loc[results_df['KGE'].idxmax()]
-best_lognse = results_df.loc[results_df['LogNSE'].idxmax()]
+best_lognse = results_df.loc[results_df['NSE_log'].idxmax()]
 
 print(f"\n=== Best Performing Combinations ===")
 print(f"  Best NSE:    {best_nse['Objective']:>10} - Stage {best_nse['Stage']} (NSE = {best_nse['NSE']:.4f})")
 print(f"  Best KGE:    {best_kge['Objective']:>10} - Stage {best_kge['Stage']} (KGE = {best_kge['KGE']:.4f})")
-print(f"  Best LogNSE: {best_lognse['Objective']:>10} - Stage {best_lognse['Stage']} (LogNSE = {best_lognse['LogNSE']:.4f})")
+print(f"  Best NSE_log: {best_lognse['Objective']:>10} - Stage {best_lognse['Stage']} (NSE_log = {best_lognse['NSE_log']:.4f})")
 
 # Routing benefit consistency
 print(f"\n=== Does Routing Consistently Help? ===")
@@ -1658,9 +1651,9 @@ print(f"  Stage C: mean = {k_C.mean():.2f} days, range = [{k_C.min():.2f}, {k_C.
 # | Family | Objective | Flow Regime Focus |
 # |--------|-----------|-------------------|
 # | **NSE** | NSE | High flows |
-# | | LogNSE | Low flows |
-# | | InvNSE | Very low flows |
-# | | SqrtNSE | Balanced |
+# | | NSE_log | Low flows |
+# | | NSE_inv | Very low flows |
+# | | NSE_sqrt | Balanced |
 # | **KGE** | KGE | High flows |
 # | | KGE_inv | Very low flows |
 # | | KGE_sqrt | Balanced |
@@ -1675,7 +1668,7 @@ print(f"  Stage C: mean = {k_C.mean():.2f} days, range = [{k_C.min():.2f}, {k_C.
 #
 # 1. **Routing Benefit Varies by Objective**:
 #    - High-flow focused objectives (NSE, KGE) typically show moderate improvement
-#    - Low-flow focused objectives (LogNSE, KGE_log) may show different patterns
+#    - Low-flow focused objectives (NSE_log, KGE_log) may show different patterns
 #    - The benefit depends on whether timing errors are a dominant source of error
 #
 # 2. **Stage B vs Stage C**:
@@ -1701,7 +1694,7 @@ print("=" * 70)
 print("NOTEBOOK COMPLETE: THREE-STAGE ROUTING ANALYSIS")
 print("=" * 70)
 print(f"\nAnalyzed {len(available_objectives)} objective functions")
-print(f"  NSE variants:      NSE, LogNSE, InvNSE, SqrtNSE")
+print(f"  NSE variants:      NSE, NSE_log, NSE_inv, NSE_sqrt")
 print(f"  KGE variants:      KGE, KGE_inv, KGE_sqrt, KGE_log")
 print(f"  KGE_np variants:   KGE_np, KGE_np_inv, KGE_np_sqrt, KGE_np_log")
 print(f"  Composite:         SDEB")

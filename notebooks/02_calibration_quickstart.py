@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -44,7 +44,7 @@
 # ## Saving Calibration Results
 #
 # All calibrations in this notebook are automatically saved using `CalibrationReport` objects.
-# These reports are stored as pickle files in `test_data/reports/` and include:
+# These reports are stored as pickle files in `test_data/02_calibration_quickstart/reports/` and include:
 #
 # - **Complete calibration results** (best parameters, all samples, diagnostics)
 # - **Input and observed data** for visualization and re-simulation
@@ -54,7 +54,7 @@
 #
 # ```python
 # from pyrrm.calibration import CalibrationReport
-# report = CalibrationReport.load('test_data/reports/410734_sacramento_nse_sceua.pkl')
+# report = CalibrationReport.load('test_data/02_calibration_quickstart/reports/410734_sacramento_nse_sceua.pkl')
 # report.plot_report_card()  # Generate comprehensive visualization
 # ```
 #
@@ -174,7 +174,7 @@
 # │
 # ├── calibration/         ← Optimization algorithms
 # │   ├── runner.py        ← CalibrationRunner (unified interface)
-# │   └── ...              ← PyDREAM, SCE-UA, SciPy adapters
+# │   └── ...              ← SCE-UA, PyDREAM, SciPy, NumPyro adapters
 # │
 # ├── objectives/          ← How to measure "goodness of fit"
 # │   ├── metrics/         ← NSE, KGE, RMSE, etc.
@@ -217,6 +217,11 @@ plt.style.use('seaborn-v0_8-whitegrid')
 plt.rcParams['figure.figsize'] = (12, 6)
 plt.rcParams['figure.dpi'] = 100
 
+OUTPUT_DIR = Path('../test_data/02_calibration_quickstart')
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+REPORTS_DIR = OUTPUT_DIR / 'reports'
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
 print("=" * 70)
 print("PYRRM CALIBRATION QUICKSTART")
 print("=" * 70)
@@ -225,7 +230,12 @@ print("\nLibraries loaded successfully!")
 # %%
 # Import pyrrm components
 from pyrrm.models.sacramento import Sacramento
-from pyrrm.calibration import CalibrationRunner, PYDREAM_AVAILABLE
+from pyrrm.models import NUMBA_AVAILABLE
+from pyrrm.calibration import (
+    CalibrationRunner,
+    PYDREAM_AVAILABLE,
+    NUMPYRO_AVAILABLE,
+)
 
 # Reload modules to pick up any code changes (useful during development)
 import importlib
@@ -233,15 +243,20 @@ import pyrrm.visualization.report_plots
 import pyrrm.calibration.report
 importlib.reload(pyrrm.visualization.report_plots)
 importlib.reload(pyrrm.calibration.report)
-from pyrrm.calibration.objective_functions import NSE, KGE, calculate_metrics
+from pyrrm.calibration.objective_functions import NSE, KGE
+from pyrrm.analysis.diagnostics import compute_diagnostics, print_diagnostics, DIAGNOSTIC_GROUPS
 
 print("\npyrrm components imported:")
 print(f"  - Sacramento model")
 print(f"  - CalibrationRunner")
 print(f"  - Objective functions (NSE, KGE)")
+print(f"\nModel acceleration:")
+print(f"  - Numba JIT: {'ACTIVE' if NUMBA_AVAILABLE else 'not available (pip install numba)'}")
 print(f"\nAvailable calibration backends:")
-print(f"  - SCE-UA (direct, vendored): always available")
+print(f"  - SCE-UA (vendored): always available")
+print(f"  - SciPy (DE, Dual Annealing): always available")
 print(f"  - PyDREAM (MT-DREAM(ZS)): {PYDREAM_AVAILABLE}")
+print(f"  - NumPyro NUTS: {NUMPYRO_AVAILABLE}")
 
 # %% [markdown]
 # ---
@@ -267,103 +282,28 @@ print(f"  - PyDREAM (MT-DREAM(ZS)): {PYDREAM_AVAILABLE}")
 # wind, and solar radiation.
 
 # %%
-# Configure paths
-DATA_DIR = Path('../data/410734')
+from pyrrm.data import load_catchment_data
 
-# Catchment area - used to convert model output from mm to ML/day
-# Formula: Flow (ML/day) = Depth (mm/day) × Area (km²)
+DATA_DIR = Path('../data/410734')
 CATCHMENT_AREA_KM2 = 516.62667
 
-print(f"Data directory: {DATA_DIR.absolute()}")
-print(f"Catchment area: {CATCHMENT_AREA_KM2} km²")
+inputs, observed = load_catchment_data(
+    precipitation_file=DATA_DIR / 'Default Input Set - Rain_QBN01.csv',
+    pet_file=DATA_DIR / 'Default Input Set - Mwet_QBN01.csv',
+    observed_file=DATA_DIR / '410734_output_SDmodel.csv',
+    observed_value_column='Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)',
+)
 
-# %% [markdown]
-# ### Loading Rainfall Data
-#
-# Rainfall is the primary driver of streamflow. We load daily gridded
-# rainfall data (already averaged over the catchment area).
-
-# %%
-# Load rainfall
-rainfall_file = DATA_DIR / 'Default Input Set - Rain_QBN01.csv'
-rainfall_df = pd.read_csv(rainfall_file, parse_dates=['Date'], index_col='Date')
-rainfall_df.columns = ['rainfall']
-
-print("RAINFALL DATA")
-print("=" * 50)
-print(f"File: {rainfall_file.name}")
-print(f"Records: {len(rainfall_df):,} days")
-print(f"Period: {rainfall_df.index.min().date()} to {rainfall_df.index.max().date()}")
-print(f"\nStatistics (mm/day):")
-print(rainfall_df['rainfall'].describe().round(2))
-
-# %% [markdown]
-# ### Loading PET Data
-#
-# PET (Potential Evapotranspiration) represents how much water *could* evaporate
-# given the atmospheric conditions. In pyrrm, we use Morton's Wet Environment
-# evapotranspiration.
-
-# %%
-# Load PET
-pet_file = DATA_DIR / 'Default Input Set - Mwet_QBN01.csv'
-pet_df = pd.read_csv(pet_file, parse_dates=['Date'], index_col='Date')
-pet_df.columns = ['pet']
-
-print("PET DATA")
-print("=" * 50)
-print(f"File: {pet_file.name}")
-print(f"Records: {len(pet_df):,} days")
-print(f"Period: {pet_df.index.min().date()} to {pet_df.index.max().date()}")
-print(f"\nStatistics (mm/day):")
-print(pet_df['pet'].describe().round(2))
-
-# %% [markdown]
-# ### Loading Observed Flow Data
-#
-# This is what we're trying to match! Observed streamflow is measured at the
-# gauging station (Gauge 410734).
-
-# %%
-# Load observed flow
-flow_file = DATA_DIR / '410734_output_SDmodel.csv'
-flow_df = pd.read_csv(flow_file, parse_dates=['Date'], index_col='Date')
-
-# Extract the recorded gauging station flow column
-observed_col = 'Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)'
-observed_df = flow_df[[observed_col]].copy()
-observed_df.columns = ['observed_flow']
-
-# Handle missing values (-9999 = missing)
-observed_df['observed_flow'] = observed_df['observed_flow'].replace(-9999, np.nan)
-observed_df.loc[observed_df['observed_flow'] < 0, 'observed_flow'] = np.nan
-observed_df = observed_df.dropna()
-
-print("OBSERVED FLOW DATA")
-print("=" * 50)
-print(f"File: {flow_file.name}")
-print(f"Records: {len(observed_df):,} days")
-print(f"Period: {observed_df.index.min().date()} to {observed_df.index.max().date()}")
-print(f"\nStatistics (ML/day):")
-print(observed_df['observed_flow'].describe().round(2))
-
-# %% [markdown]
-# ### Merging the Datasets
-#
-# We need all three datasets aligned on the same dates. We use an "inner join"
-# to keep only dates where all data is available.
-
-# %%
-# Merge all datasets
-data = rainfall_df.join(pet_df, how='inner').join(observed_df, how='inner')
+# Build a combined DataFrame for visualization
+data = inputs.copy()
+data['observed_flow'] = observed
 
 print("MERGED DATASET")
 print("=" * 50)
+print(f"Catchment area: {CATCHMENT_AREA_KM2} km²")
 print(f"Total records: {len(data):,} days")
 print(f"Period: {data.index.min().date()} to {data.index.max().date()}")
 print(f"Columns: {list(data.columns)}")
-
-# Quick check for missing values
 print(f"\nMissing values:")
 print(data.isna().sum())
 
@@ -389,7 +329,7 @@ fig = make_subplots(
 
 # Rainfall
 fig.add_trace(
-    go.Scatter(x=data.index, y=data['rainfall'], name='Rainfall',
+    go.Scatter(x=data.index, y=data['precipitation'], name='Rainfall',
                fill='tozeroy', fillcolor='rgba(70, 130, 180, 0.6)',
                line=dict(color='steelblue', width=0.5)),
     row=1, col=1
@@ -586,7 +526,7 @@ print(f"Warmup: {WARMUP_DAYS} days")
 print(f"Effective calibration: {len(cal_data) - WARMUP_DAYS:,} days")
 
 # Prepare inputs and observed data
-cal_inputs = cal_data[['rainfall', 'pet']].copy()
+cal_inputs = cal_data[['precipitation', 'pet']].copy()
 cal_observed = cal_data['observed_flow'].values
 
 # %%
@@ -621,7 +561,8 @@ print(f"Warmup period: {WARMUP_DAYS} days")
 # |-----------|------|-------|--------------|----------|
 # | **SCE-UA Direct** | Optimization | Fast | No | Quick calibration (recommended) |
 # | **SciPy DE** | Optimization | Fast | No | Simple cases |
-# | **PyDREAM** | MCMC | Slow | Yes | Full uncertainty, complex problems |
+# | **PyDREAM / NumPyro NUTS** | MCMC | Slow | Yes | Full uncertainty |
+# | **PyDREAM** | MCMC | Slow | Yes | Complex problems |
 #
 # For this quickstart, we'll use **SCE-UA Direct** - a vendored implementation
 # of the Shuffled Complex Evolution algorithm. This is a classic hydrology
@@ -663,56 +604,8 @@ from pyrrm.calibration import CalibrationReport
 nse_report = runner.create_report(result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-nse_report.save('../test_data/reports/410734_sacramento_nse_sceua')
-print(f"\nCalibration saved to: test_data/reports/410734_sacramento_nse_sceua.pkl")
-
-# %% [markdown]
-# ## pyrrm Experiment Naming Convention
-#
-# All calibration reports in `pyrrm` follow a **canonical naming convention** so that
-# any file name immediately tells you the catchment, model, objective function,
-# algorithm, and (optionally) flow transformation used:
-#
-# ```
-# {catchment}_{model}_{objective}_{algorithm}[_{transformation}]
-# ```
-#
-# | Field            | Description | Examples |
-# |------------------|-------------|----------|
-# | `catchment`      | Gauge ID or descriptive label (always present) | `410734`, `synthetic`, `demo` |
-# | `model`          | Rainfall–runoff model | `sacramento`, `gr4j`, `gr5j` |
-# | `objective`      | Objective / likelihood function | `nse`, `kge`, `kgenp`, `apex`, `gaussian` |
-# | `algorithm`      | Calibration algorithm | `sceua`, `dream`, `nuts` |
-# | `transformation` | Flow transformation (optional) | `log`, `sqrt`, `inverse` |
-#
-# **Rules:**
-# - All fields are **lowercased** with non-alphanumeric characters stripped.
-# - Exactly **4 underscore-separated fields** (5 when a transformation is used).
-# - When no real catchment ID exists, use a descriptive default (`synthetic`, `demo`, etc.).
-#
-# **APEX extension** — when the objective is `apex`, all key hyperparameters are
-# appended as **dash-separated tags** after the transformation (kappa first, then regime):
-#
-# ```
-# 410734_sacramento_apex_sceua_sqrt-k05-uniform
-# ```
-#
-# Helper functions are available in `pyrrm.calibration`:
-#
-# ```python
-# from pyrrm.calibration import make_experiment_key, make_apex_tags
-#
-# # Standard experiment
-# key = make_experiment_key('Sacramento', 'nse', 'sceua', catchment='410734')
-# # -> '410734_sacramento_nse_sceua'
-#
-# # APEX experiment with parameter tags
-# tags = make_apex_tags(dynamics_strength=0.5, regime_emphasis='uniform')
-# key = make_experiment_key('Sacramento', 'apex', 'sceua',
-#                           catchment='410734', transformation='sqrt',
-#                           extra_tags=tags)
-# # -> '410734_sacramento_apex_sceua_sqrt-k05-uniform'
-# ```
+nse_report.save(REPORTS_DIR / '410734_sacramento_nse_sceua')
+print(f"\nCalibration saved to: {REPORTS_DIR / '410734_sacramento_nse_sceua.pkl'}")
 
 # %% [markdown]
 # ### Understanding the Output
@@ -772,138 +665,11 @@ print(f"Comparison period: {len(comparison):,} days (after warmup)")
 # Let's calculate multiple metrics to get a complete picture of model performance.
 
 # %%
-# Calculate all metrics
-metrics = calculate_metrics(sim_flow, obs_flow)
+# Compute the canonical diagnostic suite (48 metrics)
+from pyrrm.analysis.diagnostics import compute_diagnostics, print_diagnostics
 
-# Calculate additional NSE transformations and KGE components
-from pyrrm.objectives import FlowTransformation, SDEB, NSE as NSE_obj, KGE as KGE_obj, KGENonParametric
-
-# NSE transformations
-log_nse_obj = NSE_obj(transform=FlowTransformation('log', epsilon_value=0.01))
-inv_nse_obj = NSE_obj(transform=FlowTransformation('inverse', epsilon_value=0.01))
-sqrt_nse_obj = NSE_obj(transform=FlowTransformation('sqrt'))
-
-log_nse = log_nse_obj(obs_flow, sim_flow)
-inv_nse = inv_nse_obj(obs_flow, sim_flow)
-sqrt_nse = sqrt_nse_obj(obs_flow, sim_flow)
-
-# SDEB
-sdeb_obj = SDEB(alpha=0.1, lam=0.5)
-sdeb = sdeb_obj(obs_flow, sim_flow)
-
-# KGE with different transformations
-kge_obj = KGE_obj()
-kge = kge_obj(obs_flow, sim_flow)
-kge_components = kge_obj.get_components(obs_flow, sim_flow)
-
-kge_inv_obj = KGE_obj(transform=FlowTransformation('inverse', epsilon_value=0.01))
-kge_inv = kge_inv_obj(obs_flow, sim_flow)
-kge_inv_components = kge_inv_obj.get_components(obs_flow, sim_flow)
-
-kge_sqrt_obj = KGE_obj(transform=FlowTransformation('sqrt'))
-kge_sqrt = kge_sqrt_obj(obs_flow, sim_flow)
-kge_sqrt_components = kge_sqrt_obj.get_components(obs_flow, sim_flow)
-
-kge_log_obj = KGE_obj(transform=FlowTransformation('log', epsilon_value=0.01))
-kge_log = kge_log_obj(obs_flow, sim_flow)
-kge_log_components = kge_log_obj.get_components(obs_flow, sim_flow)
-
-kge_np_obj = KGENonParametric()
-kge_np = kge_np_obj(obs_flow, sim_flow)
-kge_np_components = kge_np_obj.get_components(obs_flow, sim_flow)
-
-print("=" * 80)
-print("MODEL PERFORMANCE METRICS - COMPREHENSIVE DIAGNOSTICS")
-print("=" * 80)
-
-# NSE-based metrics
-print(f"\n{'NSE-Based Metrics':<30} {'Value':>12}  {'Interpretation':<20}")
-print("-" * 65)
-nse_interp = "Good" if metrics['NSE'] > 0.7 else ("Acceptable" if metrics['NSE'] > 0.5 else "Poor")
-print(f"  {'NSE':<28} {metrics['NSE']:>12.4f}  {nse_interp}")
-log_interp = "Good" if log_nse > 0.7 else ("Acceptable" if log_nse > 0.5 else "Poor")
-print(f"  {'LogNSE':<28} {log_nse:>12.4f}  {log_interp}")
-inv_interp = "Good" if inv_nse > 0.7 else ("Acceptable" if inv_nse > 0.5 else "Poor")
-print(f"  {'InvNSE (1/Q)':<28} {inv_nse:>12.4f}  {inv_interp}")
-sqrt_interp = "Good" if sqrt_nse > 0.7 else ("Acceptable" if sqrt_nse > 0.5 else "Poor")
-print(f"  {'SqrtNSE (√Q)':<28} {sqrt_nse:>12.4f}  {sqrt_interp}")
-
-# Composite metrics
-print(f"\n{'Composite Metrics':<30} {'Value':>12}  {'Interpretation':<20}")
-print("-" * 65)
-sdeb_interp = "Good" if sdeb < 0.3 else ("Acceptable" if sdeb < 0.5 else "Higher is worse")
-print(f"  {'SDEB':<28} {sdeb:>12.2f}  {sdeb_interp}")
-
-# KGE metrics
-print(f"\n{'KGE Metrics':<30} {'Value':>12}  {'Interpretation':<20}")
-print("-" * 65)
-kge_interp = "Good" if kge > 0.7 else ("Acceptable" if kge > 0.5 else "Poor")
-print(f"  {'KGE':<28} {kge:>12.4f}  {kge_interp}")
-if kge_components:
-    r_interp = "Good" if kge_components['r'] > 0.9 else ("Acceptable" if kge_components['r'] > 0.7 else "Poor")
-    print(f"  {'  r (correlation)':<28} {kge_components['r']:>12.4f}  {r_interp}")
-    alpha_interp = "Good" if abs(kge_components['alpha'] - 1.0) < 0.1 else ("Acceptable" if abs(kge_components['alpha'] - 1.0) < 0.2 else "Poor")
-    print(f"  {'  α (variability)':<28} {kge_components['alpha']:>12.4f}  {alpha_interp}")
-    beta_interp = "Good" if abs(kge_components['beta'] - 1.0) < 0.1 else ("Acceptable" if abs(kge_components['beta'] - 1.0) < 0.2 else "Poor")
-    print(f"  {'  β (bias ratio)':<28} {kge_components['beta']:>12.4f}  {beta_interp}")
-
-# KGE with inverse transformation
-kge_inv_interp = "Good" if kge_inv > 0.7 else ("Acceptable" if kge_inv > 0.5 else "Poor")
-print(f"  {'KGE(1/Q)':<28} {kge_inv:>12.4f}  {kge_inv_interp}")
-if kge_inv_components:
-    r_inv_interp = "Good" if kge_inv_components['r'] > 0.9 else ("Acceptable" if kge_inv_components['r'] > 0.7 else "Poor")
-    print(f"  {'    r (correlation)':<28} {kge_inv_components['r']:>12.4f}  {r_inv_interp}")
-    alpha_inv_interp = "Good" if abs(kge_inv_components['alpha'] - 1.0) < 0.1 else ("Acceptable" if abs(kge_inv_components['alpha'] - 1.0) < 0.2 else "Poor")
-    print(f"  {'    α (variability)':<28} {kge_inv_components['alpha']:>12.4f}  {alpha_inv_interp}")
-    beta_inv_interp = "Good" if abs(kge_inv_components['beta'] - 1.0) < 0.1 else ("Acceptable" if abs(kge_inv_components['beta'] - 1.0) < 0.2 else "Poor")
-    print(f"  {'    β (bias ratio)':<28} {kge_inv_components['beta']:>12.4f}  {beta_inv_interp}")
-
-# KGE with sqrt transformation
-kge_sqrt_interp = "Good" if kge_sqrt > 0.7 else ("Acceptable" if kge_sqrt > 0.5 else "Poor")
-print(f"  {'KGE(√Q)':<28} {kge_sqrt:>12.4f}  {kge_sqrt_interp}")
-if kge_sqrt_components:
-    r_sqrt_interp = "Good" if kge_sqrt_components['r'] > 0.9 else ("Acceptable" if kge_sqrt_components['r'] > 0.7 else "Poor")
-    print(f"  {'    r (correlation)':<28} {kge_sqrt_components['r']:>12.4f}  {r_sqrt_interp}")
-    alpha_sqrt_interp = "Good" if abs(kge_sqrt_components['alpha'] - 1.0) < 0.1 else ("Acceptable" if abs(kge_sqrt_components['alpha'] - 1.0) < 0.2 else "Poor")
-    print(f"  {'    α (variability)':<28} {kge_sqrt_components['alpha']:>12.4f}  {alpha_sqrt_interp}")
-    beta_sqrt_interp = "Good" if abs(kge_sqrt_components['beta'] - 1.0) < 0.1 else ("Acceptable" if abs(kge_sqrt_components['beta'] - 1.0) < 0.2 else "Poor")
-    print(f"  {'    β (bias ratio)':<28} {kge_sqrt_components['beta']:>12.4f}  {beta_sqrt_interp}")
-
-# KGE with log transformation
-kge_log_interp = "Good" if kge_log > 0.7 else ("Acceptable" if kge_log > 0.5 else "Poor")
-print(f"  {'KGE(log)':<28} {kge_log:>12.4f}  {kge_log_interp}")
-if kge_log_components:
-    r_log_interp = "Good" if kge_log_components['r'] > 0.9 else ("Acceptable" if kge_log_components['r'] > 0.7 else "Poor")
-    print(f"  {'    r (correlation)':<28} {kge_log_components['r']:>12.4f}  {r_log_interp}")
-    alpha_log_interp = "Good" if abs(kge_log_components['alpha'] - 1.0) < 0.1 else ("Acceptable" if abs(kge_log_components['alpha'] - 1.0) < 0.2 else "Poor")
-    print(f"  {'    α (variability)':<28} {kge_log_components['alpha']:>12.4f}  {alpha_log_interp}")
-    beta_log_interp = "Good" if abs(kge_log_components['beta'] - 1.0) < 0.1 else ("Acceptable" if abs(kge_log_components['beta'] - 1.0) < 0.2 else "Poor")
-    print(f"  {'    β (bias ratio)':<28} {kge_log_components['beta']:>12.4f}  {beta_log_interp}")
-
-# KGE non-parametric
-kge_np_interp = "Good" if kge_np > 0.7 else ("Acceptable" if kge_np > 0.5 else "Poor")
-print(f"  {'KGE_np':<28} {kge_np:>12.4f}  {kge_np_interp}")
-if kge_np_components:
-    r_np_interp = "Good" if kge_np_components.get('r_spearman', 0) > 0.9 else ("Acceptable" if kge_np_components.get('r_spearman', 0) > 0.7 else "Poor")
-    print(f"  {'    r_s (Spearman)':<28} {kge_np_components.get('r_spearman', np.nan):>12.4f}  {r_np_interp}")
-    alpha_np_interp = "Good" if abs(kge_np_components.get('alpha_np', 1.0) - 1.0) < 0.1 else ("Acceptable" if abs(kge_np_components.get('alpha_np', 1.0) - 1.0) < 0.2 else "Poor")
-    print(f"  {'    α_np (variability)':<28} {kge_np_components.get('alpha_np', np.nan):>12.4f}  {alpha_np_interp}")
-    beta_np_interp = "Good" if abs(kge_np_components.get('beta', 1.0) - 1.0) < 0.1 else ("Acceptable" if abs(kge_np_components.get('beta', 1.0) - 1.0) < 0.2 else "Poor")
-    print(f"  {'    β (bias ratio)':<28} {kge_np_components.get('beta', np.nan):>12.4f}  {beta_np_interp}")
-
-# Error metrics
-print(f"\n{'Error Metrics':<30} {'Value':>12}  {'Interpretation':<20}")
-print("-" * 65)
-rmse_interp = "Lower is better"
-print(f"  {'RMSE (ML/day)':<28} {metrics['RMSE']:>12.2f}  {rmse_interp}")
-mae_interp = "Lower is better"
-print(f"  {'MAE (ML/day)':<28} {metrics['MAE']:>12.2f}  {mae_interp}")
-
-# Bias metrics
-print(f"\n{'Bias Metrics':<30} {'Value':>12}  {'Interpretation':<20}")
-print("-" * 65)
-pbias_interp = "Good" if abs(metrics['PBIAS']) < 10 else ("Acceptable" if abs(metrics['PBIAS']) < 25 else "High bias")
-print(f"  {'PBIAS (%)':<28} {metrics['PBIAS']:>+12.2f}  {pbias_interp}")
+metrics = compute_diagnostics(sim_flow, obs_flow)
+print_diagnostics(metrics, label="Sacramento -- NSE calibration")
 
 # %% [markdown]
 # ### Visualizing the Results
@@ -1136,9 +902,9 @@ print(f"  √Q:          range [{obs_sqrt.min():.2f}, {obs_sqrt.max():.2f}]")
 # the `FlowTransformation` class. This allows you to easily create NSE variants
 # that emphasize different parts of the flow regime:
 #
-# - **LogNSE**: Log-transformed - balances all flow ranges
-# - **NSE(inverse)**: 1/Q transform - heavily emphasizes low flows
-# - **NSE(sqrt)**: √Q transform - moderate, balanced emphasis
+# - **NSE_log**: Log-transformed - balances all flow ranges
+# - **NSE_inv**: 1/Q transform - heavily emphasizes low flows
+# - **NSE_sqrt**: √Q transform - moderate, balanced emphasis
 # - **SDEB**: Combines chronological timing + FDC shape + bias penalty
 #
 # This eliminates the need to define custom classes!
@@ -1151,13 +917,13 @@ from pyrrm.objectives import NSE, KGE, KGENonParametric, FlowTransformation, SDE
 # NSE-BASED OBJECTIVE FUNCTIONS (with flow transformations)
 # ==============================================================================
 
-# LogNSE: NSE with log transformation - balances all flow ranges
+# NSE_log: NSE with log transformation - balances all flow ranges
 log_nse_objective = NSE(transform=FlowTransformation('log', epsilon_value=0.01))
 
-# InverseNSE: NSE with inverse transformation (1/Q) - heavily emphasizes low flows
+# NSE_inv: NSE with inverse transformation (1/Q) - heavily emphasizes low flows
 inv_nse_objective = NSE(transform=FlowTransformation('inverse', epsilon_value=0.01))
 
-# SqrtNSE: NSE with square root transformation (√Q) - balanced emphasis
+# NSE_sqrt: NSE with square root transformation (√Q) - balanced emphasis
 sqrt_nse_objective = NSE(transform=FlowTransformation('sqrt'))
 
 # ==============================================================================
@@ -1237,9 +1003,9 @@ print(f"SCE-UA Direct Configuration for Sacramento ({N_PARAMS_SAC} parameters):"
 print(f"  max_evals = {MAX_EVALS_SAC}")
 
 # %%
-# Run calibration with LogNSE
+# Run calibration with NSE_log
 print("=" * 70)
-print("CALIBRATION 1: Log-Transformed NSE (log Q)")
+print("CALIBRATION 1: NSE_log (log-transformed)")
 print("=" * 70)
 print("\nRunning calibration...\n")
 
@@ -1264,8 +1030,8 @@ print("\n" + log_result.summary())
 log_report = log_runner.create_report(log_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-log_report.save('../test_data/reports/410734_sacramento_nse_sceua_log')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_nse_sceua_log.pkl")
+log_report.save(REPORTS_DIR / '410734_sacramento_nse_sceua_log')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_nse_sceua_log.pkl'}")
 
 # %%
 # Run calibration with InverseNSE
@@ -1295,13 +1061,13 @@ print("\n" + inv_result.summary())
 inv_report = inv_runner.create_report(inv_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-inv_report.save('../test_data/reports/410734_sacramento_nse_sceua_inverse')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_nse_sceua_inverse.pkl")
+inv_report.save(REPORTS_DIR / '410734_sacramento_nse_sceua_inverse')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_nse_sceua_inverse.pkl'}")
 
 # %%
-# Run calibration with SqrtNSE
+# Run calibration with NSE_sqrt
 print("=" * 70)
-print("CALIBRATION 3: Square Root-Transformed NSE (√Q)")
+print("CALIBRATION 3: NSE_sqrt (square-root transformed)")
 print("=" * 70)
 print("\nRunning calibration...\n")
 
@@ -1326,8 +1092,8 @@ print("\n" + sqrt_result.summary())
 sqrt_report = sqrt_runner.create_report(sqrt_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-sqrt_report.save('../test_data/reports/410734_sacramento_nse_sceua_sqrt')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_nse_sceua_sqrt.pkl")
+sqrt_report.save(REPORTS_DIR / '410734_sacramento_nse_sceua_sqrt')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_nse_sceua_sqrt.pkl'}")
 
 # %%
 # Run calibration with SDEB
@@ -1359,8 +1125,8 @@ print("\n" + sdeb_result.summary())
 sdeb_report = sdeb_runner.create_report(sdeb_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-sdeb_report.save('../test_data/reports/410734_sacramento_sdeb_sceua')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_sdeb_sceua.pkl")
+sdeb_report.save(REPORTS_DIR / '410734_sacramento_sdeb_sceua')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_sdeb_sceua.pkl'}")
 
 # %% [markdown]
 # ---
@@ -1407,8 +1173,8 @@ print("\n" + kge_result.summary())
 kge_report = kge_runner.create_report(kge_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_report.save('../test_data/reports/410734_sacramento_kge_sceua')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_kge_sceua.pkl")
+kge_report.save(REPORTS_DIR / '410734_sacramento_kge_sceua')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_kge_sceua.pkl'}")
 
 # %%
 # Run calibration with KGE(inverse)
@@ -1440,8 +1206,8 @@ print("\n" + kge_inv_result.summary())
 kge_inv_report = kge_inv_runner.create_report(kge_inv_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_inv_report.save('../test_data/reports/410734_sacramento_kge_sceua_inverse')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_kge_sceua_inverse.pkl")
+kge_inv_report.save(REPORTS_DIR / '410734_sacramento_kge_sceua_inverse')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_kge_sceua_inverse.pkl'}")
 
 # %%
 # Run calibration with KGE(sqrt)
@@ -1473,8 +1239,8 @@ print("\n" + kge_sqrt_result.summary())
 kge_sqrt_report = kge_sqrt_runner.create_report(kge_sqrt_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_sqrt_report.save('../test_data/reports/410734_sacramento_kge_sceua_sqrt')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_kge_sceua_sqrt.pkl")
+kge_sqrt_report.save(REPORTS_DIR / '410734_sacramento_kge_sceua_sqrt')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_kge_sceua_sqrt.pkl'}")
 
 # %%
 # Run calibration with KGE(log) - use with caution
@@ -1511,8 +1277,8 @@ print("\n" + kge_log_result.summary())
 kge_log_report = kge_log_runner.create_report(kge_log_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_log_report.save('../test_data/reports/410734_sacramento_kge_sceua_log')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_kge_sceua_log.pkl")
+kge_log_report.save(REPORTS_DIR / '410734_sacramento_kge_sceua_log')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_kge_sceua_log.pkl'}")
 
 # %%
 # Run calibration with Non-parametric KGE
@@ -1545,8 +1311,8 @@ print("\n" + kge_np_result.summary())
 kge_np_report = kge_np_runner.create_report(kge_np_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_np_report.save('../test_data/reports/410734_sacramento_kgenp_sceua')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_kgenp_sceua.pkl")
+kge_np_report.save(REPORTS_DIR / '410734_sacramento_kgenp_sceua')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_kgenp_sceua.pkl'}")
 
 # %%
 # Run calibration with Non-parametric KGE with inverse transformation
@@ -1578,8 +1344,8 @@ print("\n" + kge_np_inv_result.summary())
 kge_np_inv_report = kge_np_inv_runner.create_report(kge_np_inv_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_np_inv_report.save('../test_data/reports/410734_sacramento_kgenp_sceua_inverse')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_kgenp_sceua_inverse.pkl")
+kge_np_inv_report.save(REPORTS_DIR / '410734_sacramento_kgenp_sceua_inverse')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_kgenp_sceua_inverse.pkl'}")
 
 # %%
 # Run calibration with Non-parametric KGE with sqrt transformation
@@ -1611,8 +1377,8 @@ print("\n" + kge_np_sqrt_result.summary())
 kge_np_sqrt_report = kge_np_sqrt_runner.create_report(kge_np_sqrt_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_np_sqrt_report.save('../test_data/reports/410734_sacramento_kgenp_sceua_sqrt')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_kgenp_sceua_sqrt.pkl")
+kge_np_sqrt_report.save(REPORTS_DIR / '410734_sacramento_kgenp_sceua_sqrt')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_kgenp_sceua_sqrt.pkl'}")
 
 # %%
 # Run calibration with Non-parametric KGE with log transformation
@@ -1649,8 +1415,8 @@ print("\n" + kge_np_log_result.summary())
 kge_np_log_report = kge_np_log_runner.create_report(kge_np_log_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-kge_np_log_report.save('../test_data/reports/410734_sacramento_kgenp_sceua_log')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_kgenp_sceua_log.pkl")
+kge_np_log_report.save(REPORTS_DIR / '410734_sacramento_kgenp_sceua_log')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_kgenp_sceua_log.pkl'}")
 
 # %%
 # Run simulations with all calibrated parameter sets (NSE-based objectives)
@@ -1716,22 +1482,21 @@ kge_np_log_model.set_parameters(kge_np_log_result.best_parameters)
 kge_np_log_model.reset()
 kge_np_log_sim_flow = kge_np_log_model.run(cal_data)['runoff'].values[WARMUP_DAYS:]
 
-# Calculate all metrics for comparison (NSE-based calibrations)
-nse_metrics = calculate_metrics(sim_flow, obs_flow)
-log_metrics = calculate_metrics(log_sim_flow, obs_flow)
-inv_metrics = calculate_metrics(inv_sim_flow, obs_flow)
-sqrt_metrics = calculate_metrics(sqrt_sim_flow, obs_flow)
-sdeb_metrics = calculate_metrics(sdeb_sim_flow, obs_flow)
+# Compute canonical diagnostics for all calibrations
+nse_metrics = compute_diagnostics(sim_flow, obs_flow)
+log_metrics = compute_diagnostics(log_sim_flow, obs_flow)
+inv_metrics = compute_diagnostics(inv_sim_flow, obs_flow)
+sqrt_metrics = compute_diagnostics(sqrt_sim_flow, obs_flow)
+sdeb_metrics = compute_diagnostics(sdeb_sim_flow, obs_flow)
 
-# Calculate metrics for KGE-based calibrations
-kge_metrics = calculate_metrics(kge_sim_flow, obs_flow)
-kge_inv_metrics = calculate_metrics(kge_inv_sim_flow, obs_flow)
-kge_sqrt_metrics = calculate_metrics(kge_sqrt_sim_flow, obs_flow)
-kge_log_metrics = calculate_metrics(kge_log_sim_flow, obs_flow)
-kge_np_metrics = calculate_metrics(kge_np_sim_flow, obs_flow)
-kge_np_inv_metrics = calculate_metrics(kge_np_inv_sim_flow, obs_flow)
-kge_np_sqrt_metrics = calculate_metrics(kge_np_sqrt_sim_flow, obs_flow)
-kge_np_log_metrics = calculate_metrics(kge_np_log_sim_flow, obs_flow)
+kge_metrics = compute_diagnostics(kge_sim_flow, obs_flow)
+kge_inv_metrics = compute_diagnostics(kge_inv_sim_flow, obs_flow)
+kge_sqrt_metrics = compute_diagnostics(kge_sqrt_sim_flow, obs_flow)
+kge_log_metrics = compute_diagnostics(kge_log_sim_flow, obs_flow)
+kge_np_metrics = compute_diagnostics(kge_np_sim_flow, obs_flow)
+kge_np_inv_metrics = compute_diagnostics(kge_np_inv_sim_flow, obs_flow)
+kge_np_sqrt_metrics = compute_diagnostics(kge_np_sqrt_sim_flow, obs_flow)
+kge_np_log_metrics = compute_diagnostics(kge_np_log_sim_flow, obs_flow)
 
 # Calculate transformed NSE/KGE values for each calibration using the objective functions
 # All objectives from pyrrm.objectives use __call__(obs, sim) interface
@@ -1926,64 +1691,53 @@ kge_np_log_kge = kge_np_log_objective(obs_flow, kge_np_log_sim_flow)
 print("=" * 150)
 print("COMPREHENSIVE COMPARISON: ALL OBJECTIVE FUNCTIONS")
 print("=" * 150)
-print(f"\n{'Metric':<14} {'NSE(Q)':>11} {'LogNSE':>11} {'InvNSE':>11} {'SqrtNSE':>11} {'SDEB':>11} {'KGE':>11} {'KGE(1/Q)':>11} {'KGE(√Q)':>11} {'KGE(log)':>11} {'KGE_np':>11}")
+print(f"\n{'Metric':<14} {'NSE':>11} {'NSE_log':>11} {'NSE_inv':>11} {'NSE_sqrt':>11} {'SDEB':>11} {'KGE':>11} {'KGE_inv':>11} {'KGE_sqrt':>11} {'KGE_log':>11} {'KGE_np':>11}")
 print("-" * 150)
 
-# NSE transformations
+# NSE variants (canonical names: NSE, NSE_log, NSE_inv, NSE_sqrt)
 print(f"{'NSE':<14} {nse_metrics['NSE']:>11.4f} {log_metrics['NSE']:>11.4f} {inv_metrics['NSE']:>11.4f} {sqrt_metrics['NSE']:>11.4f} {sdeb_metrics['NSE']:>11.4f} {kge_metrics['NSE']:>11.4f} {kge_inv_metrics['NSE']:>11.4f} {kge_sqrt_metrics['NSE']:>11.4f} {kge_log_metrics['NSE']:>11.4f} {kge_np_metrics['NSE']:>11.4f}")
-print(f"{'LogNSE':<14} {nse_lognse:>11.4f} {log_lognse:>11.4f} {inv_lognse:>11.4f} {sqrt_lognse:>11.4f} {sdeb_lognse:>11.4f} {kge_metrics['LogNSE']:>11.4f} {kge_inv_metrics['LogNSE']:>11.4f} {kge_sqrt_metrics['LogNSE']:>11.4f} {kge_log_metrics['LogNSE']:>11.4f} {kge_np_metrics['LogNSE']:>11.4f}")
-print(f"{'InvNSE':<14} {nse_invnse:>11.4f} {log_invnse:>11.4f} {inv_invnse:>11.4f} {sqrt_invnse:>11.4f} {sdeb_invnse:>11.4f} {kge_invnse:>11.4f} {kge_inv_invnse:>11.4f} {kge_sqrt_invnse:>11.4f} {kge_log_invnse:>11.4f} {kge_np_invnse:>11.4f}")
-print(f"{'SqrtNSE':<14} {nse_sqrtnse:>11.4f} {log_sqrtnse:>11.4f} {inv_sqrtnse:>11.4f} {sqrt_sqrtnse:>11.4f} {sdeb_sqrtnse:>11.4f} {kge_sqrtnse:>11.4f} {kge_inv_sqrtnse:>11.4f} {kge_sqrt_sqrtnse:>11.4f} {kge_log_sqrtnse:>11.4f} {kge_np_sqrtnse:>11.4f}")
+print(f"{'NSE_log':<14} {nse_metrics['NSE_log']:>11.4f} {log_metrics['NSE_log']:>11.4f} {inv_metrics['NSE_log']:>11.4f} {sqrt_metrics['NSE_log']:>11.4f} {sdeb_metrics['NSE_log']:>11.4f} {kge_metrics['NSE_log']:>11.4f} {kge_inv_metrics['NSE_log']:>11.4f} {kge_sqrt_metrics['NSE_log']:>11.4f} {kge_log_metrics['NSE_log']:>11.4f} {kge_np_metrics['NSE_log']:>11.4f}")
+print(f"{'NSE_inv':<14} {nse_metrics['NSE_inv']:>11.4f} {log_metrics['NSE_inv']:>11.4f} {inv_metrics['NSE_inv']:>11.4f} {sqrt_metrics['NSE_inv']:>11.4f} {sdeb_metrics['NSE_inv']:>11.4f} {kge_metrics['NSE_inv']:>11.4f} {kge_inv_metrics['NSE_inv']:>11.4f} {kge_sqrt_metrics['NSE_inv']:>11.4f} {kge_log_metrics['NSE_inv']:>11.4f} {kge_np_metrics['NSE_inv']:>11.4f}")
+print(f"{'NSE_sqrt':<14} {nse_metrics['NSE_sqrt']:>11.4f} {log_metrics['NSE_sqrt']:>11.4f} {inv_metrics['NSE_sqrt']:>11.4f} {sqrt_metrics['NSE_sqrt']:>11.4f} {sdeb_metrics['NSE_sqrt']:>11.4f} {kge_metrics['NSE_sqrt']:>11.4f} {kge_inv_metrics['NSE_sqrt']:>11.4f} {kge_sqrt_metrics['NSE_sqrt']:>11.4f} {kge_log_metrics['NSE_sqrt']:>11.4f} {kge_np_metrics['NSE_sqrt']:>11.4f}")
 print(f"{'SDEB':<14} {nse_sdeb:>11.2f} {log_sdeb:>11.2f} {inv_sdeb:>11.2f} {sqrt_sdeb:>11.2f} {sdeb_sdeb:>11.2f} {kge_sdeb:>11.2f} {kge_inv_sdeb:>11.2f} {kge_sqrt_sdeb:>11.2f} {kge_log_sdeb:>11.2f} {kge_np_sdeb:>11.2f}")
 
-# KGE metrics
+# KGE(Q) + components (canonical: KGE, KGE_r, KGE_alpha, KGE_beta)
 print(f"{'KGE':<14} {nse_metrics['KGE']:>11.4f} {log_metrics['KGE']:>11.4f} {inv_metrics['KGE']:>11.4f} {sqrt_metrics['KGE']:>11.4f} {sdeb_metrics['KGE']:>11.4f} {kge_metrics['KGE']:>11.4f} {kge_inv_metrics['KGE']:>11.4f} {kge_sqrt_metrics['KGE']:>11.4f} {kge_log_metrics['KGE']:>11.4f} {kge_np_metrics['KGE']:>11.4f}")
+print(f"{'  KGE_r':<14} {nse_metrics['KGE_r']:>11.4f} {log_metrics['KGE_r']:>11.4f} {inv_metrics['KGE_r']:>11.4f} {sqrt_metrics['KGE_r']:>11.4f} {sdeb_metrics['KGE_r']:>11.4f} {kge_metrics['KGE_r']:>11.4f} {kge_inv_metrics['KGE_r']:>11.4f} {kge_sqrt_metrics['KGE_r']:>11.4f} {kge_log_metrics['KGE_r']:>11.4f} {kge_np_metrics['KGE_r']:>11.4f}")
+print(f"{'  KGE_alpha':<14} {nse_metrics['KGE_alpha']:>11.4f} {log_metrics['KGE_alpha']:>11.4f} {inv_metrics['KGE_alpha']:>11.4f} {sqrt_metrics['KGE_alpha']:>11.4f} {sdeb_metrics['KGE_alpha']:>11.4f} {kge_metrics['KGE_alpha']:>11.4f} {kge_inv_metrics['KGE_alpha']:>11.4f} {kge_sqrt_metrics['KGE_alpha']:>11.4f} {kge_log_metrics['KGE_alpha']:>11.4f} {kge_np_metrics['KGE_alpha']:>11.4f}")
+print(f"{'  KGE_beta':<14} {nse_metrics['KGE_beta']:>11.4f} {log_metrics['KGE_beta']:>11.4f} {inv_metrics['KGE_beta']:>11.4f} {sqrt_metrics['KGE_beta']:>11.4f} {sdeb_metrics['KGE_beta']:>11.4f} {kge_metrics['KGE_beta']:>11.4f} {kge_inv_metrics['KGE_beta']:>11.4f} {kge_sqrt_metrics['KGE_beta']:>11.4f} {kge_log_metrics['KGE_beta']:>11.4f} {kge_np_metrics['KGE_beta']:>11.4f}")
 
-# KGE components
-print(f"{'  r':<14} {nse_kge_comp['r']:>11.4f} {log_kge_comp['r']:>11.4f} {inv_kge_comp['r']:>11.4f} {sqrt_kge_comp['r']:>11.4f} {sdeb_kge_comp['r']:>11.4f} {kge_kge_comp.get('r', kge_kge_comp.get('r_spearman', np.nan)):>11.4f} {kge_inv_kge_comp.get('r', kge_inv_kge_comp.get('r_spearman', np.nan)):>11.4f} {kge_sqrt_kge_comp.get('r', kge_sqrt_kge_comp.get('r_spearman', np.nan)):>11.4f} {kge_log_kge_comp.get('r', kge_log_kge_comp.get('r_spearman', np.nan)):>11.4f} {kge_np_kge_comp.get('r_spearman', np.nan):>11.4f}")
-print(f"{'  α':<14} {nse_kge_comp['alpha']:>11.4f} {log_kge_comp['alpha']:>11.4f} {inv_kge_comp['alpha']:>11.4f} {sqrt_kge_comp['alpha']:>11.4f} {sdeb_kge_comp['alpha']:>11.4f} {kge_kge_comp.get('alpha', kge_kge_comp.get('alpha_np', np.nan)):>11.4f} {kge_inv_kge_comp.get('alpha', kge_inv_kge_comp.get('alpha_np', np.nan)):>11.4f} {kge_sqrt_kge_comp.get('alpha', kge_sqrt_kge_comp.get('alpha_np', np.nan)):>11.4f} {kge_log_kge_comp.get('alpha', kge_log_kge_comp.get('alpha_np', np.nan)):>11.4f} {kge_np_kge_comp.get('alpha_np', np.nan):>11.4f}")
-print(f"{'  β':<14} {nse_kge_comp['beta']:>11.4f} {log_kge_comp['beta']:>11.4f} {inv_kge_comp['beta']:>11.4f} {sqrt_kge_comp['beta']:>11.4f} {sdeb_kge_comp['beta']:>11.4f} {kge_kge_comp['beta']:>11.4f} {kge_inv_kge_comp['beta']:>11.4f} {kge_sqrt_kge_comp['beta']:>11.4f} {kge_log_kge_comp['beta']:>11.4f} {kge_np_kge_comp['beta']:>11.4f}")
+# KGE(1/Q) + components (canonical: KGE_inv, KGE_inv_r, KGE_inv_alpha, KGE_inv_beta)
+print(f"{'KGE_inv':<14} {nse_metrics['KGE_inv']:>11.4f} {log_metrics['KGE_inv']:>11.4f} {inv_metrics['KGE_inv']:>11.4f} {sqrt_metrics['KGE_inv']:>11.4f} {sdeb_metrics['KGE_inv']:>11.4f} {kge_metrics['KGE_inv']:>11.4f} {kge_inv_metrics['KGE_inv']:>11.4f} {kge_sqrt_metrics['KGE_inv']:>11.4f} {kge_log_metrics['KGE_inv']:>11.4f} {kge_np_metrics['KGE_inv']:>11.4f}")
+print(f"{'  KGE_inv_r':<14} {nse_metrics['KGE_inv_r']:>11.4f} {log_metrics['KGE_inv_r']:>11.4f} {inv_metrics['KGE_inv_r']:>11.4f} {sqrt_metrics['KGE_inv_r']:>11.4f} {sdeb_metrics['KGE_inv_r']:>11.4f} {kge_metrics['KGE_inv_r']:>11.4f} {kge_inv_metrics['KGE_inv_r']:>11.4f} {kge_sqrt_metrics['KGE_inv_r']:>11.4f} {kge_log_metrics['KGE_inv_r']:>11.4f} {kge_np_metrics['KGE_inv_r']:>11.4f}")
+print(f"{'  KGE_inv_a':<14} {nse_metrics['KGE_inv_alpha']:>11.4f} {log_metrics['KGE_inv_alpha']:>11.4f} {inv_metrics['KGE_inv_alpha']:>11.4f} {sqrt_metrics['KGE_inv_alpha']:>11.4f} {sdeb_metrics['KGE_inv_alpha']:>11.4f} {kge_metrics['KGE_inv_alpha']:>11.4f} {kge_inv_metrics['KGE_inv_alpha']:>11.4f} {kge_sqrt_metrics['KGE_inv_alpha']:>11.4f} {kge_log_metrics['KGE_inv_alpha']:>11.4f} {kge_np_metrics['KGE_inv_alpha']:>11.4f}")
+print(f"{'  KGE_inv_b':<14} {nse_metrics['KGE_inv_beta']:>11.4f} {log_metrics['KGE_inv_beta']:>11.4f} {inv_metrics['KGE_inv_beta']:>11.4f} {sqrt_metrics['KGE_inv_beta']:>11.4f} {sdeb_metrics['KGE_inv_beta']:>11.4f} {kge_metrics['KGE_inv_beta']:>11.4f} {kge_inv_metrics['KGE_inv_beta']:>11.4f} {kge_sqrt_metrics['KGE_inv_beta']:>11.4f} {kge_log_metrics['KGE_inv_beta']:>11.4f} {kge_np_metrics['KGE_inv_beta']:>11.4f}")
 
-# KGE(1/Q) metrics
-print(f"{'KGE(1/Q)':<14} {nse_kge_inv:>11.4f} {log_kge_inv:>11.4f} {inv_kge_inv:>11.4f} {sqrt_kge_inv:>11.4f} {sdeb_kge_inv:>11.4f} {kge_kge_inv:>11.4f} {kge_inv_kge_inv:>11.4f} {kge_sqrt_kge_inv:>11.4f} {kge_log_kge_inv:>11.4f} {kge_np_kge_inv:>11.4f}")
+# KGE(sqrt Q) + components (canonical: KGE_sqrt, KGE_sqrt_r, KGE_sqrt_alpha, KGE_sqrt_beta)
+print(f"{'KGE_sqrt':<14} {nse_metrics['KGE_sqrt']:>11.4f} {log_metrics['KGE_sqrt']:>11.4f} {inv_metrics['KGE_sqrt']:>11.4f} {sqrt_metrics['KGE_sqrt']:>11.4f} {sdeb_metrics['KGE_sqrt']:>11.4f} {kge_metrics['KGE_sqrt']:>11.4f} {kge_inv_metrics['KGE_sqrt']:>11.4f} {kge_sqrt_metrics['KGE_sqrt']:>11.4f} {kge_log_metrics['KGE_sqrt']:>11.4f} {kge_np_metrics['KGE_sqrt']:>11.4f}")
+print(f"{'  KGE_sqrt_r':<14} {nse_metrics['KGE_sqrt_r']:>11.4f} {log_metrics['KGE_sqrt_r']:>11.4f} {inv_metrics['KGE_sqrt_r']:>11.4f} {sqrt_metrics['KGE_sqrt_r']:>11.4f} {sdeb_metrics['KGE_sqrt_r']:>11.4f} {kge_metrics['KGE_sqrt_r']:>11.4f} {kge_inv_metrics['KGE_sqrt_r']:>11.4f} {kge_sqrt_metrics['KGE_sqrt_r']:>11.4f} {kge_log_metrics['KGE_sqrt_r']:>11.4f} {kge_np_metrics['KGE_sqrt_r']:>11.4f}")
+print(f"{'  KGE_sqrt_a':<14} {nse_metrics['KGE_sqrt_alpha']:>11.4f} {log_metrics['KGE_sqrt_alpha']:>11.4f} {inv_metrics['KGE_sqrt_alpha']:>11.4f} {sqrt_metrics['KGE_sqrt_alpha']:>11.4f} {sdeb_metrics['KGE_sqrt_alpha']:>11.4f} {kge_metrics['KGE_sqrt_alpha']:>11.4f} {kge_inv_metrics['KGE_sqrt_alpha']:>11.4f} {kge_sqrt_metrics['KGE_sqrt_alpha']:>11.4f} {kge_log_metrics['KGE_sqrt_alpha']:>11.4f} {kge_np_metrics['KGE_sqrt_alpha']:>11.4f}")
+print(f"{'  KGE_sqrt_b':<14} {nse_metrics['KGE_sqrt_beta']:>11.4f} {log_metrics['KGE_sqrt_beta']:>11.4f} {inv_metrics['KGE_sqrt_beta']:>11.4f} {sqrt_metrics['KGE_sqrt_beta']:>11.4f} {sdeb_metrics['KGE_sqrt_beta']:>11.4f} {kge_metrics['KGE_sqrt_beta']:>11.4f} {kge_inv_metrics['KGE_sqrt_beta']:>11.4f} {kge_sqrt_metrics['KGE_sqrt_beta']:>11.4f} {kge_log_metrics['KGE_sqrt_beta']:>11.4f} {kge_np_metrics['KGE_sqrt_beta']:>11.4f}")
 
-# KGE(1/Q) components
-print(f"{'  r (1/Q)':<14} {nse_kge_inv_comp.get('r', np.nan):>11.4f} {log_kge_inv_comp.get('r', np.nan):>11.4f} {inv_kge_inv_comp.get('r', np.nan):>11.4f} {sqrt_kge_inv_comp.get('r', np.nan):>11.4f} {sdeb_kge_inv_comp.get('r', np.nan):>11.4f} {kge_kge_inv_comp.get('r', np.nan):>11.4f} {kge_inv_kge_inv_comp.get('r', np.nan):>11.4f} {kge_sqrt_kge_inv_comp.get('r', np.nan):>11.4f} {kge_log_kge_inv_comp.get('r', np.nan):>11.4f} {kge_np_kge_inv_comp.get('r', np.nan):>11.4f}")
-print(f"{'  α (1/Q)':<14} {nse_kge_inv_comp.get('alpha', np.nan):>11.4f} {log_kge_inv_comp.get('alpha', np.nan):>11.4f} {inv_kge_inv_comp.get('alpha', np.nan):>11.4f} {sqrt_kge_inv_comp.get('alpha', np.nan):>11.4f} {sdeb_kge_inv_comp.get('alpha', np.nan):>11.4f} {kge_kge_inv_comp.get('alpha', np.nan):>11.4f} {kge_inv_kge_inv_comp.get('alpha', np.nan):>11.4f} {kge_sqrt_kge_inv_comp.get('alpha', np.nan):>11.4f} {kge_log_kge_inv_comp.get('alpha', np.nan):>11.4f} {kge_np_kge_inv_comp.get('alpha', np.nan):>11.4f}")
-print(f"{'  β (1/Q)':<14} {nse_kge_inv_comp.get('beta', np.nan):>11.4f} {log_kge_inv_comp.get('beta', np.nan):>11.4f} {inv_kge_inv_comp.get('beta', np.nan):>11.4f} {sqrt_kge_inv_comp.get('beta', np.nan):>11.4f} {sdeb_kge_inv_comp.get('beta', np.nan):>11.4f} {kge_kge_inv_comp.get('beta', np.nan):>11.4f} {kge_inv_kge_inv_comp.get('beta', np.nan):>11.4f} {kge_sqrt_kge_inv_comp.get('beta', np.nan):>11.4f} {kge_log_kge_inv_comp.get('beta', np.nan):>11.4f} {kge_np_kge_inv_comp.get('beta', np.nan):>11.4f}")
+# KGE(log Q) + components (canonical: KGE_log, KGE_log_r, KGE_log_alpha, KGE_log_beta)
+print(f"{'KGE_log':<14} {nse_metrics['KGE_log']:>11.4f} {log_metrics['KGE_log']:>11.4f} {inv_metrics['KGE_log']:>11.4f} {sqrt_metrics['KGE_log']:>11.4f} {sdeb_metrics['KGE_log']:>11.4f} {kge_metrics['KGE_log']:>11.4f} {kge_inv_metrics['KGE_log']:>11.4f} {kge_sqrt_metrics['KGE_log']:>11.4f} {kge_log_metrics['KGE_log']:>11.4f} {kge_np_metrics['KGE_log']:>11.4f}")
+print(f"{'  KGE_log_r':<14} {nse_metrics['KGE_log_r']:>11.4f} {log_metrics['KGE_log_r']:>11.4f} {inv_metrics['KGE_log_r']:>11.4f} {sqrt_metrics['KGE_log_r']:>11.4f} {sdeb_metrics['KGE_log_r']:>11.4f} {kge_metrics['KGE_log_r']:>11.4f} {kge_inv_metrics['KGE_log_r']:>11.4f} {kge_sqrt_metrics['KGE_log_r']:>11.4f} {kge_log_metrics['KGE_log_r']:>11.4f} {kge_np_metrics['KGE_log_r']:>11.4f}")
+print(f"{'  KGE_log_a':<14} {nse_metrics['KGE_log_alpha']:>11.4f} {log_metrics['KGE_log_alpha']:>11.4f} {inv_metrics['KGE_log_alpha']:>11.4f} {sqrt_metrics['KGE_log_alpha']:>11.4f} {sdeb_metrics['KGE_log_alpha']:>11.4f} {kge_metrics['KGE_log_alpha']:>11.4f} {kge_inv_metrics['KGE_log_alpha']:>11.4f} {kge_sqrt_metrics['KGE_log_alpha']:>11.4f} {kge_log_metrics['KGE_log_alpha']:>11.4f} {kge_np_metrics['KGE_log_alpha']:>11.4f}")
+print(f"{'  KGE_log_b':<14} {nse_metrics['KGE_log_beta']:>11.4f} {log_metrics['KGE_log_beta']:>11.4f} {inv_metrics['KGE_log_beta']:>11.4f} {sqrt_metrics['KGE_log_beta']:>11.4f} {sdeb_metrics['KGE_log_beta']:>11.4f} {kge_metrics['KGE_log_beta']:>11.4f} {kge_inv_metrics['KGE_log_beta']:>11.4f} {kge_sqrt_metrics['KGE_log_beta']:>11.4f} {kge_log_metrics['KGE_log_beta']:>11.4f} {kge_np_metrics['KGE_log_beta']:>11.4f}")
 
-# KGE(√Q) metrics
-print(f"{'KGE(√Q)':<14} {nse_kge_sqrt:>11.4f} {log_kge_sqrt:>11.4f} {inv_kge_sqrt:>11.4f} {sqrt_kge_sqrt:>11.4f} {sdeb_kge_sqrt:>11.4f} {kge_kge_sqrt:>11.4f} {kge_inv_kge_sqrt:>11.4f} {kge_sqrt_kge_sqrt:>11.4f} {kge_log_kge_sqrt:>11.4f} {kge_np_kge_sqrt:>11.4f}")
-
-# KGE(√Q) components
-print(f"{'  r (√Q)':<14} {nse_kge_sqrt_comp.get('r', np.nan):>11.4f} {log_kge_sqrt_comp.get('r', np.nan):>11.4f} {inv_kge_sqrt_comp.get('r', np.nan):>11.4f} {sqrt_kge_sqrt_comp.get('r', np.nan):>11.4f} {sdeb_kge_sqrt_comp.get('r', np.nan):>11.4f} {kge_kge_sqrt_comp.get('r', np.nan):>11.4f} {kge_inv_kge_sqrt_comp.get('r', np.nan):>11.4f} {kge_sqrt_kge_sqrt_comp.get('r', np.nan):>11.4f} {kge_log_kge_sqrt_comp.get('r', np.nan):>11.4f} {kge_np_kge_sqrt_comp.get('r', np.nan):>11.4f}")
-print(f"{'  α (√Q)':<14} {nse_kge_sqrt_comp.get('alpha', np.nan):>11.4f} {log_kge_sqrt_comp.get('alpha', np.nan):>11.4f} {inv_kge_sqrt_comp.get('alpha', np.nan):>11.4f} {sqrt_kge_sqrt_comp.get('alpha', np.nan):>11.4f} {sdeb_kge_sqrt_comp.get('alpha', np.nan):>11.4f} {kge_kge_sqrt_comp.get('alpha', np.nan):>11.4f} {kge_inv_kge_sqrt_comp.get('alpha', np.nan):>11.4f} {kge_sqrt_kge_sqrt_comp.get('alpha', np.nan):>11.4f} {kge_log_kge_sqrt_comp.get('alpha', np.nan):>11.4f} {kge_np_kge_sqrt_comp.get('alpha', np.nan):>11.4f}")
-print(f"{'  β (√Q)':<14} {nse_kge_sqrt_comp.get('beta', np.nan):>11.4f} {log_kge_sqrt_comp.get('beta', np.nan):>11.4f} {inv_kge_sqrt_comp.get('beta', np.nan):>11.4f} {sqrt_kge_sqrt_comp.get('beta', np.nan):>11.4f} {sdeb_kge_sqrt_comp.get('beta', np.nan):>11.4f} {kge_kge_sqrt_comp.get('beta', np.nan):>11.4f} {kge_inv_kge_sqrt_comp.get('beta', np.nan):>11.4f} {kge_sqrt_kge_sqrt_comp.get('beta', np.nan):>11.4f} {kge_log_kge_sqrt_comp.get('beta', np.nan):>11.4f} {kge_np_kge_sqrt_comp.get('beta', np.nan):>11.4f}")
-
-# KGE(log) metrics
-print(f"{'KGE(log)':<14} {nse_kge_log:>11.4f} {log_kge_log:>11.4f} {inv_kge_log:>11.4f} {sqrt_kge_log:>11.4f} {sdeb_kge_log:>11.4f} {kge_kge_log:>11.4f} {kge_inv_kge_log:>11.4f} {kge_sqrt_kge_log:>11.4f} {kge_log_kge_log:>11.4f} {kge_np_kge_log:>11.4f}")
-
-# KGE(log) components
-print(f"{'  r (log)':<14} {nse_kge_log_comp.get('r', np.nan):>11.4f} {log_kge_log_comp.get('r', np.nan):>11.4f} {inv_kge_log_comp.get('r', np.nan):>11.4f} {sqrt_kge_log_comp.get('r', np.nan):>11.4f} {sdeb_kge_log_comp.get('r', np.nan):>11.4f} {kge_kge_log_comp.get('r', np.nan):>11.4f} {kge_inv_kge_log_comp.get('r', np.nan):>11.4f} {kge_sqrt_kge_log_comp.get('r', np.nan):>11.4f} {kge_log_kge_log_comp.get('r', np.nan):>11.4f} {kge_np_kge_log_comp.get('r', np.nan):>11.4f}")
-print(f"{'  α (log)':<14} {nse_kge_log_comp.get('alpha', np.nan):>11.4f} {log_kge_log_comp.get('alpha', np.nan):>11.4f} {inv_kge_log_comp.get('alpha', np.nan):>11.4f} {sqrt_kge_log_comp.get('alpha', np.nan):>11.4f} {sdeb_kge_log_comp.get('alpha', np.nan):>11.4f} {kge_kge_log_comp.get('alpha', np.nan):>11.4f} {kge_inv_kge_log_comp.get('alpha', np.nan):>11.4f} {kge_sqrt_kge_log_comp.get('alpha', np.nan):>11.4f} {kge_log_kge_log_comp.get('alpha', np.nan):>11.4f} {kge_np_kge_log_comp.get('alpha', np.nan):>11.4f}")
-print(f"{'  β (log)':<14} {nse_kge_log_comp.get('beta', np.nan):>11.4f} {log_kge_log_comp.get('beta', np.nan):>11.4f} {inv_kge_log_comp.get('beta', np.nan):>11.4f} {sqrt_kge_log_comp.get('beta', np.nan):>11.4f} {sdeb_kge_log_comp.get('beta', np.nan):>11.4f} {kge_kge_log_comp.get('beta', np.nan):>11.4f} {kge_inv_kge_log_comp.get('beta', np.nan):>11.4f} {kge_sqrt_kge_log_comp.get('beta', np.nan):>11.4f} {kge_log_kge_log_comp.get('beta', np.nan):>11.4f} {kge_np_kge_log_comp.get('beta', np.nan):>11.4f}")
-
-# KGE_np metrics
-print(f"{'KGE_np':<14} {nse_kge_np:>11.4f} {log_kge_np:>11.4f} {inv_kge_np:>11.4f} {sqrt_kge_np:>11.4f} {sdeb_kge_np:>11.4f} {kge_kge_np:>11.4f} {kge_inv_kge_np:>11.4f} {kge_sqrt_kge_np:>11.4f} {kge_log_kge_np:>11.4f} {kge_np_kge_np:>11.4f}")
-
-# KGE_np components
-print(f"{'  r_s (np)':<14} {nse_kge_np_comp.get('r_spearman', np.nan):>11.4f} {log_kge_np_comp.get('r_spearman', np.nan):>11.4f} {inv_kge_np_comp.get('r_spearman', np.nan):>11.4f} {sqrt_kge_np_comp.get('r_spearman', np.nan):>11.4f} {sdeb_kge_np_comp.get('r_spearman', np.nan):>11.4f} {kge_kge_np_comp.get('r_spearman', np.nan):>11.4f} {kge_inv_kge_np_comp.get('r_spearman', np.nan):>11.4f} {kge_sqrt_kge_np_comp.get('r_spearman', np.nan):>11.4f} {kge_log_kge_np_comp.get('r_spearman', np.nan):>11.4f} {kge_np_kge_np_comp.get('r_spearman', np.nan):>11.4f}")
-print(f"{'  α_np':<14} {nse_kge_np_comp.get('alpha_np', np.nan):>11.4f} {log_kge_np_comp.get('alpha_np', np.nan):>11.4f} {inv_kge_np_comp.get('alpha_np', np.nan):>11.4f} {sqrt_kge_np_comp.get('alpha_np', np.nan):>11.4f} {sdeb_kge_np_comp.get('alpha_np', np.nan):>11.4f} {kge_kge_np_comp.get('alpha_np', np.nan):>11.4f} {kge_inv_kge_np_comp.get('alpha_np', np.nan):>11.4f} {kge_sqrt_kge_np_comp.get('alpha_np', np.nan):>11.4f} {kge_log_kge_np_comp.get('alpha_np', np.nan):>11.4f} {kge_np_kge_np_comp.get('alpha_np', np.nan):>11.4f}")
-print(f"{'  β (np)':<14} {nse_kge_np_comp.get('beta', np.nan):>11.4f} {log_kge_np_comp.get('beta', np.nan):>11.4f} {inv_kge_np_comp.get('beta', np.nan):>11.4f} {sqrt_kge_np_comp.get('beta', np.nan):>11.4f} {sdeb_kge_np_comp.get('beta', np.nan):>11.4f} {kge_kge_np_comp.get('beta', np.nan):>11.4f} {kge_inv_kge_np_comp.get('beta', np.nan):>11.4f} {kge_sqrt_kge_np_comp.get('beta', np.nan):>11.4f} {kge_log_kge_np_comp.get('beta', np.nan):>11.4f} {kge_np_kge_np_comp.get('beta', np.nan):>11.4f}")
-
-# Error metrics
+# Error metrics (canonical: RMSE, MAE, PBIAS)
 print(f"{'RMSE':<14} {nse_metrics['RMSE']:>11.2f} {log_metrics['RMSE']:>11.2f} {inv_metrics['RMSE']:>11.2f} {sqrt_metrics['RMSE']:>11.2f} {sdeb_metrics['RMSE']:>11.2f} {kge_metrics['RMSE']:>11.2f} {kge_inv_metrics['RMSE']:>11.2f} {kge_sqrt_metrics['RMSE']:>11.2f} {kge_log_metrics['RMSE']:>11.2f} {kge_np_metrics['RMSE']:>11.2f}")
 print(f"{'MAE':<14} {nse_metrics['MAE']:>11.2f} {log_metrics['MAE']:>11.2f} {inv_metrics['MAE']:>11.2f} {sqrt_metrics['MAE']:>11.2f} {sdeb_metrics['MAE']:>11.2f} {kge_metrics['MAE']:>11.2f} {kge_inv_metrics['MAE']:>11.2f} {kge_sqrt_metrics['MAE']:>11.2f} {kge_log_metrics['MAE']:>11.2f} {kge_np_metrics['MAE']:>11.2f}")
 print(f"{'PBIAS (%)':<14} {nse_metrics['PBIAS']:>+11.2f} {log_metrics['PBIAS']:>+11.2f} {inv_metrics['PBIAS']:>+11.2f} {sqrt_metrics['PBIAS']:>+11.2f} {sdeb_metrics['PBIAS']:>+11.2f} {kge_metrics['PBIAS']:>+11.2f} {kge_inv_metrics['PBIAS']:>+11.2f} {kge_sqrt_metrics['PBIAS']:>+11.2f} {kge_log_metrics['PBIAS']:>+11.2f} {kge_np_metrics['PBIAS']:>+11.2f}")
 
+# FDC volume biases (canonical: FHV, FMV, FLV)
+print(f"{'FHV (%)':<14} {nse_metrics['FHV']:>+11.2f} {log_metrics['FHV']:>+11.2f} {inv_metrics['FHV']:>+11.2f} {sqrt_metrics['FHV']:>+11.2f} {sdeb_metrics['FHV']:>+11.2f} {kge_metrics['FHV']:>+11.2f} {kge_inv_metrics['FHV']:>+11.2f} {kge_sqrt_metrics['FHV']:>+11.2f} {kge_log_metrics['FHV']:>+11.2f} {kge_np_metrics['FHV']:>+11.2f}")
+print(f"{'FMV (%)':<14} {nse_metrics['FMV']:>+11.2f} {log_metrics['FMV']:>+11.2f} {inv_metrics['FMV']:>+11.2f} {sqrt_metrics['FMV']:>+11.2f} {sdeb_metrics['FMV']:>+11.2f} {kge_metrics['FMV']:>+11.2f} {kge_inv_metrics['FMV']:>+11.2f} {kge_sqrt_metrics['FMV']:>+11.2f} {kge_log_metrics['FMV']:>+11.2f} {kge_np_metrics['FMV']:>+11.2f}")
+print(f"{'FLV (%)':<14} {nse_metrics.get('FLV', np.nan):>+11.2f} {log_metrics.get('FLV', np.nan):>+11.2f} {inv_metrics.get('FLV', np.nan):>+11.2f} {sqrt_metrics.get('FLV', np.nan):>+11.2f} {sdeb_metrics.get('FLV', np.nan):>+11.2f} {kge_metrics.get('FLV', np.nan):>+11.2f} {kge_inv_metrics.get('FLV', np.nan):>+11.2f} {kge_sqrt_metrics.get('FLV', np.nan):>+11.2f} {kge_log_metrics.get('FLV', np.nan):>+11.2f} {kge_np_metrics.get('FLV', np.nan):>+11.2f}")
+
 print("\n" + "-" * 150)
 print("Notes:")
-print("  • NSE/LogNSE/InvNSE/SqrtNSE/KGE are maximized (higher=better, optimal=1.0)")
+print("  • NSE/NSE_log/NSE_inv/NSE_sqrt/KGE are maximized (higher=better, optimal=1.0)")
 print("  • SDEB/RMSE/MAE are minimized (lower=better)")
 print("  • r = correlation, α = variability ratio, β = bias ratio (all optimal = 1.0)")
 print("  • KGE > -0.41 indicates improvement over mean benchmark (Knoben et al., 2019)")
@@ -2089,13 +1843,13 @@ fig_all.add_trace(go.Scatter(x=comparison.index, y=obs_flow, name='Observed',
               legendgroup='observed', line=dict(color=colors['observed'], width=2)), row=1, col=1)
 
 # NSE-based objectives
-fig_all.add_trace(go.Scatter(x=comparison.index, y=sim_flow, name='NSE (Q)',
+fig_all.add_trace(go.Scatter(x=comparison.index, y=sim_flow, name='NSE',
               legendgroup='nse', line=dict(color=colors['nse'], width=1)), row=1, col=1)
-fig_all.add_trace(go.Scatter(x=comparison.index, y=log_sim_flow, name='LogNSE',
+fig_all.add_trace(go.Scatter(x=comparison.index, y=log_sim_flow, name='NSE_log',
               legendgroup='log', line=dict(color=colors['log'], width=1)), row=1, col=1)
-fig_all.add_trace(go.Scatter(x=comparison.index, y=inv_sim_flow, name='InvNSE (1/Q)',
+fig_all.add_trace(go.Scatter(x=comparison.index, y=inv_sim_flow, name='NSE_inv',
               legendgroup='inv', line=dict(color=colors['inv'], width=1)), row=1, col=1)
-fig_all.add_trace(go.Scatter(x=comparison.index, y=sqrt_sim_flow, name='SqrtNSE (√Q)',
+fig_all.add_trace(go.Scatter(x=comparison.index, y=sqrt_sim_flow, name='NSE_sqrt',
               legendgroup='sqrt', line=dict(color=colors['sqrt'], width=1)), row=1, col=1)
 fig_all.add_trace(go.Scatter(x=comparison.index, y=sdeb_sim_flow, name='SDEB',
               legendgroup='sdeb', line=dict(color=colors['sdeb'], width=1)), row=1, col=1)
@@ -2165,11 +1919,11 @@ fig_all.add_trace(go.Scatter(x=exceedance, y=obs_sorted, name='Observed',
 # NSE-based objectives
 fig_all.add_trace(go.Scatter(x=exceedance, y=nse_sorted, name='NSE',
               legendgroup='nse', line=dict(color=colors['nse'], width=1.5), showlegend=False), row=3, col=1)
-fig_all.add_trace(go.Scatter(x=exceedance, y=log_sorted, name='LogNSE',
+fig_all.add_trace(go.Scatter(x=exceedance, y=log_sorted, name='NSE_log',
               legendgroup='log', line=dict(color=colors['log'], width=1.5), showlegend=False), row=3, col=1)
-fig_all.add_trace(go.Scatter(x=exceedance, y=inv_sorted, name='InvNSE',
+fig_all.add_trace(go.Scatter(x=exceedance, y=inv_sorted, name='NSE_inv',
               legendgroup='inv', line=dict(color=colors['inv'], width=1.5), showlegend=False), row=3, col=1)
-fig_all.add_trace(go.Scatter(x=exceedance, y=sqrt_sorted, name='SqrtNSE',
+fig_all.add_trace(go.Scatter(x=exceedance, y=sqrt_sorted, name='NSE_sqrt',
               legendgroup='sqrt', line=dict(color=colors['sqrt'], width=1.5), showlegend=False), row=3, col=1)
 fig_all.add_trace(go.Scatter(x=exceedance, y=sdeb_sorted, name='SDEB',
               legendgroup='sdeb', line=dict(color=colors['sdeb'], width=1.5), showlegend=False), row=3, col=1)
@@ -2198,11 +1952,11 @@ fig_all.add_trace(go.Scatter(x=exceedance, y=kge_np_log_sorted, name='KGE_np(log
 # NSE-based objectives
 fig_all.add_trace(go.Scatter(x=obs_flow, y=sim_flow, mode='markers', name='NSE',
               legendgroup='nse', marker=dict(color=colors['nse'], size=2, opacity=0.3), showlegend=False), row=4, col=1)
-fig_all.add_trace(go.Scatter(x=obs_flow, y=log_sim_flow, mode='markers', name='LogNSE',
+fig_all.add_trace(go.Scatter(x=obs_flow, y=log_sim_flow, mode='markers', name='NSE_log',
               legendgroup='log', marker=dict(color=colors['log'], size=2, opacity=0.3), showlegend=False), row=4, col=1)
-fig_all.add_trace(go.Scatter(x=obs_flow, y=inv_sim_flow, mode='markers', name='InvNSE',
+fig_all.add_trace(go.Scatter(x=obs_flow, y=inv_sim_flow, mode='markers', name='NSE_inv',
               legendgroup='inv', marker=dict(color=colors['inv'], size=2, opacity=0.3), showlegend=False), row=4, col=1)
-fig_all.add_trace(go.Scatter(x=obs_flow, y=sqrt_sim_flow, mode='markers', name='SqrtNSE',
+fig_all.add_trace(go.Scatter(x=obs_flow, y=sqrt_sim_flow, mode='markers', name='NSE_sqrt',
               legendgroup='sqrt', marker=dict(color=colors['sqrt'], size=2, opacity=0.3), showlegend=False), row=4, col=1)
 fig_all.add_trace(go.Scatter(x=obs_flow, y=sdeb_sim_flow, mode='markers', name='SDEB',
               legendgroup='sdeb', marker=dict(color=colors['sdeb'], size=2, opacity=0.3), showlegend=False), row=4, col=1)
@@ -2256,7 +2010,7 @@ fig_all.update_layout(
 fig_all.show()
 
 print("\nLegend guide:")
-print("  NSE-based: NSE (red), LogNSE (blue), InvNSE (green), SqrtNSE (purple)")
+print("  NSE-based: NSE (red), NSE_log (blue), NSE_inv (green), NSE_sqrt (purple)")
 print("  Composite: SDEB (orange)")
 print("  KGE-based: KGE (brown), KGE(1/Q) (pink), KGE(√Q) (gray), KGE(log) (teal), KGE_np (salmon)")
 print("  KGE_np transformed: KGE_np(1/Q) (light green), KGE_np(√Q) (light purple), KGE_np(log) (light orange)")
@@ -2269,18 +2023,18 @@ print("  KGE_np transformed: KGE_np(1/Q) (light green), KGE_np(√Q) (light purp
 # - May miss low flow dynamics
 # - Highest standard NSE
 #
-# **LogNSE Calibration** (blue):
+# **NSE_log Calibration** (blue):
 # - Balances high and low flow performance
 # - Good all-round choice for general applications
 #
-# **InvNSE (1/Q) Calibration** (green):
+# **NSE_inv Calibration** (green):
 # - Heavily emphasizes low flows
 # - Best for drought analysis and environmental flows
 # - May sacrifice peak accuracy
 #
-# **SqrtNSE (√Q) Calibration** (purple):
+# **NSE_sqrt Calibration** (purple):
 # - Moderate emphasis on low flows
-# - Compromise between NSE and LogNSE
+# - Compromise between NSE and NSE_log
 #
 # **SDEB Calibration** (orange):
 # - Combines chronological timing + FDC shape + bias penalty
@@ -2318,11 +2072,11 @@ print("  KGE_np transformed: KGE_np(1/Q) (light green), KGE_np(√Q) (light purp
 #
 # | Application | Recommended Objectives | Reason |
 # |-------------|------------------------|--------|
-# | Flood forecasting | NSE (Q), KGE | Peaks matter most |
-# | Water supply | LogNSE, KGE(√Q), SqrtNSE | Balance matters |
-# | Drought/low flow | InvNSE, KGE(1/Q) | Low flows critical |
-# | Environmental flows | LogNSE, KGE(1/Q) | Baseflow important |
-# | General purpose | LogNSE, KGE(√Q), SDEB | Best balance |
+# | Flood forecasting | NSE, KGE | Peaks matter most |
+# | Water supply | NSE_log, KGE_sqrt, NSE_sqrt | Balance matters |
+# | Drought/low flow | NSE_inv, KGE_inv | Low flows critical |
+# | Environmental flows | NSE_log, KGE_inv | Baseflow important |
+# | General purpose | NSE_log, KGE_sqrt, SDEB | Best balance |
 # | Uncertain timing | SDEB | Reduces timing sensitivity |
 # | Flashy catchments | KGE_np | Robust to outliers |
 # | Model diagnostics | KGE family | Interpretable components |
@@ -2338,7 +2092,7 @@ print("=" * 180)
 
 # All objective functions in one table (NSE-based | KGE-based | KGE_np-based)
 print(f"\n{'':^10} |{'--- NSE-Based ---':^62}|{'--- KGE-Based ---':^62}|{'--- KGE_np Transformed ---':^40}")
-print(f"{'Parameter':<10} {'NSE(Q)':>10} {'LogNSE':>10} {'InvNSE':>10} {'SqrtNSE':>10} {'SDEB':>10} | {'KGE':>10} {'KGE(1/Q)':>10} {'KGE(√Q)':>10} {'KGE(log)':>10} {'KGE_np':>10} | {'KGE_np(1/Q)':>12} {'KGE_np(√Q)':>12} {'KGE_np(log)':>12}")
+print(f"{'Parameter':<10} {'NSE':>10} {'NSE_log':>10} {'NSE_inv':>10} {'NSE_sqrt':>10} {'SDEB':>10} | {'KGE':>10} {'KGE_inv':>10} {'KGE_sqrt':>10} {'KGE_log':>10} {'KGE_np':>10} | {'KGE_np_inv':>12} {'KGE_np_sqrt':>12} {'KGE_np_log':>12}")
 print("-" * 180)
 
 for param in result.best_parameters.keys():
@@ -2382,9 +2136,9 @@ def format_value(v):
 
 # Prepare data for all methods (NSE-based + KGE-based + KGE_np-based)
 # Row 1: NSE-based (5), Row 2: KGE-based (4 + 1 empty), Row 3: KGE_np family (4 + 1 empty)
-methods = ['NSE (Q)', 'LogNSE', 'InvNSE', 'SqrtNSE', 'SDEB', 
-           'KGE', 'KGE(1/Q)', 'KGE(√Q)', 'KGE(log)', '',
-           'KGE_np', 'KGE_np(1/Q)', 'KGE_np(√Q)', 'KGE_np(log)', '']
+methods = ['NSE', 'NSE_log', 'NSE_inv', 'NSE_sqrt', 'SDEB',
+           'KGE', 'KGE_inv', 'KGE_sqrt', 'KGE_log', '',
+           'KGE_np', 'KGE_np_inv', 'KGE_np_sqrt', 'KGE_np_log', '']
 results_list = [result, log_result, inv_result, sqrt_result, sdeb_result,
                 kge_result, kge_inv_result, kge_sqrt_result, kge_log_result, None,
                 kge_np_result, kge_np_inv_result, kge_np_sqrt_result, kge_np_log_result, None]
@@ -2479,9 +2233,9 @@ print("  - Row 1: NSE-based | Row 2: KGE-based | Row 3: KGE_np Transformed")
 # 2. **Set up the Sacramento model** with automatic unit conversion
 # 3. **Calibrated with standard NSE** (emphasizes high flows)
 # 4. **Explored flow transformations** (log, inverse, sqrt)
-# 5. **Calibrated with multiple NSE objectives** (LogNSE, InvNSE, SqrtNSE)
+# 5. **Calibrated with multiple NSE objectives** (NSE_log, NSE_inv, NSE_sqrt)
 # 6. **Calibrated with composite objective** (SDEB)
-# 7. **Calibrated with KGE family** (KGE, KGE(1/Q), KGE(√Q), KGE(log), KGE_np)
+# 7. **Calibrated with KGE family** (KGE, KGE_inv, KGE_sqrt, KGE_log, KGE_np)
 # 8. **Compared results** to understand the trade-offs
 #
 # ### Key Takeaways
@@ -2507,10 +2261,10 @@ print("  - Row 1: NSE-based | Row 2: KGE-based | Row 3: KGE_np Transformed")
 # | Application | NSE-based | Composite | KGE-based |
 # |-------------|-----------|-----------|-----------|
 # | Flood forecasting | NSE (Q) | - | KGE |
-# | Water supply | LogNSE, SqrtNSE | - | KGE(√Q) |
-# | Drought/low flow | InvNSE | - | KGE(1/Q) |
-# | Environmental flows | LogNSE | - | KGE(1/Q), KGE(√Q) |
-# | General purpose | LogNSE | SDEB | KGE(√Q), KGE_np |
+# | Water supply | NSE_log, NSE_sqrt | - | KGE_sqrt |
+# | Drought/low flow | NSE_inv | - | KGE_inv |
+# | Environmental flows | NSE_log | - | KGE_inv, KGE_sqrt |
+# | General purpose | NSE_log | SDEB | KGE_sqrt, KGE_np |
 # | Uncertain timing | - | SDEB | - |
 # | Flashy catchments | - | - | KGE_np |
 #
@@ -2518,7 +2272,7 @@ print("  - Row 1: NSE-based | Row 2: KGE-based | Row 3: KGE_np Transformed")
 
 # %%
 # Save calibrated parameters
-params_file = Path('../test_data/quickstart_calibrated_params.csv')
+params_file = OUTPUT_DIR / 'quickstart_calibrated_params.csv'
 pd.DataFrame([result.best_parameters]).to_csv(params_file, index=False)
 print(f"Calibrated parameters saved to: {params_file}")
 
@@ -2539,203 +2293,56 @@ print(f"Calibrated parameters saved to: {params_file}")
 # | **Volume & Timing** | PBIAS, RMSE, Pearson r, Spearman ρ |
 
 # %%
-# Import comprehensive evaluation metrics from pyrrm.objectives
-from pyrrm.objectives import (
-    NSE as NSE_new, KGE, KGENonParametric, PBIAS, RMSE,
-    FlowTransformation, FDCMetric, SignatureMetric,
-    PearsonCorrelation, SpearmanCorrelation
-)
-
-def comprehensive_evaluation(obs, sim, label="Model"):
-    """
-    Compute comprehensive metrics for fair model comparison.
-    
-    Returns a dictionary with metrics organized by category:
-    - Overall Efficiency
-    - Flow Regime Specific  
-    - FDC-Based
-    - Hydrological Signatures
-    - Timing/Dynamics
-    - Volume Balance
-    """
-    
-    # Initialize transformations
-    inv_transform = FlowTransformation('inverse', epsilon_value=0.01)
-    sqrt_transform = FlowTransformation('sqrt')
-    log_transform = FlowTransformation('log', epsilon_value=0.01)
-    
-    metrics = {}
-    
-    # === 1. OVERALL EFFICIENCY ===
-    metrics['NSE'] = NSE_new()(obs, sim)
-    metrics['KGE'] = KGE(variant='2012')(obs, sim)
-    metrics['KGE_np'] = KGENonParametric()(obs, sim)
-    
-    # === 2. KGE COMPONENTS (diagnostic) ===
-    kge_obj = KGE(variant='2012')
-    components = kge_obj.get_components(obs, sim)
-    if components:
-        metrics['r (correlation)'] = components['r']
-        metrics['α (variability)'] = components['alpha']
-        metrics['β (bias)'] = components['beta']
-    
-    # === 3. FLOW REGIME SPECIFIC ===
-    # Different transformations emphasize different flow ranges
-    metrics['NSE (log Q)'] = NSE_new(transform=log_transform)(obs, sim)
-    metrics['NSE (1/Q)'] = NSE_new(transform=inv_transform)(obs, sim)
-    metrics['NSE (√Q)'] = NSE_new(transform=sqrt_transform)(obs, sim)
-    
-    # KGE on transformed flows with components
-    kge_inv = KGE(transform=inv_transform)
-    metrics['KGE (1/Q)'] = kge_inv(obs, sim)
-    kge_inv_components = kge_inv.get_components(obs, sim)
-    if kge_inv_components:
-        metrics['r (1/Q)'] = kge_inv_components['r']
-        metrics['α (1/Q)'] = kge_inv_components['alpha']
-        metrics['β (1/Q)'] = kge_inv_components['beta']
-    
-    kge_sqrt = KGE(transform=sqrt_transform)
-    metrics['KGE (√Q)'] = kge_sqrt(obs, sim)
-    kge_sqrt_components = kge_sqrt.get_components(obs, sim)
-    if kge_sqrt_components:
-        metrics['r (√Q)'] = kge_sqrt_components['r']
-        metrics['α (√Q)'] = kge_sqrt_components['alpha']
-        metrics['β (√Q)'] = kge_sqrt_components['beta']
-    
-    kge_log = KGE(transform=log_transform)
-    metrics['KGE (log)'] = kge_log(obs, sim)
-    kge_log_components = kge_log.get_components(obs, sim)
-    if kge_log_components:
-        metrics['r (log)'] = kge_log_components['r']
-        metrics['α (log)'] = kge_log_components['alpha']
-        metrics['β (log)'] = kge_log_components['beta']
-    
-    # KGE_np components
-    kge_np_obj = KGENonParametric()
-    kge_np_components = kge_np_obj.get_components(obs, sim)
-    if kge_np_components:
-        metrics['r_s (np)'] = kge_np_components.get('r_spearman', np.nan)
-        metrics['α_np'] = kge_np_components.get('alpha_np', np.nan)
-        metrics['β (np)'] = kge_np_components.get('beta', np.nan)
-    
-    # KGE_np on transformed flows with components
-    kge_np_inv = KGENonParametric(transform=inv_transform)
-    metrics['KGE_np (1/Q)'] = kge_np_inv(obs, sim)
-    kge_np_inv_components = kge_np_inv.get_components(obs, sim)
-    if kge_np_inv_components:
-        metrics['r_s (np, 1/Q)'] = kge_np_inv_components.get('r_spearman', np.nan)
-        metrics['α_np (1/Q)'] = kge_np_inv_components.get('alpha_np', np.nan)
-        metrics['β (np, 1/Q)'] = kge_np_inv_components.get('beta', np.nan)
-    
-    kge_np_sqrt = KGENonParametric(transform=sqrt_transform)
-    metrics['KGE_np (√Q)'] = kge_np_sqrt(obs, sim)
-    kge_np_sqrt_components = kge_np_sqrt.get_components(obs, sim)
-    if kge_np_sqrt_components:
-        metrics['r_s (np, √Q)'] = kge_np_sqrt_components.get('r_spearman', np.nan)
-        metrics['α_np (√Q)'] = kge_np_sqrt_components.get('alpha_np', np.nan)
-        metrics['β (np, √Q)'] = kge_np_sqrt_components.get('beta', np.nan)
-    
-    kge_np_log = KGENonParametric(transform=log_transform)
-    metrics['KGE_np (log)'] = kge_np_log(obs, sim)
-    kge_np_log_components = kge_np_log.get_components(obs, sim)
-    if kge_np_log_components:
-        metrics['r_s (np, log)'] = kge_np_log_components.get('r_spearman', np.nan)
-        metrics['α_np (log)'] = kge_np_log_components.get('alpha_np', np.nan)
-        metrics['β (np, log)'] = kge_np_log_components.get('beta', np.nan)
-    
-    # === 4. FDC-BASED METRICS ===
-    # These evaluate performance across different exceedance probabilities
-    try:
-        metrics['FDC Peak Bias (%)'] = FDCMetric('peak', 'volume_bias')(obs, sim)
-        metrics['FDC High Bias (%)'] = FDCMetric('high', 'volume_bias')(obs, sim)
-        metrics['FDC Mid Bias (%)'] = FDCMetric('mid', 'volume_bias')(obs, sim)
-        metrics['FDC Low Bias (%)'] = FDCMetric('low', 'volume_bias', log_transform=True)(obs, sim)
-        metrics['FDC Very Low Bias (%)'] = FDCMetric('very_low', 'volume_bias', log_transform=True)(obs, sim)
-    except Exception:
-        # FDC metrics may fail with edge cases
-        pass
-    
-    # === 5. SIGNATURE METRICS ===
-    # Flow percentiles (percent error between observed and simulated)
-    try:
-        metrics['Q95 Error (%)'] = SignatureMetric('q95')(obs, sim)  # High flow
-        metrics['Q50 Error (%)'] = SignatureMetric('q50')(obs, sim)  # Median
-        metrics['Q5 Error (%)'] = SignatureMetric('q5')(obs, sim)    # Low flow
-        
-        # Dynamics
-        metrics['Flashiness Error (%)'] = SignatureMetric('flashiness')(obs, sim)
-        metrics['Baseflow Index Error (%)'] = SignatureMetric('baseflow_index')(obs, sim)
-        metrics['High Flow Freq Error (%)'] = SignatureMetric('high_flow_freq')(obs, sim)
-        metrics['Low Flow Freq Error (%)'] = SignatureMetric('low_flow_freq')(obs, sim)
-    except Exception:
-        pass
-    
-    # === 6. VOLUME/ERROR ===
-    metrics['PBIAS (%)'] = PBIAS()(obs, sim)
-    metrics['RMSE'] = RMSE()(obs, sim)
-    metrics['MAE'] = np.mean(np.abs(obs - sim))  # Mean Absolute Error
-    
-    # Correlations
-    metrics['Pearson r'] = PearsonCorrelation()(obs, sim)
-    metrics['Spearman ρ'] = SpearmanCorrelation()(obs, sim)
-    
-    return metrics
-
-print("Comprehensive evaluation function defined!")
-print("\nMetric categories:")
-print("  1. Overall Efficiency: NSE, KGE, KGE_np")
-print("  2. KGE Components: r, α, β (standard + all transformations)")
-print("  3. Flow Regime: NSE(log), NSE(1/Q), NSE(√Q), KGE(1/Q), KGE(√Q), KGE(log)")
-print("  4. KGE_np transformed: KGE_np(1/Q), KGE_np(√Q), KGE_np(log) with components")
-print("  5. FDC-Based: Peak, High, Mid, Low, Very Low biases")
-print("  6. Signatures: Q95, Q50, Q5, Flashiness, Baseflow Index")
-print("  7. Volume/Error: PBIAS, RMSE, Pearson r, Spearman ρ")
+# The canonical diagnostic suite is imported from pyrrm.analysis.diagnostics
+# (compute_diagnostics already imported above)
+print("Using canonical compute_diagnostics() from pyrrm.analysis.diagnostics")
+print(f"  {len(DIAGNOSTIC_GROUPS)} metric groups, {sum(len(v) for v in DIAGNOSTIC_GROUPS.values())} metrics total")
 
 # %%
 # Compute comprehensive evaluation for all calibrations
 print("Computing comprehensive evaluation for all calibrations...")
 print("\nNSE-based objectives:")
 
-eval_nse = comprehensive_evaluation(obs_flow, sim_flow, "NSE(Q)")
-eval_log = comprehensive_evaluation(obs_flow, log_sim_flow, "LogNSE")
-eval_inv = comprehensive_evaluation(obs_flow, inv_sim_flow, "InvNSE(1/Q)")
-eval_sqrt = comprehensive_evaluation(obs_flow, sqrt_sim_flow, "SqrtNSE(√Q)")
-eval_sdeb = comprehensive_evaluation(obs_flow, sdeb_sim_flow, "SDEB")
+eval_nse = compute_diagnostics(sim_flow, obs_flow)
+eval_log = compute_diagnostics(log_sim_flow, obs_flow)
+eval_inv = compute_diagnostics(inv_sim_flow, obs_flow)
+eval_sqrt = compute_diagnostics(sqrt_sim_flow, obs_flow)
+eval_sdeb = compute_diagnostics(sdeb_sim_flow, obs_flow)
 
 print("KGE-based objectives:")
-eval_kge = comprehensive_evaluation(obs_flow, kge_sim_flow, "KGE")
-eval_kge_inv = comprehensive_evaluation(obs_flow, kge_inv_sim_flow, "KGE(1/Q)")
-eval_kge_sqrt = comprehensive_evaluation(obs_flow, kge_sqrt_sim_flow, "KGE(√Q)")
-eval_kge_log = comprehensive_evaluation(obs_flow, kge_log_sim_flow, "KGE(log)")
-eval_kge_np = comprehensive_evaluation(obs_flow, kge_np_sim_flow, "KGE_np")
+eval_kge = compute_diagnostics(kge_sim_flow, obs_flow)
+eval_kge_inv = compute_diagnostics(kge_inv_sim_flow, obs_flow)
+eval_kge_sqrt = compute_diagnostics(kge_sqrt_sim_flow, obs_flow)
+eval_kge_log = compute_diagnostics(kge_log_sim_flow, obs_flow)
+eval_kge_np = compute_diagnostics(kge_np_sim_flow, obs_flow)
 
 print("Non-parametric KGE objectives with transformations:")
-eval_kge_np_inv = comprehensive_evaluation(obs_flow, kge_np_inv_sim_flow, "KGE_np(1/Q)")
-eval_kge_np_sqrt = comprehensive_evaluation(obs_flow, kge_np_sqrt_sim_flow, "KGE_np(√Q)")
-eval_kge_np_log = comprehensive_evaluation(obs_flow, kge_np_log_sim_flow, "KGE_np(log)")
+eval_kge_np_inv = compute_diagnostics(kge_np_inv_sim_flow, obs_flow)
+eval_kge_np_sqrt = compute_diagnostics(kge_np_sqrt_sim_flow, obs_flow)
+eval_kge_np_log = compute_diagnostics(kge_np_log_sim_flow, obs_flow)
 
 print("Done! Creating comparison tables...")
 
 # %%
-# Create comprehensive comparison DataFrame for NSE-based objectives
+# Create comprehensive comparison DataFrame for NSE-based objectives (canonical column names)
 comparison_data_nse = {
-    'NSE(Q)': eval_nse,
-    'LogNSE': eval_log,
-    'InvNSE(1/Q)': eval_inv,
-    'SqrtNSE(√Q)': eval_sqrt,
+    'NSE': eval_nse,
+    'NSE_log': eval_log,
+    'NSE_inv': eval_inv,
+    'NSE_sqrt': eval_sqrt,
     'SDEB': eval_sdeb
 }
 
-# Create comprehensive comparison DataFrame for KGE-based objectives
+# Create comprehensive comparison DataFrame for KGE-based objectives (canonical column names)
 comparison_data_kge = {
     'KGE': eval_kge,
-    'KGE(1/Q)': eval_kge_inv,
-    'KGE(√Q)': eval_kge_sqrt,
-    'KGE(log)': eval_kge_log,
+    'KGE_inv': eval_kge_inv,
+    'KGE_sqrt': eval_kge_sqrt,
+    'KGE_log': eval_kge_log,
     'KGE_np': eval_kge_np,
-    'KGE_np(1/Q)': eval_kge_np_inv,
-    'KGE_np(√Q)': eval_kge_np_sqrt,
-    'KGE_np(log)': eval_kge_np_log
+    'KGE_np_inv': eval_kge_np_inv,
+    'KGE_np_sqrt': eval_kge_np_sqrt,
+    'KGE_np_log': eval_kge_np_log
 }
 
 # Combine all comparisons
@@ -2760,44 +2367,29 @@ comp_df_kge = pd.DataFrame(comparison_data_kge)
 def get_cell_color(value, metric_name, all_values):
     """Get color for a cell based on metric type and performance."""
     if pd.isna(value):
-        return 'rgb(240, 240, 240)'  # Light gray for NaN
-    
-    # Higher is better metrics (overall efficiency scores)
-    higher_better = ['NSE', 'KGE', 'KGE_np', 'NSE (log Q)', 'NSE (1/Q)', 'NSE (√Q)', 
-                     'KGE (1/Q)', 'KGE (√Q)', 'KGE (log)',
-                     'KGE_np (1/Q)', 'KGE_np (√Q)', 'KGE_np (log)',
-                     'Pearson r', 'Spearman ρ']
-    
-    # Ideal value is 1.0 - ALL KGE and KGE_np components (r, α, β)
-    # Correlations have optimal = 1.0, α (variability) optimal = 1.0, β (bias) optimal = 1.0
-    ideal_one = [
-        # Standard KGE components
-        'r (correlation)', 'α (variability)', 'β (bias)',
-        # KGE with inverse transform components
-        'r (1/Q)', 'α (1/Q)', 'β (1/Q)',
-        # KGE with sqrt transform components
-        'r (√Q)', 'α (√Q)', 'β (√Q)',
-        # KGE with log transform components
-        'r (log)', 'α (log)', 'β (log)',
-        # KGE_np standard components
-        'r_s (np)', 'α_np', 'β (np)',
-        # KGE_np with inverse transform components
-        'r_s (np, 1/Q)', 'α_np (1/Q)', 'β (np, 1/Q)',
-        # KGE_np with sqrt transform components
-        'r_s (np, √Q)', 'α_np (√Q)', 'β (np, √Q)',
-        # KGE_np with log transform components
-        'r_s (np, log)', 'α_np (log)', 'β (np, log)'
+        return 'rgb(240, 240, 240)'
+
+    higher_better = [
+        'NSE', 'NSE_log', 'NSE_sqrt', 'NSE_inv',
+        'KGE', 'KGE_log', 'KGE_sqrt', 'KGE_inv',
+        'KGE_np', 'KGE_np_log', 'KGE_np_sqrt', 'KGE_np_inv',
     ]
-    
-    # Lower is better metrics
+
+    ideal_one = [
+        'KGE_r', 'KGE_alpha', 'KGE_beta',
+        'KGE_log_r', 'KGE_log_alpha', 'KGE_log_beta',
+        'KGE_sqrt_r', 'KGE_sqrt_alpha', 'KGE_sqrt_beta',
+        'KGE_inv_r', 'KGE_inv_alpha', 'KGE_inv_beta',
+        'KGE_np_r', 'KGE_np_alpha', 'KGE_np_beta',
+        'KGE_np_log_r', 'KGE_np_log_alpha', 'KGE_np_log_beta',
+        'KGE_np_sqrt_r', 'KGE_np_sqrt_alpha', 'KGE_np_sqrt_beta',
+        'KGE_np_inv_r', 'KGE_np_inv_alpha', 'KGE_np_inv_beta',
+    ]
+
     lower_better = ['RMSE', 'MAE']
-    
-    # Closer to 0 is better
-    zero_better = ['FDC Peak Bias (%)', 'FDC High Bias (%)', 'FDC Mid Bias (%)',
-                        'FDC Low Bias (%)', 'FDC Very Low Bias (%)', 'Q95 Error (%)',
-                        'Q50 Error (%)', 'Q5 Error (%)', 'Flashiness Error (%)',
-                        'Baseflow Index Error (%)', 'High Flow Freq Error (%)',
-                        'Low Flow Freq Error (%)', 'PBIAS (%)']
+
+    zero_better = ['PBIAS', 'FHV', 'FMV', 'FLV',
+                    'Sig_BFI', 'Sig_Flash', 'Sig_Q95', 'Sig_Q5']
 
     if metric_name in higher_better:
         min_val = all_values.min()
@@ -2960,34 +2552,24 @@ print(comp_df.round(4).to_string())
 try:
     import hiplot as hip
     
-    # Define metric categories for proper transformation
-    # Higher is better (NSE, KGE, correlations) - normalize to 0-1
-    higher_better = ['NSE', 'KGE', 'KGE_np', 'NSE (log Q)', 'NSE (1/Q)', 'NSE (√Q)', 
-                     'KGE (1/Q)', 'KGE (√Q)', 'KGE (log)',
-                     'KGE_np (1/Q)', 'KGE_np (√Q)', 'KGE_np (log)',
-                     'Pearson r', 'Spearman ρ']
-    
-    # Ideal value is 1.0 (KGE/KGE_np components) - score based on distance from 1
-    ideal_one = [
-        'r (correlation)', 'α (variability)', 'β (bias)',
-        'r (1/Q)', 'α (1/Q)', 'β (1/Q)',
-        'r (√Q)', 'α (√Q)', 'β (√Q)',
-        'r (log)', 'α (log)', 'β (log)',
-        'r_s (np)', 'α_np', 'β (np)',
-        'r_s (np, 1/Q)', 'α_np (1/Q)', 'β (np, 1/Q)',
-        'r_s (np, √Q)', 'α_np (√Q)', 'β (np, √Q)',
-        'r_s (np, log)', 'α_np (log)', 'β (np, log)'
+    higher_better = [
+        'NSE', 'NSE_log', 'NSE_sqrt', 'NSE_inv',
+        'KGE', 'KGE_log', 'KGE_sqrt', 'KGE_inv',
+        'KGE_np', 'KGE_np_log', 'KGE_np_sqrt', 'KGE_np_inv',
     ]
-    
-    # Lower is better (errors) - invert so lower = higher score
+    ideal_one = [
+        'KGE_r', 'KGE_alpha', 'KGE_beta',
+        'KGE_log_r', 'KGE_log_alpha', 'KGE_log_beta',
+        'KGE_sqrt_r', 'KGE_sqrt_alpha', 'KGE_sqrt_beta',
+        'KGE_inv_r', 'KGE_inv_alpha', 'KGE_inv_beta',
+        'KGE_np_r', 'KGE_np_alpha', 'KGE_np_beta',
+        'KGE_np_log_r', 'KGE_np_log_alpha', 'KGE_np_log_beta',
+        'KGE_np_sqrt_r', 'KGE_np_sqrt_alpha', 'KGE_np_sqrt_beta',
+        'KGE_np_inv_r', 'KGE_np_inv_alpha', 'KGE_np_inv_beta',
+    ]
     lower_better = ['RMSE', 'MAE']
-    
-    # Closer to 0 is better (biases, percentage errors)
-    zero_better = ['FDC Peak Bias (%)', 'FDC High Bias (%)', 'FDC Mid Bias (%)',
-                   'FDC Low Bias (%)', 'FDC Very Low Bias (%)', 'Q95 Error (%)',
-                   'Q50 Error (%)', 'Q5 Error (%)', 'Flashiness Error (%)',
-                   'Baseflow Index Error (%)', 'High Flow Freq Error (%)',
-                   'Low Flow Freq Error (%)', 'PBIAS (%)']
+    zero_better = ['PBIAS', 'FHV', 'FMV', 'FLV',
+                    'Sig_BFI', 'Sig_Flash', 'Sig_Q95', 'Sig_Q5']
     
     def transform_metric(values, metric_name):
         """Transform metric values so higher = better, scaled 0-1."""
@@ -3103,10 +2685,10 @@ except ImportError:
 #
 # The parallel coordinate plot reveals clear tradeoffs:
 #
-# - **NSE(Q)** excels at overall NSE and high-flow metrics but may underperform on low flows
-# - **LogNSE** provides balanced performance across all flow regimes
-# - **InvNSE(1/Q)** and **KGE(1/Q)** excel at low-flow metrics but may sacrifice peak accuracy
-# - **SqrtNSE** and **KGE(√Q)** offer moderate low-flow emphasis with better balance
+# - **NSE** excels at overall NSE and high-flow metrics but may underperform on low flows
+# - **NSE_log** provides balanced performance across all flow regimes
+# - **NSE_inv** and **KGE_inv** excel at low-flow metrics but may sacrifice peak accuracy
+# - **NSE_sqrt** and **KGE_sqrt** offer moderate low-flow emphasis with better balance
 # - **SDEB** reduces timing sensitivity through FDC matching
 # - **KGE_np** is robust to outliers and skewed distributions
 #
@@ -3240,8 +2822,8 @@ print(f"  Best SDEB: {-custom_result.best_objective:.4f}")
 custom_report = custom_runner.create_report(custom_result, catchment_info={
     'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
 })
-custom_report.save('../test_data/reports/410734_sacramento_sdeb_sceua_custom')
-print(f"Calibration saved to: test_data/reports/410734_sacramento_sdeb_sceua_custom.pkl")
+custom_report.save(REPORTS_DIR / '410734_sacramento_sdeb_sceua_custom')
+print(f"Calibration saved to: {REPORTS_DIR / '410734_sacramento_sdeb_sceua_custom.pkl'}")
 
 # %%
 # Compare default bounds vs custom bounds results (SDEB)
@@ -3250,8 +2832,8 @@ print("COMPARISON: DEFAULT BOUNDS vs CUSTOM BOUNDS (SDEB)")
 print("=" * 80)
 
 # Get metrics for both calibrations
-default_metrics = comprehensive_evaluation(obs_flow, sdeb_sim_flow)
-custom_metrics = comprehensive_evaluation(obs_flow, custom_sim_flow)
+default_metrics = compute_diagnostics(sdeb_sim_flow, obs_flow)
+custom_metrics = compute_diagnostics(custom_sim_flow, obs_flow)
 
 print("\n" + "-" * 60)
 print(f"{'Metric':<20} {'Default Bounds':>18} {'Custom Bounds':>18}")
@@ -3368,13 +2950,13 @@ fig.show()
 #
 # | Flow Regime | Recommended Objective |
 # |-------------|----------------------|
-# | **Balanced performance** | `KGE(√Q)` or `SqrtNSE` |
+# | **Balanced performance** | `KGE_sqrt` or `NSE_sqrt` |
 # | **High flows / floods** | Standard `NSE` or `KGE` |
-# | **Low flows / drought** | `LogNSE` or `KGE(log Q)` |
-# | **Very low flows** | `InvNSE` or `KGE(1/Q)` |
+# | **Low flows / drought** | `NSE_log` or `KGE_log` |
+# | **Very low flows** | `NSE_inv` or `KGE_inv` |
 # | **Flow duration curve** | `SDEB` |
 #
-# All calibration reports are saved to `test_data/reports/` for future analysis.
+# All calibration reports are saved to `test_data/02_calibration_quickstart/reports/` for future analysis.
 
 # %% [markdown]
 # ---
@@ -3427,6 +3009,124 @@ fig.show()
 # - Use fewer evaluations (for exploration)
 # - Use SCE-UA Direct instead of DREAM (faster)
 # - Reduce the calibration period for initial exploration
+
+# %% [markdown]
+# ---
+# ## Exporting Calibration Results (Excel and CSV)
+#
+# All calibration results saved earlier in this notebook are stored as pickle
+# files that require Python to open.  For sharing with colleagues (or opening
+# in Excel), `pyrrm` provides a dedicated export API that writes each report
+# to a multi-sheet Excel workbook **or** a set of CSV files.
+#
+# Each export contains four views of the calibration:
+#
+# | Sheet / File           | Contents |
+# |------------------------|----------|
+# | **TimeSeries**         | Date, precipitation, PET, observed flow, simulated flow, baseflow & quickflow (Lyne-Hollick) |
+# | **Best_Calibration**   | Best parameters and run metadata (method, objective, runtime, ...) |
+# | **Diagnostics**        | Canonical 48-metric suite (NSE, KGE, KGE_np variants, RMSE, PBIAS, FHV/FMV/FLV, raw BFI, signatures) |
+# | **FDC**                | Flow duration curve on a 1 % exceedance grid (observed and simulated) |
+#
+# ### Single report export
+#
+# ```python
+# report = CalibrationReport.load('test_data/02_calibration_quickstart/reports/410734_sacramento_nse_sceua.pkl')
+# report.export('exports/410734_nse.xlsx', format='excel')   # one Excel file
+# report.export('exports/410734_nse', format='csv')           # four CSV files
+# report.export('exports/410734_nse', format='both')          # both at once
+# ```
+#
+# ### Batch export (all experiments at once)
+#
+# If you have many reports (as in this notebook), load them into a
+# dictionary and use `export_batch`.  Each experiment is placed in its
+# own subdirectory to keep things tidy:
+#
+# ```
+# exports/
+# ├── 410734_sacramento_nse_sceua/
+# │   └── 410734_sacramento_nse_sceua.xlsx
+# ├── 410734_sacramento_kge_sceua/
+# │   └── 410734_sacramento_kge_sceua.xlsx
+# └── ...
+# ```
+#
+# ```python
+# from pyrrm.calibration import export_batch
+# export_batch(batch_result, 'exports/', format='excel')
+# ```
+#
+# Or loop over saved pickle files on disk and export each one.
+# Below we demonstrate both approaches.
+
+# %%
+# --- Export: load all saved reports from this notebook --------------------
+from pyrrm.calibration import CalibrationReport, export_report, export_batch
+
+EXPORT_DIR = OUTPUT_DIR / 'exports'
+EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+pkl_files = sorted(REPORTS_DIR.glob('410734_sacramento_*.pkl'))
+print(f"Found {len(pkl_files)} saved calibration reports in {REPORTS_DIR}\n")
+for p in pkl_files:
+    print(f"  {p.name}")
+
+# %%
+# --- Single report export (Excel + CSV) -----------------------------------
+# Pick one report to demonstrate the single-report API.
+# We put it in its own subdirectory so it mirrors the batch layout.
+demo_pkl = REPORTS_DIR / '410734_sacramento_nse_sceua.pkl'
+demo_report = CalibrationReport.load(str(demo_pkl))
+
+SINGLE_DIR = EXPORT_DIR / 'single_demo' / '410734_sacramento_nse_sceua'
+SINGLE_DIR.mkdir(parents=True, exist_ok=True)
+single_files = demo_report.export(
+    str(SINGLE_DIR / '410734_sacramento_nse_sceua'),
+    format='both',
+)
+print("Single report export (Excel + CSV):")
+for f in single_files:
+    print(f"  {Path(f).relative_to(EXPORT_DIR)}")
+
+# %%
+# --- Batch export (all reports to Excel) ----------------------------------
+# Build a pseudo-BatchResult dict from the on-disk pkl files so we can
+# use export_batch.  In a real batch workflow you would pass the
+# BatchResult object directly.
+from types import SimpleNamespace
+
+reports_dict = {}
+for pkl_path in pkl_files:
+    try:
+        r = CalibrationReport.load(str(pkl_path))
+        key = pkl_path.stem
+        reports_dict[key] = r
+    except Exception as e:
+        print(f"  Skipped {pkl_path.name}: {e}")
+
+batch_like = SimpleNamespace(results=reports_dict)
+
+BATCH_DIR = EXPORT_DIR / 'batch'
+batch_files = export_batch(batch_like, str(BATCH_DIR), format='excel')
+
+print(f"\nBatch export: {len(batch_files)} experiments exported to {BATCH_DIR}/\n")
+for key, paths in sorted(batch_files.items()):
+    for p in paths:
+        print(f"  {Path(p).relative_to(BATCH_DIR)}")
+
+# %%
+# --- Quick sanity check: read back one exported Excel file ----------------
+import pandas as pd
+
+sample_xlsx = BATCH_DIR / '410734_sacramento_nse_sceua' / '410734_sacramento_nse_sceua.xlsx'
+if sample_xlsx.exists():
+    xl = pd.ExcelFile(sample_xlsx)
+    print(f"Sheets in {sample_xlsx.name}: {xl.sheet_names}\n")
+    for sheet in xl.sheet_names:
+        df = pd.read_excel(xl, sheet_name=sheet)
+        print(f"  {sheet}: {df.shape[0]} rows x {df.shape[1]} cols")
+        print(f"    columns: {list(df.columns)}\n")
 
 # %%
 print("=" * 70)

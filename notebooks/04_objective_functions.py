@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: Python (pyrrm)
 #     language: python
@@ -138,10 +138,13 @@ from pyrrm.objectives import (
 
 # Import calibration tools
 from pyrrm.models.sacramento import Sacramento
+from pyrrm.models import NUMBA_AVAILABLE
 from pyrrm.calibration import CalibrationRunner
-from pyrrm.calibration.objective_functions import calculate_metrics
+from pyrrm.analysis.diagnostics import compute_diagnostics, print_diagnostics
 
 print("\npyrrm.objectives imported successfully!")
+print(f"\nModel acceleration:")
+print(f"  Numba JIT: {'ACTIVE' if NUMBA_AVAILABLE else 'not available (pip install numba)'}")
 print("\nAvailable metrics:")
 print("  Traditional: NSE, RMSE, MAE, PBIAS")
 print("  KGE family:  KGE (2009, 2012, 2021), KGENonParametric")
@@ -176,26 +179,25 @@ print("  Composite:   WeightedObjective, kge_hilo, fdc_multisegment")
 # - Not normalized for different catchments
 
 # %%
-# Load example data for demonstrations
+from pyrrm.data import load_catchment_data
+
 DATA_DIR = Path('../data/410734')
 CATCHMENT_AREA_KM2 = 516.62667
 
-# Load and prepare data
-rainfall_df = pd.read_csv(DATA_DIR / 'Default Input Set - Rain_QBN01.csv', 
-                          parse_dates=['Date'], index_col='Date')
-rainfall_df.columns = ['rainfall']
-pet_df = pd.read_csv(DATA_DIR / 'Default Input Set - Mwet_QBN01.csv',
-                     parse_dates=['Date'], index_col='Date')
-pet_df.columns = ['pet']
-flow_df = pd.read_csv(DATA_DIR / '410734_output_SDmodel.csv',
-                      parse_dates=['Date'], index_col='Date')
-observed_col = 'Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)'
-observed_df = flow_df[[observed_col]].copy()
-observed_df.columns = ['observed_flow']
-observed_df['observed_flow'] = observed_df['observed_flow'].replace(-9999, np.nan)
-observed_df = observed_df.dropna()
+OUTPUT_DIR = Path('../test_data/04_objective_functions')
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+FIGURES_DIR = OUTPUT_DIR / 'figures'
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
-data = rainfall_df.join(pet_df, how='inner').join(observed_df, how='inner')
+inputs, observed_arr = load_catchment_data(
+    precipitation_file=DATA_DIR / 'Default Input Set - Rain_QBN01.csv',
+    pet_file=DATA_DIR / 'Default Input Set - Mwet_QBN01.csv',
+    observed_file=DATA_DIR / '410734_output_SDmodel.csv',
+    observed_value_column='Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)',
+)
+
+data = inputs.copy()
+data['observed_flow'] = observed_arr
 demo_data = data['1995':'1999'].copy()
 
 # Run a simulation with default parameters for demonstration
@@ -401,9 +403,9 @@ ax.set_title(f'Inverse (inverse)\nNSE = {NSE(transform=t)(obs, sim_default):.3f}
 
 plt.suptitle('Effect of Flow Transformations on Model Evaluation', y=1.02)
 plt.tight_layout()
-plt.savefig('figures/03_flow_transformations.png', dpi=150, bbox_inches='tight')
+plt.savefig(FIGURES_DIR / 'flow_transformations.png', dpi=150, bbox_inches='tight')
 plt.show()
-print("\nFigure saved: figures/03_flow_transformations.png")
+print(f"\nFigure saved: {FIGURES_DIR / 'flow_transformations.png'}")
 
 # %% [markdown]
 # #### Key Observation
@@ -422,7 +424,7 @@ print("\nFigure saved: figures/03_flow_transformations.png")
 #
 # Single metrics often have blind spots:
 # - NSE ignores low flows
-# - LogNSE may over-emphasize low flows
+# - NSE_log may over-emphasize low flows
 # - KGE components may not all improve together
 #
 # **Solution:** Combine multiple metrics into a weighted objective.
@@ -634,11 +636,12 @@ print("=" * 70)
 
 metrics_comparison = {}
 for obj_name, sim in simulations.items():
-    metrics = calculate_metrics(sim, obs_compare)
+    metrics = compute_diagnostics(sim, obs_compare)
     metrics_comparison[obj_name] = metrics
+    print_diagnostics(metrics, label=obj_name)
 
 metrics_df = pd.DataFrame(metrics_comparison).T
-print("\nPerformance metrics by calibration objective:")
+print("\nPerformance metrics summary (all objectives):")
 print(metrics_df.round(4).to_string())
 
 # %%
@@ -771,9 +774,9 @@ ax.set_title('Low Flow Performance')
 
 plt.suptitle('Impact of Objective Function on Calibration Results', y=1.02, fontsize=14)
 plt.tight_layout()
-plt.savefig('figures/03_objective_comparison.png', dpi=150, bbox_inches='tight')
+plt.savefig(FIGURES_DIR / 'objective_comparison.png', dpi=150, bbox_inches='tight')
 plt.close()
-print("Figure saved: figures/03_objective_comparison.png")
+print(f"Figure saved: {FIGURES_DIR / 'objective_comparison.png'}")
 
 # %% [markdown]
 # ### Key Observations

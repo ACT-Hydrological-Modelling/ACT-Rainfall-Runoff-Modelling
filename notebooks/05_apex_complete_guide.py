@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: pyrrm (Python 3.11.14)
 #     language: python
@@ -108,7 +108,7 @@
 #
 # Where:
 # - $\rho_{gradient}$ = Pearson correlation between gradients (dQ/dt) of simulated and observed
-# - $\kappa$ = Dynamics strength parameter (default 0.5)
+# - $\kappa$ = Dynamics strength parameter (default 0.7)
 #
 # **What it does**: Penalizes models where the *rate of change* doesn't match observations.
 # A model might match flow magnitudes but have sluggish recessions or delayed peaks—the
@@ -199,9 +199,9 @@
 #
 # | # | Question | Fair Comparison |
 # |---|----------|-----------------|
-# | **Q1** | Does the **dynamics multiplier** improve upon SDEB? | SDEB vs APEX-sqrt (same α=0.1, sqrt transform) |
+# | **Q1** | Does the **dynamics multiplier** improve upon SDEB? | SDEB vs APEX-sqrt κ=0.7 (same α=0.1, sqrt transform) |
 # | **Q2** | Does APEX improve **untransformed** (high-flow) calibration? | NSE vs APEX-none, KGE vs APEX-none |
-# | **Q3** | Does APEX improve **sqrt-transformed** (balanced) calibration? | NSE-sqrt vs APEX-sqrt, KGE-sqrt vs APEX-sqrt |
+# | **Q3** | Does APEX improve **sqrt-transformed** (balanced) calibration? | NSE-sqrt vs APEX-sqrt κ=0.7, KGE-sqrt vs APEX-sqrt κ=0.7 |
 # | **Q4** | Does APEX improve **log-transformed** (low-flow) calibration? | NSE-log vs APEX-log, KGE-log vs APEX-log |
 # | **Q5** | Does APEX improve **inverse-transformed** (extreme low-flow) calibration? | NSE-inv vs APEX-inv, KGE-inv vs APEX-inv |
 # | **Q6** | How does dynamics strength (κ) affect performance? | Test κ=0.3, 0.5, 0.7 with sqrt transform |
@@ -216,7 +216,7 @@
 #
 # The **only difference** is the dynamics multiplier (κ):
 # - SDEB: κ = 0 (no dynamics penalty)
-# - APEX-sqrt: κ = 0.5 (moderate dynamics penalty)
+# - APEX-sqrt: κ = 0.7 (strong dynamics penalty — default)
 #
 # Any performance difference is **directly attributable** to the dynamics multiplier.
 #
@@ -230,7 +230,7 @@
 # |-----------|--------|---------|-------------|
 # | Alpha | α | 0.1 | Chronological vs ranked weighting |
 # | Transform | - | sqrt | Flow transformation (none/sqrt/log/inverse) |
-# | Dynamics strength | κ | 0.5 | Gradient correlation penalty strength |
+# | Dynamics strength | κ | 0.7 | Gradient correlation penalty strength |
 # | Bias strength | - | 1.0 | Volume bias penalty strength |
 # | Regime emphasis | - | uniform | FDC segment weighting |
 #
@@ -239,7 +239,7 @@
 # ## Estimated Runtime
 #
 # - Data loading & baseline loading: ~2 minutes
-# - APEX calibrations (4 transforms × κ=0.5): ~25-30 minutes
+# - APEX calibrations (4 transforms × κ=0.7 + sensitivity): ~25-30 minutes
 # - Additional sensitivity tests: ~15-20 minutes
 # - Analysis & visualization: ~5 minutes
 # - **Total**: ~50-60 minutes
@@ -259,7 +259,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 
 # pyrrm imports
-from pyrrm.models import Sacramento
+from pyrrm.models import Sacramento, NUMBA_AVAILABLE
 from pyrrm.calibration import CalibrationRunner, CalibrationReport
 from pyrrm.objectives import (
     NSE, KGE, KGENonParametric, RMSE, MAE, PBIAS,
@@ -276,6 +276,7 @@ sns.set_palette("husl")
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 print("Imports complete")
+print(f"Numba JIT acceleration: {'ACTIVE' if NUMBA_AVAILABLE else 'not available (pip install numba)'}")
 
 # %% [markdown]
 # ---
@@ -284,6 +285,11 @@ print("Imports complete")
 # %%
 # Configuration
 DATA_DIR = Path('../data/410734')
+OUTPUT_DIR = Path('../test_data/05_apex_complete_guide')
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+APEX_REPORTS_DIR = OUTPUT_DIR / 'reports'
+APEX_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+NB02_REPORTS_DIR = Path('../test_data/02_calibration_quickstart/reports')
 CATCHMENT_ID = '410734'
 CATCHMENT_AREA_KM2 = 516.62667  # km²
 WARMUP_DAYS = 365
@@ -295,59 +301,21 @@ print(f"Area: {CATCHMENT_AREA_KM2:.2f} km²")
 print(f"Warmup period: {WARMUP_DAYS} days")
 
 # %%
-# Load rainfall data
-rainfall_file = DATA_DIR / 'Default Input Set - Rain_QBN01.csv'
-rainfall_df = pd.read_csv(rainfall_file, parse_dates=['Date'], index_col='Date')
-rainfall_df.columns = ['rainfall']
+from pyrrm.data import load_catchment_data
 
-print("\nRAINFALL DATA")
-print("=" * 70)
-print(f"Records: {len(rainfall_df):,} days")
-print(f"Period: {rainfall_df.index.min().date()} to {rainfall_df.index.max().date()}")
-
-# %%
-# Load PET data
-pet_file = DATA_DIR / 'Default Input Set - Mwet_QBN01.csv'
-pet_df = pd.read_csv(pet_file, parse_dates=['Date'], index_col='Date')
-pet_df.columns = ['pet']
-
-print("\nPOTENTIAL EVAPOTRANSPIRATION (PET)")
-print("=" * 70)
-print(f"Records: {len(pet_df):,} days")
-
-# %%
-# Load observed streamflow
-flow_file = DATA_DIR / '410734_output_SDmodel.csv'
-flow_df = pd.read_csv(flow_file, parse_dates=['Date'], index_col='Date')
-
-observed_col = 'Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)'
-observed_df = flow_df[[observed_col]].copy()
-observed_df.columns = ['observed_flow']
-
-# Clean observed flow data
-observed_df['observed_flow'] = observed_df['observed_flow'].replace(-9999, np.nan)
-observed_df.loc[observed_df['observed_flow'] < 0, 'observed_flow'] = np.nan
-observed_df = observed_df.dropna()
-
-print("\nOBSERVED STREAMFLOW")
-print("=" * 70)
-print(f"Records: {len(observed_df):,} days (after cleaning)")
-
-# %%
-# Merge all datasets
-data = rainfall_df.join(pet_df, how='inner').join(observed_df, how='inner')
+cal_inputs, cal_observed = load_catchment_data(
+    precipitation_file=DATA_DIR / 'Default Input Set - Rain_QBN01.csv',
+    pet_file=DATA_DIR / 'Default Input Set - Mwet_QBN01.csv',
+    observed_file=DATA_DIR / '410734_output_SDmodel.csv',
+    observed_value_column='Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)',
+)
 
 print("\nMERGED DATASET")
 print("=" * 70)
-print(f"Total records: {len(data):,} days")
-print(f"Period: {data.index.min().date()} to {data.index.max().date()}")
+print(f"Total records: {len(cal_inputs):,} days")
+print(f"Period: {cal_inputs.index.min().date()} to {cal_inputs.index.max().date()}")
 
 # %%
-# Prepare data for calibration
-cal_data = data.copy()
-cal_inputs = cal_data[['rainfall', 'pet']].copy()
-cal_observed = cal_data['observed_flow'].values
-
 print("\nCALIBRATION DATA PREPARED")
 print("=" * 70)
 print(f"Effective calibration: {len(cal_observed) - WARMUP_DAYS:,} days")
@@ -371,12 +339,11 @@ print("\n" + "=" * 80)
 print("LOADING PRE-CALIBRATED BASELINES (organized by transformation)")
 print("=" * 80)
 
-# Create comparison DataFrame (after warmup)
-comparison = cal_data.iloc[WARMUP_DAYS:].copy()
-obs_flow = comparison['observed_flow'].values
-dates = comparison.index
+# Create comparison arrays (after warmup)
+obs_flow = cal_observed[WARMUP_DAYS:]
+dates = cal_inputs.index[WARMUP_DAYS:]
 
-print(f"\nComparison period: {len(comparison):,} days (after warmup)")
+print(f"\nComparison period: {len(obs_flow):,} days (after warmup)")
 print(f"Date range: {dates.min().date()} to {dates.max().date()}")
 
 # Helper function to load calibration and simulate
@@ -397,39 +364,39 @@ def load_and_simulate(report_path, label):
 # TRANSFORM: NONE (Untransformed - high flow emphasis)
 # =============================================================================
 print("\n--- TRANSFORM: NONE (untransformed) ---")
-result_nse, sim_nse = load_and_simulate('../test_data/reports/410734_sacramento_nse_sceua.pkl', 'NSE')
-result_kge, sim_kge = load_and_simulate('../test_data/reports/410734_sacramento_kge_sceua.pkl', 'KGE')
-result_kge_np, sim_kge_np = load_and_simulate('../test_data/reports/410734_sacramento_kgenp_sceua.pkl', 'KGE-np')
+result_nse, sim_nse = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_nse_sceua.pkl', 'NSE')
+result_kge, sim_kge = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_kge_sceua.pkl', 'KGE')
+result_kge_np, sim_kge_np = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_kgenp_sceua.pkl', 'KGE-np')
 
 # =============================================================================
 # TRANSFORM: SQRT (Balanced)
 # =============================================================================
 print("\n--- TRANSFORM: SQRT (balanced) ---")
-result_nse_sqrt, sim_nse_sqrt = load_and_simulate('../test_data/reports/410734_sacramento_nse_sceua_sqrt.pkl', 'NSE-sqrt')
-result_kge_sqrt, sim_kge_sqrt = load_and_simulate('../test_data/reports/410734_sacramento_kge_sceua_sqrt.pkl', 'KGE-sqrt')
-result_kge_np_sqrt, sim_kge_np_sqrt = load_and_simulate('../test_data/reports/410734_sacramento_kgenp_sceua_sqrt.pkl', 'KGE-np-sqrt')
+result_nse_sqrt, sim_nse_sqrt = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_nse_sceua_sqrt.pkl', 'NSE-sqrt')
+result_kge_sqrt, sim_kge_sqrt = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_kge_sceua_sqrt.pkl', 'KGE-sqrt')
+result_kge_np_sqrt, sim_kge_np_sqrt = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_kgenp_sceua_sqrt.pkl', 'KGE-np-sqrt')
 
 # =============================================================================
 # TRANSFORM: LOG (Low flow emphasis)
 # =============================================================================
 print("\n--- TRANSFORM: LOG (low flow) ---")
-result_nse_log, sim_nse_log = load_and_simulate('../test_data/reports/410734_sacramento_nse_sceua_log.pkl', 'NSE-log')
-result_kge_log, sim_kge_log = load_and_simulate('../test_data/reports/410734_sacramento_kge_sceua_log.pkl', 'KGE-log')
-result_kge_np_log, sim_kge_np_log = load_and_simulate('../test_data/reports/410734_sacramento_kgenp_sceua_log.pkl', 'KGE-np-log')
+result_nse_log, sim_nse_log = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_nse_sceua_log.pkl', 'NSE-log')
+result_kge_log, sim_kge_log = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_kge_sceua_log.pkl', 'KGE-log')
+result_kge_np_log, sim_kge_np_log = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_kgenp_sceua_log.pkl', 'KGE-np-log')
 
 # =============================================================================
 # TRANSFORM: INVERSE (Strong low flow emphasis)
 # =============================================================================
 print("\n--- TRANSFORM: INVERSE (strong low flow) ---")
-result_nse_inv, sim_nse_inv = load_and_simulate('../test_data/reports/410734_sacramento_nse_sceua_inverse.pkl', 'NSE-inv')
-result_kge_inv, sim_kge_inv = load_and_simulate('../test_data/reports/410734_sacramento_kge_sceua_inverse.pkl', 'KGE-inv')
-result_kge_np_inv, sim_kge_np_inv = load_and_simulate('../test_data/reports/410734_sacramento_kgenp_sceua_inverse.pkl', 'KGE-np-inv')
+result_nse_inv, sim_nse_inv = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_nse_sceua_inverse.pkl', 'NSE-inv')
+result_kge_inv, sim_kge_inv = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_kge_sceua_inverse.pkl', 'KGE-inv')
+result_kge_np_inv, sim_kge_np_inv = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_kgenp_sceua_inverse.pkl', 'KGE-np-inv')
 
 # =============================================================================
 # SDEB BASELINE (for APEX vs SDEB comparison)
 # =============================================================================
 print("\n--- SDEB BASELINE ---")
-result_sdeb, sim_sdeb = load_and_simulate('../test_data/reports/410734_sacramento_sdeb_sceua.pkl', 'SDEB')
+result_sdeb, sim_sdeb = load_and_simulate(NB02_REPORTS_DIR / '410734_sacramento_sdeb_sceua.pkl', 'SDEB')
 
 # Organize baselines by transformation for easy access
 baselines_by_transform = {
@@ -490,17 +457,16 @@ print("=" * 80)
 #
 # ## Primary Experiment: Transform-Aligned APEX
 #
-# | APEX Config | Transform | Compares To | Question |
-# |-------------|-----------|-------------|----------|
-# | APEX-none | none | NSE, KGE, KGE-np | Q2 |
-# | APEX-sqrt | sqrt | **SDEB**, NSE-sqrt, KGE-sqrt, KGE-np-sqrt | **Q1**, Q3 |
-# | APEX-log | log | NSE-log, KGE-log, KGE-np-log | Q4 |
-# | APEX-inv | inverse | NSE-inv, KGE-inv, KGE-np-inv | Q5 |
+# | APEX Config | Transform | κ | Compares To | Question |
+# |-------------|-----------|-----|-------------|----------|
+# | APEX-none | none | 0.7 | NSE, KGE, KGE-np | Q2 |
+# | APEX-sqrt | sqrt | **0.7** | **SDEB**, NSE-sqrt, KGE-sqrt, KGE-np-sqrt | **Q1**, Q3 |
+# | APEX-log | log | 0.7 | NSE-log, KGE-log, KGE-np-log | Q4 |
+# | APEX-inv | inverse | 0.7 | NSE-inv, KGE-inv, KGE-np-inv | Q5 |
 #
-# All use κ=0.5 (moderate dynamics) to test APEX structure.
-#
-# **Critical**: APEX-sqrt is the key config for Q1 (SDEB comparison) because SDEB
-# uses α=0.1 and sqrt transform (λ=0.5), making it directly comparable.
+# All APEX experiments use **κ=0.7** (strong dynamics penalty), which has been
+# identified as the best dynamics strength. The sensitivity analysis in Part 4
+# tests κ ∈ {0.3, 0.5, 0.7} to confirm this choice.
 
 # %%
 print("\n" + "=" * 80)
@@ -511,7 +477,7 @@ print("=" * 80)
 # APEX CONFIGURATIONS (Transform-Aligned)
 # =============================================================================
 # All configs use:
-# - κ=0.5 (moderate dynamics penalty)
+# - κ=0.7 (strong dynamics penalty — identified as best dynamics strength)
 # - α=0.1 (SDEB default)
 # - regime_emphasis='uniform' (fair comparison)
 #
@@ -527,7 +493,7 @@ apex_configs = {
         'params': {
             'alpha': 0.1,
             'transform': 'none',
-            'dynamics_strength': 0.5,
+            'dynamics_strength': 0.7,
             'regime_emphasis': 'uniform',
             'bias_strength': 1.0,
             'bias_power': 1.0,
@@ -545,7 +511,7 @@ apex_configs = {
         'params': {
             'alpha': 0.1,
             'transform': 'sqrt',
-            'dynamics_strength': 0.5,
+            'dynamics_strength': 0.7,
             'regime_emphasis': 'uniform',
             'bias_strength': 1.0,
             'bias_power': 1.0,
@@ -562,7 +528,7 @@ apex_configs = {
         'params': {
             'alpha': 0.1,
             'transform': 'log',
-            'dynamics_strength': 0.5,
+            'dynamics_strength': 0.7,
             'regime_emphasis': 'uniform',
             'bias_strength': 1.0,
             'bias_power': 1.0,
@@ -579,7 +545,7 @@ apex_configs = {
         'params': {
             'alpha': 0.1,
             'transform': 'inverse',
-            'dynamics_strength': 0.5,
+            'dynamics_strength': 0.7,
             'regime_emphasis': 'uniform',
             'bias_strength': 1.0,
             'bias_power': 1.0,
@@ -666,9 +632,9 @@ for config_name, config in apex_configs.items():
     report = runner.create_report(result, catchment_info={
         'name': 'Queanbeyan River', 'gauge_id': '410734', 'area_km2': CATCHMENT_AREA_KM2
     })
-    save_name = f"410734_sacramento_apex_sceua_{config_name}-k05-uniform"
-    report.save(f'../test_data/reports/apex/{save_name}')
-    print(f"  Saved: test_data/reports/apex/{save_name}.pkl")
+    save_name = f"410734_sacramento_apex_sceua_{config_name}-k07-uniform"
+    report.save(str(APEX_REPORTS_DIR / save_name))
+    print(f"  Saved: {APEX_REPORTS_DIR / save_name}.pkl")
 
 print("\n" + "=" * 80)
 print(f"ALL {len(apex_configs)} APEX CALIBRATIONS COMPLETE")
@@ -676,11 +642,11 @@ print("=" * 80)
 
 # %% [markdown]
 # ---
-# # PART 4: SENSITIVITY ANALYSIS (Q5 & Q6)
+# # PART 4: SENSITIVITY ANALYSIS (Q6 & Q7)
 #
-# Using the **best-performing transform** from Q1-Q4, we test:
-# - **Q5**: Dynamics strength sensitivity (κ = 0.3, 0.5, 0.7)
-# - **Q6**: Regime emphasis sensitivity (uniform, low_flow, balanced)
+# Using the **best-performing transform** from Q1-Q5, we test:
+# - **Q6**: Dynamics strength sensitivity (κ = 0.3, 0.5, 0.7)
+# - **Q7**: Regime emphasis sensitivity (uniform, low_flow, balanced)
 
 # %%
 print("\n" + "=" * 80)
@@ -690,30 +656,31 @@ print("=" * 80)
 # Additional configurations for Q5 and Q6
 # We use sqrt transform as it provides balanced performance
 sensitivity_configs = {
-    # Q5: Dynamics strength sensitivity (using sqrt transform)
+    # Q6: Dynamics strength sensitivity (using sqrt transform)
+    # κ=0.7 is already covered by the primary APEX-sqrt config
     'sqrt_dyn03': {
         'description': 'APEX sqrt with low dynamics: κ=0.3',
         'params': {'alpha': 0.1, 'transform': 'sqrt', 'dynamics_strength': 0.3,
                    'regime_emphasis': 'uniform', 'bias_strength': 1.0, 'bias_power': 1.0},
         'color': '#66C2A5',
     },
-    'sqrt_dyn07': {
-        'description': 'APEX sqrt with high dynamics: κ=0.7',
-        'params': {'alpha': 0.1, 'transform': 'sqrt', 'dynamics_strength': 0.7,
+    'sqrt_dyn05': {
+        'description': 'APEX sqrt with moderate dynamics: κ=0.5',
+        'params': {'alpha': 0.1, 'transform': 'sqrt', 'dynamics_strength': 0.5,
                    'regime_emphasis': 'uniform', 'bias_strength': 1.0, 'bias_power': 1.0},
         'color': '#FC8D62',
     },
     
-    # Q6: Regime emphasis sensitivity (using sqrt transform, κ=0.5)
+    # Q7: Regime emphasis sensitivity (using sqrt transform, κ=0.7)
     'sqrt_lowflow': {
         'description': 'APEX sqrt with low_flow regime emphasis',
-        'params': {'alpha': 0.1, 'transform': 'sqrt', 'dynamics_strength': 0.5,
+        'params': {'alpha': 0.1, 'transform': 'sqrt', 'dynamics_strength': 0.7,
                    'regime_emphasis': 'low_flow', 'bias_strength': 1.0, 'bias_power': 1.0},
         'color': '#8DA0CB',
     },
     'sqrt_balanced': {
         'description': 'APEX sqrt with balanced regime emphasis',
-        'params': {'alpha': 0.1, 'transform': 'sqrt', 'dynamics_strength': 0.5,
+        'params': {'alpha': 0.1, 'transform': 'sqrt', 'dynamics_strength': 0.7,
                    'regime_emphasis': 'balanced', 'bias_strength': 1.0, 'bias_power': 1.0},
         'color': '#E78AC3',
     },
@@ -776,13 +743,13 @@ for config_name, config in sensitivity_configs.items():
     })
     sensitivity_save_names = {
         'sqrt_dyn03': '410734_sacramento_apex_sceua_sqrt-k03-uniform',
-        'sqrt_dyn07': '410734_sacramento_apex_sceua_sqrt-k07-uniform',
-        'sqrt_lowflow': '410734_sacramento_apex_sceua_sqrt-k05-lowflow',
-        'sqrt_balanced': '410734_sacramento_apex_sceua_sqrt-k05-balanced',
+        'sqrt_dyn05': '410734_sacramento_apex_sceua_sqrt-k05-uniform',
+        'sqrt_lowflow': '410734_sacramento_apex_sceua_sqrt-k07-lowflow',
+        'sqrt_balanced': '410734_sacramento_apex_sceua_sqrt-k07-balanced',
     }
     save_name = sensitivity_save_names[config_name]
-    report.save(f'../test_data/reports/apex/{save_name}')
-    print(f"  Saved: test_data/reports/apex/{save_name}.pkl")
+    report.save(str(APEX_REPORTS_DIR / save_name))
+    print(f"  Saved: {APEX_REPORTS_DIR / save_name}.pkl")
 
 print("\n" + "=" * 80)
 print(f"ALL SENSITIVITY CALIBRATIONS COMPLETE")
@@ -815,16 +782,16 @@ print("=" * 80)
 
 # Define expected APEX calibration files
 apex_calibration_files = {
-    # Primary transform-aligned configs (Part 3)
-    'none': '../test_data/reports/apex/410734_sacramento_apex_sceua_none-k05-uniform.pkl',
-    'sqrt': '../test_data/reports/apex/410734_sacramento_apex_sceua_sqrt-k05-uniform.pkl',
-    'log': '../test_data/reports/apex/410734_sacramento_apex_sceua_log-k05-uniform.pkl',
-    'inverse': '../test_data/reports/apex/410734_sacramento_apex_sceua_inverse-k05-uniform.pkl',
+    # Primary transform-aligned configs (Part 3) — all use κ=0.7
+    'none': str(APEX_REPORTS_DIR / '410734_sacramento_apex_sceua_none-k07-uniform.pkl'),
+    'sqrt': str(APEX_REPORTS_DIR / '410734_sacramento_apex_sceua_sqrt-k07-uniform.pkl'),
+    'log': str(APEX_REPORTS_DIR / '410734_sacramento_apex_sceua_log-k07-uniform.pkl'),
+    'inverse': str(APEX_REPORTS_DIR / '410734_sacramento_apex_sceua_inverse-k07-uniform.pkl'),
     # Sensitivity configs (Part 4)
-    'sqrt_dyn03': '../test_data/reports/apex/410734_sacramento_apex_sceua_sqrt-k03-uniform.pkl',
-    'sqrt_dyn07': '../test_data/reports/apex/410734_sacramento_apex_sceua_sqrt-k07-uniform.pkl',
-    'sqrt_lowflow': '../test_data/reports/apex/410734_sacramento_apex_sceua_sqrt-k05-lowflow.pkl',
-    'sqrt_balanced': '../test_data/reports/apex/410734_sacramento_apex_sceua_sqrt-k05-balanced.pkl',
+    'sqrt_dyn03': str(APEX_REPORTS_DIR / '410734_sacramento_apex_sceua_sqrt-k03-uniform.pkl'),
+    'sqrt_dyn05': str(APEX_REPORTS_DIR / '410734_sacramento_apex_sceua_sqrt-k05-uniform.pkl'),
+    'sqrt_lowflow': str(APEX_REPORTS_DIR / '410734_sacramento_apex_sceua_sqrt-k07-lowflow.pkl'),
+    'sqrt_balanced': str(APEX_REPORTS_DIR / '410734_sacramento_apex_sceua_sqrt-k07-balanced.pkl'),
 }
 
 # Check if calibrations are already in memory (Parts 3 & 4 were run in this session)
@@ -953,8 +920,10 @@ print("\n" + "=" * 80)
 # - Flow distribution (FDC segments)
 # - Hydrological processes (signatures)
 #
-# **Interpretation**: For NSE/KGE metrics, higher is better (max 1.0). For error metrics
-# (RMSE, MAE, PBIAS, FDC, Signatures), lower is better (min 0.0).
+# **Interpretation**: For NSE/KGE metrics, higher is better (max 1.0). For error
+# metrics (RMSE, MAE), lower is better. For bias and signature error metrics
+# (PBIAS, FHV, FMV, FLV, Sig_BFI, Sig_Flash, Sig_Q95, Sig_Q5), closer to zero
+# is better. Raw signature values (BFI_obs, BFI_sim) are informational.
 
 # %%
 print("\n" + "=" * 80)
@@ -962,52 +931,11 @@ print("COMPREHENSIVE PERFORMANCE EVALUATION")
 print("=" * 80)
 
 # =============================================================================
-# Define comprehensive evaluation metrics (22 total)
+# Canonical diagnostic suite (48 metrics, consistent across all notebooks)
 # =============================================================================
+from pyrrm.analysis.diagnostics import compute_diagnostics, print_diagnostics, DIAGNOSTIC_GROUPS
 
-# Helper to create transformed metrics
-def create_metric_family(base_class, base_name, **base_kwargs):
-    """Create a family of 4 metrics: untransformed + 3 transformations."""
-    return {
-        f'{base_name}': base_class(**base_kwargs),
-        f'{base_name}(√Q)': base_class(transform=FlowTransformation('sqrt'), **base_kwargs),
-        f'{base_name}(log Q)': base_class(transform=FlowTransformation('log', epsilon_value=0.01), **base_kwargs),
-        f'{base_name}(1/Q)': base_class(transform=FlowTransformation('inverse', epsilon_value=0.01), **base_kwargs),
-    }
-
-# Build comprehensive metrics dictionary
-eval_metrics = {}
-
-# NSE family (4 metrics)
-eval_metrics.update(create_metric_family(NSE, 'NSE'))
-
-# KGE family (4 metrics)
-eval_metrics.update(create_metric_family(KGE, 'KGE', variant='2012'))
-
-# KGE-np family (4 metrics)
-eval_metrics.update(create_metric_family(KGENonParametric, 'KGE-np'))
-
-# Error metrics (2 metrics)
-eval_metrics['RMSE'] = RMSE()
-eval_metrics['MAE'] = MAE()
-
-# Bias (1 metric)
-eval_metrics['PBIAS'] = PBIAS()
-
-# FDC segments (3 metrics)
-eval_metrics['FDC-high'] = FDCMetric(segment='high')
-eval_metrics['FDC-mid'] = FDCMetric(segment='mid')
-eval_metrics['FDC-low'] = FDCMetric(segment='low')
-
-# Hydrological signatures (4 metrics)
-eval_metrics['Sig-BFI'] = SignatureMetric('baseflow_index')
-eval_metrics['Sig-Flash'] = SignatureMetric('flashiness')
-eval_metrics['Sig-Q95'] = SignatureMetric('q95')  # High flow indicator
-eval_metrics['Sig-Q5'] = SignatureMetric('q5')    # Low flow indicator
-
-print(f"Total evaluation metrics: {len(eval_metrics)}")
-for i, name in enumerate(eval_metrics.keys()):
-    print(f"  {i+1:2d}. {name}")
+print(f"Canonical diagnostic suite: {sum(len(v) for v in DIAGNOSTIC_GROUPS.values())} metrics")
 
 # =============================================================================
 # Combine all simulations
@@ -1019,304 +947,310 @@ for name, sim in apex_simulations.items():
 print(f"\nTotal calibration methods to evaluate: {len(all_simulations)}")
 
 # =============================================================================
-# Build results dataframe
+# Build results dataframe using canonical compute_diagnostics
 # =============================================================================
-print("\nCalculating metrics for all simulations...")
+print("\nCalculating canonical diagnostics for all simulations...")
 results_data = []
 for sim_name, sim in all_simulations.items():
-    row = {'Calibration': sim_name}
-    for metric_name, metric in eval_metrics.items():
-        try:
-            row[metric_name] = metric(obs_flow, sim)
-        except Exception as e:
-            print(f"  Warning: {metric_name} failed for {sim_name}: {e}")
-            row[metric_name] = np.nan
-    results_data.append(row)
+    diag = compute_diagnostics(sim, obs_flow)
+    diag_row = dict(diag)
+    diag_row['Calibration'] = sim_name
+    results_data.append(diag_row)
+    print_diagnostics(diag, label=sim_name)
 
 results_df = pd.DataFrame(results_data).set_index('Calibration')
 print("Done!")
 
+
+
+
+
 # %%
-# =============================================================================
-# Display Performance Matrix with Plotly
-# =============================================================================
+# =========================================================================
+# Unified report-card visualisation for ALL research questions
+# =========================================================================
 
-def create_performance_table(df, title, metric_columns=None):
-    """Create an interactive Plotly table for performance metrics."""
-    
-    if metric_columns is None:
-        metric_columns = df.columns.tolist()
-    
-    # Subset to requested columns
-    display_df = df[metric_columns].copy()
-    
-    # Format values
-    formatted_values = []
-    for col in display_df.columns:
-        formatted_values.append([f'{v:.4f}' if pd.notna(v) else 'N/A' for v in display_df[col]])
-    
-    # Create color scales for each column (higher is better for NSE/KGE, lower for others)
-    def get_cell_colors(col_values, metric_name):
-        """Get cell background colors based on metric type."""
-        values = pd.to_numeric(col_values, errors='coerce')
-        if values.isna().all():
-            return ['white'] * len(values)
-        
-        vmin, vmax = values.min(), values.max()
-        if vmax == vmin:
-            return ['white'] * len(values)
-        
-        # Higher is better for NSE, KGE families
-        higher_is_better = any(x in metric_name for x in ['NSE', 'KGE'])
-        
-        colors = []
-        for v in values:
-            if pd.isna(v):
-                colors.append('white')
-            else:
-                # Normalize to 0-1
-                norm = (v - vmin) / (vmax - vmin)
-                if higher_is_better:
-                    # Green for high values
-                    intensity = int(200 - norm * 100)
-                    colors.append(f'rgb({intensity}, 255, {intensity})')
-                else:
-                    # Green for low values (reverse)
-                    intensity = int(200 - (1 - norm) * 100)
-                    colors.append(f'rgb({intensity}, 255, {intensity})')
-        return colors
-    
-    # Build cell colors
-    cell_colors = [get_cell_colors(display_df[col], col) for col in display_df.columns]
-    
-    fig = go.Figure(data=[go.Table(
-        header=dict(
-            values=['<b>Calibration</b>'] + [f'<b>{col}</b>' for col in display_df.columns],
-            fill_color='rgb(55, 83, 109)',
-            font=dict(color='white', size=11),
-            align='center',
-            height=30
-        ),
-        cells=dict(
-            values=[display_df.index.tolist()] + formatted_values,
-            fill_color=[['rgb(240, 240, 240)' if i % 2 == 0 else 'white' 
-                        for i in range(len(display_df))]] + cell_colors,
-            font=dict(size=10),
-            align='center',
-            height=25
-        )
-    )])
-    
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=16)),
-        height=max(400, 50 + len(display_df) * 28),
-        margin=dict(l=10, r=10, t=50, b=10)
-    )
-    
-    return fig
+# Metric family definitions — split by scale
+_EFF_STANDARD = ['NSE', 'NSE_sqrt', 'NSE_log',
+                 'KGE', 'KGE_sqrt', 'KGE_log',
+                 'KGE_np', 'KGE_np_sqrt', 'KGE_np_log']
+_EFF_INVERSE  = ['NSE_inv', 'KGE_inv', 'KGE_np_inv']
+_EFFICIENCY_METRICS = _EFF_STANDARD + _EFF_INVERSE
+_ERROR_METRICS = ['RMSE', 'MAE']
+_BIAS_METRICS = ['PBIAS', 'FHV', 'FMV', 'FLV']
+_RAW_SIGNATURE_METRICS = ['BFI_obs', 'BFI_sim']
+_SIGNATURE_METRICS = ['Sig_BFI', 'Sig_Flash', 'Sig_Q95', 'Sig_Q5']
+
+_HIGHER_IS_BETTER = set(_EFFICIENCY_METRICS) | {
+    'KGE_r', 'KGE_alpha', 'KGE_log_r', 'KGE_log_alpha',
+    'KGE_sqrt_r', 'KGE_sqrt_alpha', 'KGE_inv_r', 'KGE_inv_alpha',
+    'KGE_np_r', 'KGE_np_alpha', 'KGE_np_log_r', 'KGE_np_log_alpha',
+    'KGE_np_sqrt_r', 'KGE_np_sqrt_alpha', 'KGE_np_inv_r', 'KGE_np_inv_alpha',
+    'KGE_beta', 'KGE_log_beta', 'KGE_sqrt_beta', 'KGE_inv_beta',
+    'KGE_np_beta', 'KGE_np_log_beta', 'KGE_np_sqrt_beta', 'KGE_np_inv_beta',
+}
 
 
-def create_q1_report_card(q1_df, metric_columns, dates, obs_flow, sim_sdeb, sim_apex_sqrt):
+def _is_better(metric, val_a, val_b):
+    """Return True if val_a is better than val_b for the given metric."""
+    if metric in _HIGHER_IS_BETTER:
+        return val_a > val_b
+    return abs(val_a) < abs(val_b)
+
+
+def _fdc(arr):
+    """Compute exceedance probabilities (%) and sorted flows for an FDC."""
+    s = np.sort(np.asarray(arr, dtype=float)[~np.isnan(arr)])[::-1]
+    exc = np.arange(1, len(s) + 1) / (len(s) + 1) * 100
+    return exc, s
+
+
+def _make_palette(method_names):
+    """Assign distinct colours to a list of method names."""
+    pool = ['#1565c0', '#e65100', '#2e7d32', '#6a1b9a',
+            '#c62828', '#00838f', '#ff6f00', '#4527a0']
+    return {name: pool[i % len(pool)] for i, name in enumerate(method_names)}
+
+
+def create_report_card(
+    results_df,
+    method_names,      # list of row-index names to compare
+    dates,             # DatetimeIndex (post-warmup)
+    obs_flow,          # observed array (post-warmup)
+    simulations,       # dict  {method_name: sim_array}
+    title,
+    highlight=None,    # optional method name to emphasise (thicker lines)
+):
+    """Build a multi-panel Plotly report card.
+
+    Layout (6 rows x 2 cols):
+      R1 full-width : Win/loss scorecard strip
+      R2 col1/col2  : Efficiency bars (standard) | Efficiency bars (inverse)
+      R3 col1/col2  : Error bars (RMSE, MAE) | Bias bars (PBIAS, FHV, FMV, FLV)
+      R4 full-width : Signature bars (Sig_BFI, Sig_Flash, Sig_Q95, Sig_Q5)
+      R5 col1/col2  : Linear hydrograph | Log hydrograph  (2-yr excerpt)
+      R6 col1/col2  : Scatter (log-log) | Flow duration curve
     """
-    Build a single-figure Q1 report card: metrics table on top, four subplots below.
-    Subplots: linear hydrograph, log hydrograph, scatter (log scale), flow duration curves.
-    """
-    display_df = q1_df[metric_columns].copy()
-    formatted_values = []
-    for col in display_df.columns:
-        formatted_values.append([f'{v:.4f}' if pd.notna(v) else 'N/A' for v in display_df[col]])
-    
-    def get_cell_colors(col_values, metric_name):
-        """Winner = blue, loser = red. Per column: better of the two gets blue, worse gets red."""
-        values = pd.to_numeric(col_values, errors='coerce')
-        if values.isna().all():
-            return ['white'] * len(values)
-        # NSE/KGE: higher is better; RMSE/MAE/PBIAS/FDC/Sig: closer to 0 (smaller or smaller |value|) is better
-        higher_is_better = any(x in metric_name for x in ['NSE', 'KGE'])
-        if higher_is_better:
-            best_val = values.max()
-            worst_val = values.min()
-            is_best = values == best_val
-            tie = best_val == worst_val
+
+    palette = _make_palette(method_names)
+    obs_color = '#000000'
+
+    # ---- determine which metrics exist in results_df --------------------
+    eff_std   = [m for m in _EFF_STANDARD if m in results_df.columns]
+    eff_inv   = [m for m in _EFF_INVERSE if m in results_df.columns]
+    err_cols  = [m for m in _ERROR_METRICS if m in results_df.columns]
+    bias_cols = [m for m in _BIAS_METRICS if m in results_df.columns]
+    sig_cols  = [m for m in _SIGNATURE_METRICS if m in results_df.columns]
+    all_scored = eff_std + eff_inv + err_cols + bias_cols + sig_cols
+
+    # ---- scorecard: per metric, which method is best? -------------------
+    winners = {}
+    for m in all_scored:
+        vals = {name: results_df.loc[name, m] for name in method_names}
+        if m in _HIGHER_IS_BETTER:
+            sorted_names = sorted(vals, key=lambda n: vals[n], reverse=True)
         else:
-            abs_vals = values.abs()
-            best_abs = abs_vals.min()
-            worst_abs = abs_vals.max()
-            is_best = abs_vals == best_abs
-            tie = best_abs == worst_abs
-        colors = []
-        for i in range(len(values)):
-            if pd.isna(values.iloc[i]):
-                colors.append('white')
-            elif tie:
-                colors.append('rgb(240, 240, 240)')   # tie
-            elif is_best.iloc[i]:
-                colors.append('rgba(33, 150, 243, 0.4)')   # blue — winner
-            else:
-                colors.append('rgba(244, 67, 54, 0.4)')   # red — loser
-        return colors
-    
-    cell_colors = [get_cell_colors(display_df[col], col) for col in display_df.columns]
-    table_trace = go.Table(
-        header=dict(
-            values=['<b>Calibration</b>'] + [f'<b>{col}</b>' for col in display_df.columns],
-            fill_color='rgb(55, 83, 109)',
-            font=dict(color='white', size=10),
-            align='center',
-            height=24
-        ),
-        cells=dict(
-            values=[display_df.index.tolist()] + formatted_values,
-            fill_color=[['rgb(240, 240, 240)' if i % 2 == 0 else 'white' for i in range(len(display_df))]] + cell_colors,
-            font=dict(size=9),
-            align='center',
-            height=20
-        )
-    )
-    
-    # Colors: Observed=thick black, SDEB=orange, APEX-sqrt=blue
-    color_obs = '#000000'
-    color_sdeb = '#e65100'
-    color_apex = '#1565c0'
-    
-    # Layout: row 1 = table (full width), row 2 = linear hydro + log hydro, row 3 = scatter + FDC
-    # Tight vertical spacing and smaller table row to remove whitespace between table and subplots
+            sorted_names = sorted(vals, key=lambda n: abs(vals[n]))
+        winners[m] = sorted_names[0]
+
+    win_counts = {n: sum(1 for w in winners.values() if w == n) for n in method_names}
+
+    # ---- build figure ---------------------------------------------------
     fig = make_subplots(
-        rows=3, cols=2,
-        row_heights=[0.26, 0.37, 0.37],
+        rows=6, cols=2,
+        row_heights=[0.05, 0.18, 0.12, 0.08, 0.28, 0.29],
         specs=[
-            [{"type": "table", "colspan": 2}, None],
-            [{"type": "scatter"}, {"type": "scatter"}],
-            [{"type": "scatter"}, {"type": "scatter"}],
+            [{"type": "scatter", "colspan": 2}, None],   # R1 scorecard
+            [{"type": "bar"}, {"type": "bar"}],           # R2 eff std | eff inv
+            [{"type": "bar"}, {"type": "bar"}],           # R3 error | bias
+            [{"type": "bar", "colspan": 2}, None],        # R4 signatures
+            [{"type": "scatter"}, {"type": "scatter"}],   # R5 hydro
+            [{"type": "scatter"}, {"type": "scatter"}],   # R6 scatter | FDC
         ],
-        vertical_spacing=0.008,
-        horizontal_spacing=0.10,
+        vertical_spacing=0.042,
+        horizontal_spacing=0.09,
         subplot_titles=(
             None,
-            "Linear hydrograph",
-            "Log hydrograph",
-            "Scatter (log scale)",
-            "Flow duration curve",
+            'Efficiency: NSE / KGE (higher = better)',
+            'Efficiency: Inverse Transforms (higher = better)',
+            'Error (lower = better)',
+            'Bias & FDC Volume (closer to 0 = better)',
+            'Signatures: % Error (closer to 0 = better)',
+            'Linear Hydrograph (2-yr excerpt)',
+            'Log Hydrograph (2-yr excerpt)',
+            'Scatter – Obs vs Sim (log-log)',
+            'Flow Duration Curve',
         ),
     )
-    
-    # Table in row 1
-    fig.add_trace(table_trace, row=1, col=1)
-    
-    # Convert dates for Plotly (use same length as obs_flow)
-    date_strs = pd.to_datetime(dates).strftime('%Y-%m-%d').tolist()
-    
-    # Single shared legend: use legendgroup + showlegend only on first trace of each series
-    # Row 2, Col 1: Linear hydrograph (Observed, SDEB, APEX-sqrt) — first of each, show in legend
-    fig.add_trace(
-        go.Scatter(x=date_strs, y=obs_flow, name='Observed', legendgroup='Observed',
-                   line=dict(color=color_obs, width=2.5), showlegend=True),
-        row=2, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=date_strs, y=sim_sdeb, name='SDEB (κ=0)', legendgroup='SDEB',
-                   line=dict(color=color_sdeb, width=1), showlegend=True),
-        row=2, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=date_strs, y=sim_apex_sqrt, name='APEX-sqrt (κ=0.5)', legendgroup='APEX-sqrt',
-                   line=dict(color=color_apex, width=1), showlegend=True),
-        row=2, col=1
-    )
-    
-    # Row 2, Col 2: Log hydrograph — same groups, hide from legend
-    obs_pos = np.where(np.array(obs_flow) > 0, obs_flow, np.nan)
-    sdeb_pos = np.where(np.array(sim_sdeb) > 0, sim_sdeb, np.nan)
-    apex_pos = np.where(np.array(sim_apex_sqrt) > 0, sim_apex_sqrt, np.nan)
-    fig.add_trace(
-        go.Scatter(x=date_strs, y=obs_pos, name='Observed', legendgroup='Observed',
-                   line=dict(color=color_obs, width=2.5), showlegend=False),
-        row=2, col=2
-    )
-    fig.add_trace(
-        go.Scatter(x=date_strs, y=sdeb_pos, name='SDEB (κ=0)', legendgroup='SDEB',
-                   line=dict(color=color_sdeb, width=1), showlegend=False),
-        row=2, col=2
-    )
-    fig.add_trace(
-        go.Scatter(x=date_strs, y=apex_pos, name='APEX-sqrt (κ=0.5)', legendgroup='APEX-sqrt',
-                   line=dict(color=color_apex, width=1), showlegend=False),
-        row=2, col=2
-    )
-    
-    # Row 3, Col 1: Scatter — same groups, hide from legend; 1:1 only here, show in legend
+
+    # ===== Row 1: scorecard strip ========================================
+    for idx, m in enumerate(all_scored):
+        w = winners[m]
+        fig.add_trace(
+            go.Scatter(
+                x=[idx], y=[0],
+                mode='markers+text',
+                marker=dict(size=16, color=palette[w], symbol='square',
+                            line=dict(width=1, color='white')),
+                text=[m], textposition='top center',
+                textfont=dict(size=7, color='#333'),
+                showlegend=False,
+                hovertemplate=f'{m}: {w} ({results_df.loc[w, m]:.4f})<extra></extra>',
+            ),
+            row=1, col=1,
+        )
+    fig.update_xaxes(visible=False, row=1, col=1)
+    fig.update_yaxes(visible=False, range=[-0.4, 0.8], row=1, col=1)
+
+    # ===== Row 2 col 1: Efficiency – standard transforms (bar) ==========
+    for name in method_names:
+        vals = [results_df.loc[name, m] for m in eff_std]
+        fig.add_trace(
+            go.Bar(name=name, x=eff_std, y=vals,
+                   marker_color=palette[name],
+                   legendgroup=name, showlegend=True),
+            row=2, col=1,
+        )
+
+    # ===== Row 2 col 2: Efficiency – inverse transforms (bar) ===========
+    if eff_inv:
+        for name in method_names:
+            vals = [results_df.loc[name, m] for m in eff_inv]
+            fig.add_trace(
+                go.Bar(name=name, x=eff_inv, y=vals,
+                       marker_color=palette[name],
+                       legendgroup=name, showlegend=False),
+                row=2, col=2,
+            )
+    # Unlink y-axes so each panel auto-scales independently
+    fig.update_yaxes(matches=None, row=2, col=1)
+    fig.update_yaxes(matches=None, row=2, col=2)
+    fig.update_yaxes(matches=None, row=3, col=1)
+    fig.update_yaxes(matches=None, row=3, col=2)
+
+    # ===== Row 3 col 1: Error metrics (bar) ==============================
+    for name in method_names:
+        vals = [results_df.loc[name, m] for m in err_cols]
+        fig.add_trace(
+            go.Bar(name=name, x=err_cols, y=vals,
+                   marker_color=palette[name],
+                   legendgroup=name, showlegend=False),
+            row=3, col=1,
+        )
+
+    # ===== Row 3 col 2: Bias metrics (bar) ===============================
+    for name in method_names:
+        vals = [results_df.loc[name, m] for m in bias_cols]
+        fig.add_trace(
+            go.Bar(name=name, x=bias_cols, y=vals,
+                   marker_color=palette[name],
+                   legendgroup=name, showlegend=False),
+            row=3, col=2,
+        )
+    fig.add_hline(y=0, line_dash='dash', line_color='gray', line_width=0.5, row=3, col=2)
+
+    # ===== Row 4: Signature metrics (bar, full-width) ====================
+    if sig_cols:
+        for name in method_names:
+            vals = [results_df.loc[name, m] for m in sig_cols]
+            fig.add_trace(
+                go.Bar(name=name, x=sig_cols, y=vals,
+                       marker_color=palette[name],
+                       legendgroup=name, showlegend=False),
+                row=4, col=1,
+            )
+        fig.add_hline(y=0, line_dash='dash', line_color='gray', line_width=0.5, row=4, col=1)
+    fig.update_yaxes(matches=None, row=4, col=1)
+
+    # ===== Row 5: Hydrographs (2-yr excerpt) =============================
+    n_excerpt = min(730, len(obs_flow))
+    sl = slice(-n_excerpt, None)
+    date_strs = pd.to_datetime(dates[sl]).strftime('%Y-%m-%d').tolist()
+
+    for col, log_scale in [(1, False), (2, True)]:
+        obs_y = np.where(obs_flow[sl] > 0, obs_flow[sl], np.nan) if log_scale else obs_flow[sl]
+        fig.add_trace(
+            go.Scatter(x=date_strs, y=obs_y, name='Observed',
+                       legendgroup='_obs', showlegend=(col == 1),
+                       line=dict(color=obs_color, width=2)),
+            row=5, col=col,
+        )
+        for name in method_names:
+            sim = simulations[name][sl]
+            sim_y = np.where(np.asarray(sim, dtype=float) > 0, sim, np.nan) if log_scale else sim
+            lw = 1.4 if name == highlight else 0.9
+            fig.add_trace(
+                go.Scatter(x=date_strs, y=sim_y, name=name,
+                           legendgroup=name, showlegend=False,
+                           line=dict(color=palette[name], width=lw)),
+                row=5, col=col,
+            )
+        fig.update_yaxes(title_text='Flow', row=5, col=col)
+        if log_scale:
+            fig.update_yaxes(type='log', row=5, col=col)
+
+    # ===== Row 6 col 1: Scatter (log-log) ================================
     obs_a = np.asarray(obs_flow, dtype=float)
-    sdeb_a = np.asarray(sim_sdeb, dtype=float)
-    apex_a = np.asarray(sim_apex_sqrt, dtype=float)
-    valid_sdeb = ~(np.isnan(obs_a) | np.isnan(sdeb_a)) & (obs_a > 0) & (sdeb_a > 0)
-    valid_apex = ~(np.isnan(obs_a) | np.isnan(apex_a)) & (obs_a > 0) & (apex_a > 0)
+    for name in method_names:
+        sim_a = np.asarray(simulations[name], dtype=float)
+        valid = ~(np.isnan(obs_a) | np.isnan(sim_a)) & (obs_a > 0) & (sim_a > 0)
+        sz = 4 if name != highlight else 5
+        fig.add_trace(
+            go.Scatter(
+                x=obs_a[valid], y=sim_a[valid],
+                mode='markers', name=name, legendgroup=name, showlegend=False,
+                marker=dict(color=palette[name], size=sz, opacity=0.4),
+                hovertemplate='Obs: %{x:.1f}<br>Sim: %{y:.1f}<extra></extra>',
+            ),
+            row=6, col=1,
+        )
+    pos_obs = obs_a[obs_a > 0]
+    min_f = max(1e-6, np.nanmin(pos_obs)) if len(pos_obs) else 1e-6
+    max_f = np.nanmax(obs_a) if len(obs_a) else 1
     fig.add_trace(
-        go.Scatter(
-            x=obs_a[valid_sdeb], y=sdeb_a[valid_sdeb],
-            mode='markers', name='SDEB (κ=0)', legendgroup='SDEB',
-            marker=dict(color=color_sdeb, size=4, opacity=0.5), showlegend=False,
-            hovertemplate='Obs: %{x:.2f}<br>Sim: %{y:.2f}<extra></extra>'
-        ),
-        row=3, col=1
+        go.Scatter(x=[min_f, max_f], y=[min_f, max_f], mode='lines',
+                   name='1:1', line=dict(color='gray', dash='dash', width=1),
+                   showlegend=True),
+        row=6, col=1,
     )
+    fig.update_xaxes(type='log', title_text='Observed', row=6, col=1)
+    fig.update_yaxes(type='log', title_text='Simulated', row=6, col=1)
+
+    # ===== Row 6 col 2: FDC =============================================
+    exc_o, fdc_o = _fdc(obs_flow)
     fig.add_trace(
-        go.Scatter(
-            x=obs_a[valid_apex], y=apex_a[valid_apex],
-            mode='markers', name='APEX-sqrt (κ=0.5)', legendgroup='APEX-sqrt',
-            marker=dict(color=color_apex, size=4, opacity=0.5), showlegend=False,
-            hovertemplate='Obs: %{x:.2f}<br>Sim: %{y:.2f}<extra></extra>'
-        ),
-        row=3, col=1
+        go.Scatter(x=exc_o, y=fdc_o, name='Observed',
+                   legendgroup='_obs', showlegend=False,
+                   line=dict(color=obs_color, width=2.5)),
+        row=6, col=2,
     )
-    min_f = max(1e-6, min(np.nanmin(obs_a[obs_a > 0]), np.nanmin(sdeb_a[sdeb_a > 0]), np.nanmin(apex_a[apex_a > 0])))
-    max_f = max(np.nanmax(obs_a), np.nanmax(sdeb_a), np.nanmax(apex_a))
-    fig.add_trace(
-        go.Scatter(x=[min_f, max_f], y=[min_f, max_f], mode='lines', name='1:1',
-                   legendgroup='1:1', line=dict(color='gray', dash='dash', width=1), showlegend=True),
-        row=3, col=1
-    )
-    
-    # Row 3, Col 2: Flow duration curves — same groups, hide from legend
-    obs_sorted = np.sort(np.asarray(obs_flow, dtype=float)[~np.isnan(obs_flow)])[::-1]
-    sdeb_sorted = np.sort(np.asarray(sim_sdeb, dtype=float)[~np.isnan(sim_sdeb)])[::-1]
-    apex_sorted = np.sort(np.asarray(sim_apex_sqrt, dtype=float)[~np.isnan(sim_apex_sqrt)])[::-1]
-    n_obs, n_sdeb, n_apex = len(obs_sorted), len(sdeb_sorted), len(apex_sorted)
-    exc_obs = np.arange(1, n_obs + 1) / (n_obs + 1) * 100
-    exc_sdeb = np.arange(1, n_sdeb + 1) / (n_sdeb + 1) * 100
-    exc_apex = np.arange(1, n_apex + 1) / (n_apex + 1) * 100
-    fig.add_trace(
-        go.Scatter(x=exc_obs, y=obs_sorted, name='Observed', legendgroup='Observed',
-                   line=dict(color=color_obs, width=2.5), showlegend=False),
-        row=3, col=2
-    )
-    fig.add_trace(
-        go.Scatter(x=exc_sdeb, y=sdeb_sorted, name='SDEB (κ=0)', legendgroup='SDEB',
-                   line=dict(color=color_sdeb, width=1.5, dash='dash'), showlegend=False),
-        row=3, col=2
-    )
-    fig.add_trace(
-        go.Scatter(x=exc_apex, y=apex_sorted, name='APEX-sqrt (κ=0.5)', legendgroup='APEX-sqrt',
-                   line=dict(color=color_apex, width=1.5, dash='dot'), showlegend=False),
-        row=3, col=2
-    )
-    
+    for name in method_names:
+        exc_s, fdc_s = _fdc(simulations[name])
+        lw = 1.5 if name == highlight else 1
+        fig.add_trace(
+            go.Scatter(x=exc_s, y=fdc_s, name=name,
+                       legendgroup=name, showlegend=False,
+                       line=dict(color=palette[name], width=lw)),
+            row=6, col=2,
+        )
+    fig.update_xaxes(title_text='Exceedance (%)', row=6, col=2)
+    fig.update_yaxes(type='log', title_text='Flow', row=6, col=2)
+
+    # ===== Layout ========================================================
+    subtitle_parts = [f'{n}: {win_counts[n]} wins' for n in method_names]
     fig.update_layout(
-        title=dict(text='<b>Q1 Report Card: SDEB vs APEX-sqrt</b> (Dynamics Multiplier Test)', font=dict(size=18)),
-        height=720,
-        margin=dict(t=60, b=30, l=50, r=50),
-        showlegend=True,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+        title=dict(
+            text=f'<b>{title}</b><br>'
+                 f'<sup>Scorecard across {len(all_scored)} metrics — '
+                 + ' · '.join(subtitle_parts) + '</sup>',
+            font=dict(size=16),
+        ),
+        height=1700,
+        barmode='group',
+        margin=dict(t=130, b=40, l=55, r=55),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                    xanchor='center', x=0.5),
     )
-    # Log scale for hydrograph (row 2 col 2), scatter (row 3 col 1), FDC (row 3 col 2)
-    fig.update_yaxes(type='log', row=2, col=2)
-    fig.update_xaxes(title_text='Date', row=2, col=1)
-    fig.update_xaxes(title_text='Date', row=2, col=2)
-    fig.update_yaxes(title_text='Flow', row=2, col=1)
-    fig.update_yaxes(title_text='Flow', row=2, col=2)
-    fig.update_xaxes(type='log', title_text='Observed', row=3, col=1)
-    fig.update_yaxes(type='log', title_text='Simulated', row=3, col=1)
-    fig.update_xaxes(title_text='Exceedance (%)', row=3, col=2)
-    fig.update_yaxes(type='log', title_text='Flow', row=3, col=2)
     return fig
 
 
@@ -1339,7 +1273,7 @@ def create_q1_report_card(q1_df, metric_columns, dates, obs_flow, sim_sdeb, sim_
 # ## Q1: Does the Dynamics Multiplier Improve Upon SDEB?
 #
 # > **From Problem Statement**: "The **only difference** between SDEB and APEX-sqrt is the
-# > dynamics multiplier (κ): SDEB uses κ=0, APEX-sqrt uses κ=0.5. Any performance difference
+# > dynamics multiplier (κ): SDEB uses κ=0, APEX-sqrt uses κ=0.7. Any performance difference
 # > is **directly attributable** to the dynamics multiplier."
 #
 # This is the **core question** of our research because it isolates APEX's key innovation—the
@@ -1353,62 +1287,32 @@ print("\n" + "=" * 80)
 print("Q1: Does the DYNAMICS MULTIPLIER improve upon SDEB?")
 print("=" * 80)
 print("\nThis is the CORE question - isolating the effect of APEX's key innovation.")
-print("\nFair comparison: SDEB vs APEX-sqrt")
+print("\nFair comparison: SDEB vs APEX-sqrt (κ=0.7)")
 print("  - Both use α = 0.1 (same chronological vs ranked weighting)")
 print("  - Both use sqrt transform (λ = 0.5)")
 print("  - SDEB: κ = 0 (no dynamics penalty)")
-print("  - APEX-sqrt: κ = 0.5 (moderate dynamics penalty)")
+print("  - APEX-sqrt: κ = 0.7 (strong dynamics penalty — default)")
 print("\n  Any difference is DIRECTLY attributable to the dynamics multiplier!")
 
 q1_methods = ['SDEB', 'APEX-sqrt']
-q1_df = results_df.loc[q1_methods]
-
-# Use ALL 22 metrics for comprehensive comparison
 all_metrics = list(results_df.columns)
 
-# Report card: metrics table + four subplots (linear hydrograph, log hydrograph, scatter log-scale, FDC)
-sim_sdeb_q1 = baseline_simulations['SDEB']
-sim_apex_sqrt_q1 = apex_simulations['sqrt']  # APEX-sqrt calibration
-fig_q1_report = create_q1_report_card(
-    q1_df, all_metrics, dates, obs_flow, sim_sdeb_q1, sim_apex_sqrt_q1
+fig_q1 = create_report_card(
+    results_df, method_names=q1_methods,
+    dates=dates, obs_flow=obs_flow,
+    simulations={'SDEB': baseline_simulations['SDEB'],
+                 'APEX-sqrt': all_simulations['APEX-sqrt']},
+    title='Q1: Does the Dynamics Multiplier Improve Upon SDEB? (κ=0.7)',
+    highlight='APEX-sqrt',
 )
-fig_q1_report.show()
-
-print("\nAPEX-sqrt vs SDEB per metric:")
-for metric in all_metrics:
-    sdeb_val = q1_df.loc['SDEB', metric]
-    apex_val = q1_df.loc['APEX-sqrt', metric]
-    diff = apex_val - sdeb_val
-    # For NSE/KGE higher is better, for others lower is better
-    higher_better = any(x in metric for x in ['NSE', 'KGE'])
-    if higher_better:
-        winner = 'APEX ✓' if diff > 0 else 'SDEB ✓' if diff < 0 else 'TIE'
-        sign = '+' if diff > 0 else ''
-    else:
-        winner = 'APEX ✓' if diff < 0 else 'SDEB ✓' if diff > 0 else 'TIE'
-        sign = '' if diff < 0 else '+'
-    print(f"  {metric:15s}: SDEB = {sdeb_val:8.4f}, APEX-sqrt = {apex_val:8.4f}, Diff = {sign}{diff:+.4f} -> {winner}")
-
-# Summary for Q1 (count wins correctly based on metric direction)
-q1_apex_wins = 0
-for m in all_metrics:
-    higher_better = any(x in m for x in ['NSE', 'KGE'])
-    if higher_better:
-        if q1_df.loc['APEX-sqrt', m] > q1_df.loc['SDEB', m]:
-            q1_apex_wins += 1
-    else:
-        if q1_df.loc['APEX-sqrt', m] < q1_df.loc['SDEB', m]:
-            q1_apex_wins += 1
-
-print(f"\n  Q1 SUMMARY: APEX-sqrt wins {q1_apex_wins}/{len(all_metrics)} metrics over SDEB")
-print(f"  -> Dynamics multiplier {'IMPROVES' if q1_apex_wins > len(all_metrics)//2 else 'does NOT improve'} upon SDEB")
+fig_q1.show()
 
 # %% [markdown]
 # ### Q1 Interpretation
 #
 # The comparison above directly tests whether APEX's **dynamics multiplier** provides value:
 #
-# - **Metrics where APEX-sqrt wins**: The dynamics penalty (κ=0.5) helped the optimizer find
+# - **Metrics where APEX-sqrt wins**: The dynamics penalty (κ=0.7) helped the optimizer find
 #   parameters that better capture the timing/gradient relationship between flows.
 # - **Metrics where SDEB wins**: The simpler formulation (no dynamics penalty) may have allowed
 #   more flexibility to optimize other aspects of the hydrograph.
@@ -1435,29 +1339,17 @@ print("Q2: Does APEX improve UNTRANSFORMED (high-flow) calibration?")
 print("=" * 80)
 print("\nFair comparison: APEX-none vs NSE, KGE, KGE-np (all untransformed)")
 
-q2_methods = ['NSE', 'KGE', 'KGE-np', 'APEX-none']
-q2_df = results_df.loc[q2_methods]
+q2_methods = ['SDEB', 'NSE', 'KGE', 'KGE-np', 'APEX-none']
 
-# Display with Plotly (all 22 metrics)
-fig_q2 = create_performance_table(q2_df, '<b>Q2: Untransformed Comparison</b>', all_metrics)
+fig_q2 = create_report_card(
+    results_df, method_names=q2_methods,
+    dates=dates, obs_flow=obs_flow,
+    simulations={**{b: baseline_simulations[b] for b in ['SDEB', 'NSE', 'KGE', 'KGE-np']},
+                 'APEX-none': apex_simulations['none']},
+    title='Q2: Untransformed (High-Flow) Comparison',
+    highlight='APEX-none',
+)
 fig_q2.show()
-
-# Calculate APEX improvement over best baseline
-print("\nAPEX-none vs best baseline per metric:")
-for metric in all_metrics:
-    baseline_vals = q2_df.loc[['NSE', 'KGE', 'KGE-np'], metric]
-    higher_better = any(x in metric for x in ['NSE', 'KGE'])
-    if higher_better:
-        best_baseline = baseline_vals.idxmax()
-        best_val = baseline_vals.max()
-    else:
-        best_baseline = baseline_vals.idxmin()
-        best_val = baseline_vals.min()
-    apex_val = q2_df.loc['APEX-none', metric]
-    diff = apex_val - best_val
-    sign = '+' if diff > 0 else ''
-    print(f"  {metric:15s}: Best baseline = {best_baseline:8s} ({best_val:8.4f}), "
-          f"APEX-none = {apex_val:8.4f} ({sign}{diff:+.4f})")
 
 # %% [markdown]
 # ### Q2 Interpretation
@@ -1490,28 +1382,17 @@ print("Q3: Does APEX improve SQRT-TRANSFORMED (balanced) calibration?")
 print("=" * 80)
 print("\nFair comparison: APEX-sqrt vs NSE-sqrt, KGE-sqrt, KGE-np-sqrt")
 
-q3_methods = ['NSE-sqrt', 'KGE-sqrt', 'KGE-np-sqrt', 'APEX-sqrt']
-q3_df = results_df.loc[q3_methods]
+q3_methods = ['SDEB', 'NSE-sqrt', 'KGE-sqrt', 'KGE-np-sqrt', 'APEX-sqrt']
 
-# Display with Plotly (all 22 metrics)
-fig_q3 = create_performance_table(q3_df, '<b>Q3: Sqrt-Transformed Comparison</b>', all_metrics)
+fig_q3 = create_report_card(
+    results_df, method_names=q3_methods,
+    dates=dates, obs_flow=obs_flow,
+    simulations={**{b: baseline_simulations[b] for b in ['SDEB', 'NSE-sqrt', 'KGE-sqrt', 'KGE-np-sqrt']},
+                 'APEX-sqrt': all_simulations['APEX-sqrt']},
+    title='Q3: Sqrt-Transformed (Balanced) Comparison (κ=0.7)',
+    highlight='APEX-sqrt',
+)
 fig_q3.show()
-
-print("\nAPEX-sqrt vs best baseline per metric:")
-for metric in all_metrics:
-    baseline_vals = q3_df.loc[['NSE-sqrt', 'KGE-sqrt', 'KGE-np-sqrt'], metric]
-    higher_better = any(x in metric for x in ['NSE', 'KGE'])
-    if higher_better:
-        best_baseline = baseline_vals.idxmax()
-        best_val = baseline_vals.max()
-    else:
-        best_baseline = baseline_vals.idxmin()
-        best_val = baseline_vals.min()
-    apex_val = q3_df.loc['APEX-sqrt', metric]
-    diff = apex_val - best_val
-    sign = '+' if diff > 0 else ''
-    print(f"  {metric:15s}: Best baseline = {best_baseline:12s} ({best_val:8.4f}), "
-          f"APEX-sqrt = {apex_val:8.4f} ({sign}{diff:+.4f})")
 
 # %% [markdown]
 # ### Q3 Interpretation
@@ -1546,28 +1427,17 @@ print("Q4: Does APEX improve LOG-TRANSFORMED (low-flow) calibration?")
 print("=" * 80)
 print("\nFair comparison: APEX-log vs NSE-log, KGE-log, KGE-np-log")
 
-q4_methods = ['NSE-log', 'KGE-log', 'KGE-np-log', 'APEX-log']
-q4_df = results_df.loc[q4_methods]
+q4_methods = ['SDEB', 'NSE-log', 'KGE-log', 'KGE-np-log', 'APEX-log']
 
-# Display with Plotly (all 22 metrics)
-fig_q4 = create_performance_table(q4_df, '<b>Q4: Log-Transformed Comparison</b>', all_metrics)
+fig_q4 = create_report_card(
+    results_df, method_names=q4_methods,
+    dates=dates, obs_flow=obs_flow,
+    simulations={**{b: baseline_simulations[b] for b in ['SDEB', 'NSE-log', 'KGE-log', 'KGE-np-log']},
+                 'APEX-log': apex_simulations['log']},
+    title='Q4: Log-Transformed (Low-Flow) Comparison',
+    highlight='APEX-log',
+)
 fig_q4.show()
-
-print("\nAPEX-log vs best baseline per metric:")
-for metric in all_metrics:
-    baseline_vals = q4_df.loc[['NSE-log', 'KGE-log', 'KGE-np-log'], metric]
-    higher_better = any(x in metric for x in ['NSE', 'KGE'])
-    if higher_better:
-        best_baseline = baseline_vals.idxmax()
-        best_val = baseline_vals.max()
-    else:
-        best_baseline = baseline_vals.idxmin()
-        best_val = baseline_vals.min()
-    apex_val = q4_df.loc['APEX-log', metric]
-    diff = apex_val - best_val
-    sign = '+' if diff > 0 else ''
-    print(f"  {metric:15s}: Best baseline = {best_baseline:12s} ({best_val:8.4f}), "
-          f"APEX-log = {apex_val:8.4f} ({sign}{diff:+.4f})")
 
 # %% [markdown]
 # ### Q4 Interpretation
@@ -1600,28 +1470,17 @@ print("Q5: Does APEX improve INVERSE-TRANSFORMED (extreme low-flow) calibration?
 print("=" * 80)
 print("\nFair comparison: APEX-inverse vs NSE-inv, KGE-inv, KGE-np-inv")
 
-q5_methods = ['NSE-inv', 'KGE-inv', 'KGE-np-inv', 'APEX-inverse']
-q5_df = results_df.loc[q5_methods]
+q5_methods = ['SDEB', 'NSE-inv', 'KGE-inv', 'KGE-np-inv', 'APEX-inverse']
 
-# Display with Plotly (all 22 metrics)
-fig_q5 = create_performance_table(q5_df, '<b>Q5: Inverse-Transformed Comparison</b>', all_metrics)
+fig_q5 = create_report_card(
+    results_df, method_names=q5_methods,
+    dates=dates, obs_flow=obs_flow,
+    simulations={**{b: baseline_simulations[b] for b in ['SDEB', 'NSE-inv', 'KGE-inv', 'KGE-np-inv']},
+                 'APEX-inverse': apex_simulations['inverse']},
+    title='Q5: Inverse-Transformed (Extreme Low-Flow) Comparison',
+    highlight='APEX-inverse',
+)
 fig_q5.show()
-
-print("\nAPEX-inverse vs best baseline per metric:")
-for metric in all_metrics:
-    baseline_vals = q5_df.loc[['NSE-inv', 'KGE-inv', 'KGE-np-inv'], metric]
-    higher_better = any(x in metric for x in ['NSE', 'KGE'])
-    if higher_better:
-        best_baseline = baseline_vals.idxmax()
-        best_val = baseline_vals.max()
-    else:
-        best_baseline = baseline_vals.idxmin()
-        best_val = baseline_vals.min()
-    apex_val = q5_df.loc['APEX-inverse', metric]
-    diff = apex_val - best_val
-    sign = '+' if diff > 0 else ''
-    print(f"  {metric:15s}: Best baseline = {best_baseline:12s} ({best_val:8.4f}), "
-          f"APEX-inv = {apex_val:8.4f} ({sign}{diff:+.4f})")
 
 # %% [markdown]
 # ### Q5 Interpretation
@@ -1646,7 +1505,7 @@ for metric in all_metrics:
 #
 # - **κ = 0.0**: No dynamics penalty (equivalent to SDEB)
 # - **κ = 0.3**: Weak dynamics penalty (subtle timing correction)
-# - **κ = 0.5**: Moderate dynamics penalty (default APEX)
+# - **κ = 0.5**: Moderate dynamics penalty
 # - **κ = 0.7**: Strong dynamics penalty (aggressive timing correction)
 #
 # Understanding this sensitivity helps practitioners tune APEX for their specific application.
@@ -1660,24 +1519,16 @@ print("Q6: How does dynamics strength (κ) affect performance?")
 print("=" * 80)
 print("\nComparing κ = 0.3, 0.5, 0.7 (all with sqrt transform)")
 
-q6_methods = ['APEX-sqrt_dyn03', 'APEX-sqrt', 'APEX-sqrt_dyn07']
-q6_df = results_df.loc[q6_methods].copy()
-q6_df.index = ['κ=0.3', 'κ=0.5 (default)', 'κ=0.7']
+q6_methods = ['SDEB', 'APEX-sqrt_dyn03', 'APEX-sqrt_dyn05', 'APEX-sqrt']
 
-# Display with Plotly (all 22 metrics)
-fig_q6 = create_performance_table(q6_df, '<b>Q6: Dynamics Strength (κ) Sensitivity</b>', all_metrics)
+fig_q6 = create_report_card(
+    results_df, method_names=q6_methods,
+    dates=dates, obs_flow=obs_flow,
+    simulations={m: all_simulations[m] for m in q6_methods},
+    title='Q6: Dynamics Strength (κ) Sensitivity — SDEB (κ=0) vs κ ∈ {0.3, 0.5, 0.7}',
+    highlight='APEX-sqrt',
+)
 fig_q6.show()
-
-print("\nOptimal κ per metric:")
-for metric in all_metrics:
-    higher_better = any(x in metric for x in ['NSE', 'KGE'])
-    if higher_better:
-        best_kappa = q6_df[metric].idxmax()
-        best_val = q6_df[metric].max()
-    else:
-        best_kappa = q6_df[metric].idxmin()
-        best_val = q6_df[metric].min()
-    print(f"  {metric:15s}: {best_kappa:18s} ({best_val:8.4f})")
 
 # %% [markdown]
 # ### Q6 Interpretation
@@ -1685,8 +1536,8 @@ for metric in all_metrics:
 # The dynamics strength sensitivity reveals important practical guidance:
 #
 # - **If κ=0.3 is best**: The dynamics penalty helps but should be applied gently
-# - **If κ=0.5 is best**: The default value is well-calibrated for this catchment
-# - **If κ=0.7 is best**: Stronger timing correction is beneficial (perhaps flashy catchment?)
+# - **If κ=0.5 is best**: A moderate penalty is sufficient for this catchment
+# - **If κ=0.7 is best**: Stronger timing correction is beneficial (the default)
 # - **If results are similar**: APEX is robust to this parameter choice
 #
 # Look for patterns across metrics:
@@ -1715,26 +1566,17 @@ for metric in all_metrics:
 print("\n" + "=" * 80)
 print("Q7: How does regime emphasis affect flow regime performance?")
 print("=" * 80)
-print("\nComparing uniform, low_flow, balanced (all with sqrt transform, κ=0.5)")
+print("\nComparing uniform, low_flow, balanced (all κ=0.7)")
 
-q7_methods = ['APEX-sqrt', 'APEX-sqrt_lowflow', 'APEX-sqrt_balanced']
-q7_df = results_df.loc[q7_methods].copy()
-q7_df.index = ['uniform', 'low_flow', 'balanced']
+q7_methods = ['SDEB', 'APEX-sqrt', 'APEX-sqrt_lowflow', 'APEX-sqrt_balanced']
 
-# Display with Plotly (all 22 metrics)
-fig_q7 = create_performance_table(q7_df, '<b>Q7: Regime Emphasis Sensitivity</b>', all_metrics)
+fig_q7 = create_report_card(
+    results_df, method_names=q7_methods,
+    dates=dates, obs_flow=obs_flow,
+    simulations={m: all_simulations[m] for m in q7_methods},
+    title='Q7: Regime Emphasis — SDEB vs uniform / low_flow / balanced (all κ=0.7)',
+)
 fig_q7.show()
-
-print("\nBest regime per metric:")
-for metric in all_metrics:
-    higher_better = any(x in metric for x in ['NSE', 'KGE'])
-    if higher_better:
-        best = q7_df[metric].idxmax()
-        best_val = q7_df[metric].max()
-    else:
-        best = q7_df[metric].idxmin()
-        best_val = q7_df[metric].min()
-    print(f"  {metric:15s}: {best:12s} ({best_val:8.4f})")
 
 # %% [markdown]
 # ### Q7 Interpretation
@@ -1765,466 +1607,335 @@ print("\n" + "=" * 80)
 print("SUMMARY: TRANSFORMATION-ALIGNED APEX PERFORMANCE")
 print("=" * 80)
 
-# For each transform, compare APEX to best baseline
-summary_data = []
+# =====================================================================
+# FIGURE 1 – Grand Leaderboard: ALL methods × key diagnostic metrics
+# =====================================================================
+# Three side-by-side panels with independent colour scales:
+#   Panel 1 – Efficiency (higher = better): NSE/KGE/KGE-np families
+#   Panel 2 – Error (lower = better): RMSE, MAE
+#   Panel 3 – Bias & Signatures (closer to 0 = better): PBIAS, FDC, Sig_*
 
-transforms = ['none', 'sqrt', 'log', 'inverse']
-transform_baselines = {
-    'none': ['NSE', 'KGE', 'KGE-np'],
-    'sqrt': ['NSE-sqrt', 'KGE-sqrt', 'KGE-np-sqrt'],
-    'log': ['NSE-log', 'KGE-log', 'KGE-np-log'],
-    'inverse': ['NSE-inv', 'KGE-inv', 'KGE-np-inv'],
-}
-apex_names = {
-    'none': 'APEX-none',
-    'sqrt': 'APEX-sqrt',
-    'log': 'APEX-log',
-    'inverse': 'APEX-inverse',
-}
+_LB_EFFICIENCY = [
+    'NSE', 'NSE_sqrt', 'NSE_log', 'NSE_inv',
+    'KGE', 'KGE_sqrt', 'KGE_log', 'KGE_inv',
+    'KGE_np', 'KGE_np_sqrt', 'KGE_np_log', 'KGE_np_inv',
+]
+_LB_ERROR = ['RMSE', 'MAE']
+_LB_BIAS_SIG = ['PBIAS', 'FHV', 'FMV', 'FLV', 'Sig_BFI', 'Sig_Flash', 'Sig_Q95', 'Sig_Q5']
 
-# Key metrics for summary (mix of efficiency and error metrics)
-key_metrics_summary = ['NSE', 'NSE(√Q)', 'NSE(log Q)', 'KGE', 'KGE-np', 'FDC-low', 'Sig-BFI']
+_lb_panels = [
+    ('Efficiency (higher = better)',     _LB_EFFICIENCY),
+    ('Error (lower = better)',           _LB_ERROR),
+    ('Bias & Signatures (closer to 0)', _LB_BIAS_SIG),
+]
 
-print("\nAPEX improvement over best baseline (same transform):")
-print("-" * 80)
-
-for transform in transforms:
-    baselines = transform_baselines[transform]
-    apex_name = apex_names[transform]
-    
-    wins = 0
-    total = 0
-    
-    print(f"\n{transform.upper()} transform:")
-    for metric in key_metrics_summary:
-        baseline_vals = results_df.loc[baselines, metric]
-        apex_val = results_df.loc[apex_name, metric]
-        
-        # Determine if higher or lower is better
-        higher_better = any(x in metric for x in ['NSE', 'KGE'])
-        
-        if higher_better:
-            best_baseline_val = baseline_vals.max()
-            diff = apex_val - best_baseline_val
-            apex_wins = diff > 0
-        else:
-            best_baseline_val = baseline_vals.min()
-            diff = apex_val - best_baseline_val
-            apex_wins = diff < 0
-        
-        total += 1
-        if apex_wins:
-            wins += 1
-            marker = '✓'
-        else:
-            marker = '✗'
-        
-        print(f"  {marker} {metric:12s}: APEX={apex_val:.4f}, Best baseline={best_baseline_val:.4f}, Diff={diff:+.4f}")
-    
-    print(f"  -> {apex_name} wins {wins}/{total} metrics")
-    summary_data.append({
-        'Transform': transform,
-        'APEX Config': apex_name,
-        'Wins': wins,
-        'Total': total,
-        'Win Rate': wins/total
-    })
-
-summary_df = pd.DataFrame(summary_data)
-
-# Display summary with Plotly
-fig_summary = go.Figure(data=[go.Table(
-    header=dict(
-        values=['<b>Transform</b>', '<b>APEX Config</b>', '<b>Wins</b>', '<b>Total</b>', '<b>Win Rate</b>'],
-        fill_color='rgb(55, 83, 109)',
-        font=dict(color='white', size=12),
-        align='center'
-    ),
-    cells=dict(
-        values=[
-            summary_df['Transform'].str.upper(),
-            summary_df['APEX Config'],
-            summary_df['Wins'],
-            summary_df['Total'],
-            [f"{wr:.1%}" for wr in summary_df['Win Rate']]
-        ],
-        fill_color=[['rgb(200, 255, 200)' if wr > 0.5 else 'rgb(255, 200, 200)' 
-                     for wr in summary_df['Win Rate']]] * 5,
-        align='center',
-        font=dict(size=11)
-    )
-)])
-fig_summary.update_layout(
-    title='<b>Summary: APEX Win Rate by Transform</b>',
-    height=250
+method_order = (
+    ['SDEB']
+    + sorted([n for n in results_df.index if n.startswith('NSE') or n.startswith('KGE')])
+    + sorted([n for n in results_df.index if n.startswith('APEX')])
 )
-fig_summary.show()
+method_order = [m for m in method_order if m in results_df.index]
 
-# Overall verdict
-total_wins = summary_df['Wins'].sum()
-total_comparisons = summary_df['Total'].sum()
-print(f"\nOverall: APEX wins {total_wins}/{total_comparisons} metrics ({100*total_wins/total_comparisons:.1f}%)")
+
+def _normalise_panel(z_vals, metric_names, panel_type):
+    """Column-normalise a panel so 1 = best, 0 = worst."""
+    z_out = np.full_like(z_vals, 0.5)
+    for j, m in enumerate(metric_names):
+        col = z_vals[:, j]
+        if panel_type == 'closer_to_zero':
+            ac = np.abs(col)
+            v_min, v_max = np.nanmin(ac), np.nanmax(ac)
+            if v_max > v_min:
+                z_out[:, j] = 1.0 - (ac - v_min) / (v_max - v_min)
+        elif panel_type == 'higher_is_better':
+            v_min, v_max = np.nanmin(col), np.nanmax(col)
+            if v_max > v_min:
+                z_out[:, j] = (col - v_min) / (v_max - v_min)
+        else:  # lower_is_better
+            v_min, v_max = np.nanmin(col), np.nanmax(col)
+            if v_max > v_min:
+                z_out[:, j] = 1.0 - (col - v_min) / (v_max - v_min)
+    return z_out
+
+
+_PANEL_TYPES = ['higher_is_better', 'lower_is_better', 'closer_to_zero']
+_RANK_COLORSCALE = [[0, '#d32f2f'], [0.5, '#fff9c4'], [1, '#1565c0']]
+
+_panel_cols = [[m for m in cols if m in results_df.columns] for _, cols in _lb_panels]
+_panel_widths = [max(len(c), 1) for c in _panel_cols]
+_total_w = sum(_panel_widths)
+
+fig_lb = make_subplots(
+    rows=1, cols=3,
+    column_widths=[w / _total_w for w in _panel_widths],
+    horizontal_spacing=0.025,
+    shared_yaxes=True,
+    subplot_titles=[title for title, _ in _lb_panels],
+)
+
+for p_idx, ((_, _), p_cols, p_type) in enumerate(
+        zip(_lb_panels, _panel_cols, _PANEL_TYPES), start=1):
+    if not p_cols:
+        continue
+    z_raw = results_df.loc[method_order, p_cols].values.astype(float)
+    z_n = _normalise_panel(z_raw, p_cols, p_type)
+    text = [[f'{z_raw[i, j]:.3f}' for j in range(len(p_cols))]
+            for i in range(len(method_order))]
+    fig_lb.add_trace(
+        go.Heatmap(
+            z=z_n, x=p_cols, y=method_order,
+            text=text, texttemplate='%{text}', textfont=dict(size=8),
+            colorscale=_RANK_COLORSCALE, showscale=(p_idx == 1),
+            colorbar=dict(title='Rank', tickvals=[0, 0.5, 1],
+                          ticktext=['worst', 'mid', 'best']) if p_idx == 1 else None,
+            zmin=0, zmax=1,
+            hovertemplate='%{y} | %{x}: %{text}<extra></extra>',
+        ),
+        row=1, col=p_idx,
+    )
+
+fig_lb.update_layout(
+    title=dict(
+        text='<b>Grand Leaderboard: All Methods × Diagnostic Metrics</b><br>'
+             '<sup>Three panels with independent colour scales; '
+             'blue = best in column, red = worst; cell text = actual value</sup>',
+        font=dict(size=15),
+    ),
+    height=max(500, 38 * len(method_order) + 140),
+    width=1400,
+    margin=dict(t=110, b=60, l=180, r=30),
+)
+for c in range(1, 4):
+    fig_lb.update_xaxes(side='top', tickangle=-45, row=1, col=c)
+fig_lb.update_yaxes(autorange='reversed', row=1, col=1)
+fig_lb.show()
+
+# %% [markdown]
+# ### Comparison methodology
+#
+# Each heatmap below shows APEX versus **every individual baseline** for its
+# matching flow transformation. SDEB is included in every group because
+# it is the structural parent of APEX (APEX with κ=0 reduces to SDEB).
+#
+# - Cells are coloured by **column rank within the group** (blue = best,
+#   red = worst).
+# - Cell text shows the **actual metric value**.
+# - No synthetic "best-baseline" composites are used — **every row is a
+#   real calibration**.
+#
+# All 22 headline diagnostic metrics are shown for every comparison so that
+# each heatmap provides a complete performance picture regardless of which
+# flow transformation was used for calibration.
+
+# %%
+# =============================================================================
+# Define per-question comparison groups — all 22 headline metrics
+# =============================================================================
+_ALL_HEADLINE_METRICS = [
+    'NSE', 'NSE_sqrt', 'NSE_log', 'NSE_inv',
+    'KGE', 'KGE_sqrt', 'KGE_log', 'KGE_inv',
+    'KGE_np', 'KGE_np_sqrt', 'KGE_np_log', 'KGE_np_inv',
+    'RMSE', 'MAE', 'PBIAS', 'FHV', 'FMV', 'FLV',
+    'BFI_obs', 'BFI_sim',
+    'Sig_BFI', 'Sig_Flash', 'Sig_Q95', 'Sig_Q5',
+]
+
+comparison_specs = {
+    'Q1 · sqrt (core)': {
+        'apex': 'APEX-sqrt',
+        'baselines': ['SDEB'],
+        'metrics': list(_ALL_HEADLINE_METRICS),
+    },
+    'Q2 · none': {
+        'apex': 'APEX-none',
+        'baselines': ['SDEB', 'NSE', 'KGE', 'KGE-np'],
+        'metrics': list(_ALL_HEADLINE_METRICS),
+    },
+    'Q3 · sqrt': {
+        'apex': 'APEX-sqrt',
+        'baselines': ['SDEB', 'NSE-sqrt', 'KGE-sqrt', 'KGE-np-sqrt'],
+        'metrics': list(_ALL_HEADLINE_METRICS),
+    },
+    'Q4 · log': {
+        'apex': 'APEX-log',
+        'baselines': ['SDEB', 'NSE-log', 'KGE-log', 'KGE-np-log'],
+        'metrics': list(_ALL_HEADLINE_METRICS),
+    },
+    'Q5 · inverse': {
+        'apex': 'APEX-inverse',
+        'baselines': ['SDEB', 'NSE-inv', 'KGE-inv', 'KGE-np-inv'],
+        'metrics': list(_ALL_HEADLINE_METRICS),
+    },
+}
+
+for q_name, spec in comparison_specs.items():
+    spec['metrics'] = [m for m in spec['metrics'] if m in results_df.columns]
+    spec['baselines'] = [b for b in spec['baselines'] if b in results_df.index]
+
+print("Comparison groups defined:")
+for q_name, spec in comparison_specs.items():
+    print(f"\n  {q_name}")
+    print(f"    APEX:      {spec['apex']}")
+    print(f"    Baselines: {', '.join(spec['baselines'])}")
+    print(f"    Metrics:   {len(spec['metrics'])}")
+
+# %%
+# =====================================================================
+# FIGURE 2 – Per-question heatmaps: APEX vs every named baseline
+# =====================================================================
+# Each question gets a 3-panel heatmap (efficiency | error | bias/sig)
+# with independent colour scales per panel.
+
+_Q_PANELS = [
+    ('Efficiency',      _LB_EFFICIENCY, 'higher_is_better'),
+    ('Error',           _LB_ERROR,      'lower_is_better'),
+    ('Bias & Sigs',     _LB_BIAS_SIG,   'closer_to_zero'),
+]
+
+for q_name, spec in comparison_specs.items():
+    apex_name = spec['apex']
+    baselines = spec['baselines']
+    methods = [apex_name] + baselines
+
+    q_panel_cols = [[m for m in cols if m in results_df.columns]
+                    for _, cols, _ in _Q_PANELS]
+    q_widths = [max(len(c), 1) for c in q_panel_cols]
+    q_total = sum(q_widths)
+
+    fig = make_subplots(
+        rows=1, cols=3,
+        column_widths=[w / q_total for w in q_widths],
+        horizontal_spacing=0.025,
+        shared_yaxes=True,
+        subplot_titles=[t for t, _, _ in _Q_PANELS],
+    )
+
+    for p_idx, ((_, _, p_type), p_cols) in enumerate(
+            zip(_Q_PANELS, q_panel_cols), start=1):
+        if not p_cols:
+            continue
+        z_raw = results_df.loc[methods, p_cols].values.astype(float)
+        z_n = _normalise_panel(z_raw, p_cols, p_type)
+        text = [[f'{z_raw[i, j]:.3f}' for j in range(len(p_cols))]
+                for i in range(len(methods))]
+        fig.add_trace(
+            go.Heatmap(
+                z=z_n, x=p_cols, y=methods,
+                text=text, texttemplate='%{text}', textfont=dict(size=9),
+                colorscale=_RANK_COLORSCALE, showscale=False,
+                zmin=0, zmax=1,
+                hovertemplate='%{y} | %{x}: %{text}<extra></extra>',
+            ),
+            row=1, col=p_idx,
+        )
+
+    fig.update_layout(
+        title=dict(
+            text=(f'<b>{q_name}: {apex_name} vs baselines</b><br>'
+                  f'<sup>Blue = best in column, red = worst. '
+                  f'Three panels with independent colour scales.</sup>'),
+            font=dict(size=14),
+        ),
+        height=max(250, 50 * len(methods) + 160),
+        width=1400,
+        margin=dict(t=110, b=50, l=180, r=30),
+    )
+    for c in range(1, 4):
+        fig.update_xaxes(side='top', tickangle=-45, row=1, col=c)
+    fig.update_yaxes(autorange='reversed', row=1, col=1)
+    fig.show()
+
+# %% [markdown]
+# ### Reading the heatmaps
+#
+# - **Blue cells** indicate the best performer in that column (metric).
+# - **Red cells** indicate the worst performer.
+# - The APEX row (always first) can be compared directly against every
+#   named baseline below it.
+# - SDEB appears in every group so you can always see how APEX compares
+#   to its structural parent.
+
+# %%
+# =====================================================================
+# FIGURE 3 – Win rates: APEX vs each named baseline, per question
+# =====================================================================
+wr_labels = []
+wr_pcts = []
+wr_texts = []
+wr_colors = []
+
+for q_name, spec in comparison_specs.items():
+    apex_name = spec['apex']
+    metrics = spec['metrics']
+
+    for bl_name in spec['baselines']:
+        wins = sum(1 for m in metrics if _is_better(m,
+                   results_df.loc[apex_name, m],
+                   results_df.loc[bl_name, m]))
+        total = len(metrics)
+        pct = 100 * wins / total
+        wr_labels.append(f'{q_name}: {apex_name} vs {bl_name}')
+        wr_pcts.append(pct)
+        wr_texts.append(f'{wins}/{total} ({pct:.0f}%)')
+        wr_colors.append('#1565c0' if pct > 50 else '#d32f2f')
+
+overall_wins = sum(int(t.split('/')[0]) for t in wr_texts)
+overall_total = sum(int(t.split('/')[1].split()[0]) for t in wr_texts)
+
+fig_wr = go.Figure()
+fig_wr.add_trace(go.Bar(
+    y=wr_labels,
+    x=wr_pcts,
+    orientation='h',
+    marker_color=wr_colors,
+    text=wr_texts,
+    textposition='auto',
+    hovertemplate='%{y}: %{text}<extra></extra>',
+))
+fig_wr.add_vline(x=50, line_dash='dash', line_color='gray', line_width=1)
+fig_wr.update_layout(
+    title=dict(
+        text=(f'<b>Win Rates: APEX vs Each Named Baseline (Q1–Q5)</b><br>'
+              f'<sup>Overall: APEX wins {overall_wins}/{overall_total} '
+              f'({100 * overall_wins / overall_total:.0f}%) individual comparisons. '
+              f'Each bar = one APEX-vs-baseline pair on transform-relevant metrics.</sup>'),
+        font=dict(size=14),
+    ),
+    xaxis=dict(title='Win Rate (%)', range=[0, 105]),
+    height=max(450, 30 * len(wr_labels) + 140),
+    width=1000,
+    margin=dict(t=100, b=50, l=380, r=40),
+    yaxis=dict(autorange='reversed'),
+    showlegend=False,
+)
+fig_wr.show()
+
+print(f"\nOverall: APEX wins {overall_wins}/{overall_total} individual comparisons "
+      f"({100 * overall_wins / overall_total:.1f}%)")
 
 # %% [markdown]
 # ### Summary Interpretation
 #
-# The aggregated results above provide the clearest answer to our **main research question**.
+# The figures above answer the **main research question** with full transparency:
+#
+# 1. **Grand Leaderboard** — every method on every metric, no filtering.
+# 2. **Per-question heatmaps** — APEX versus every named baseline (including
+#    SDEB) on all 22 headline diagnostic metrics.
+#    No synthetic "best baseline" composites — every row is a real calibration.
+# 3. **Win-rate chart** — for each APEX-vs-baseline pair, the fraction of
+#    metrics where APEX outperforms. Bars to the right of the 50 % dashed
+#    line indicate APEX is winning more metrics than it loses.
 #
 # **Interpreting the win rate**:
 # - **>75% wins**: Strong evidence that APEX provides meaningful improvement
 # - **50-75% wins**: Moderate evidence; APEX helps in some contexts but not universally
-# - **<50% wins**: APEX does not consistently outperform baselines; traditional objectives may suffice
+# - **<50% wins**: APEX does not consistently outperform that baseline
 #
-# **Interpreting by transformation**:
-# - Look for patterns in which transforms show the most APEX improvement
-# - If one transform dominates, APEX may be best suited for that specific application
-#
-# The visualization section below will make these patterns more apparent.
+# **Key comparison — SDEB**: Because SDEB appears in every group, you can
+# isolate the effect of the dynamics multiplier across all transformations.
+# If APEX consistently beats SDEB, the dynamics multiplier (κ=0.7) is
+# providing genuine value regardless of flow transformation.
 
-# %% [markdown]
-# ---
-# # PART 6: VISUALIZATION
-#
-# Visual comparison helps identify patterns that may not be immediately obvious from numerical
-# tables. We create several complementary views of the results:
-#
-# 1. **Transformation-Aligned Bar Charts**: Compare APEX vs baselines within each transform group
-# 2. **Improvement Heatmap**: Show APEX improvement magnitude across transforms and metrics
-# 3. **Q1 Direct Comparison**: APEX-sqrt vs SDEB (core question visualization)
-# 4. **Sensitivity Plots**: Dynamics strength (κ) and regime emphasis effects
-# 5. **Hydrograph Comparison**: Visual check of simulated vs observed flows
-
-# %%
-print("\n" + "=" * 80)
-print("VISUALIZATIONS")
-print("=" * 80)
-
-# %% [markdown]
-# ## Plot 1: Transformation-Aligned Performance Comparison
-#
-# This four-panel figure shows APEX performance against its transformation-matched baselines.
-# Each panel represents one transformation (none, sqrt, log, inverse), allowing visual
-# assessment of whether APEX consistently outperforms within each domain.
-#
-# **Reading the plot**:
-# - Each group of bars represents one metric
-# - APEX bar should be higher than baselines for metrics where "higher is better"
-# - Look for consistency—does APEX win most metrics within a panel?
-
-# %%
-# =============================================================================
-# PLOT 1: Transformation-Aligned Comparison (4 panels)
-# =============================================================================
-print("\n1. Transformation-Aligned Performance Comparison...")
-
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-# Metrics to show
-plot_metrics = ['NSE', 'KGE', 'KGE-np', 'FDC-low']
-
-for idx, (transform, ax) in enumerate(zip(transforms, axes.flatten())):
-    baselines = transform_baselines[transform]
-    apex_name = apex_names[transform]
-    
-    methods = baselines + [apex_name]
-    
-    x = np.arange(len(plot_metrics))
-    width = 0.2
-    
-    for i, method in enumerate(methods):
-        values = [results_df.loc[method, m] for m in plot_metrics]
-        color = apex_configs[transform]['color'] if 'APEX' in method else f'C{i}'
-        alpha = 1.0 if 'APEX' in method else 0.6
-        ax.bar(x + (i - 1.5) * width, values, width, label=method, alpha=alpha)
-    
-    ax.set_title(f'Transform: {transform.upper()}', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Metric Value')
-    ax.set_xticks(x)
-    ax.set_xticklabels(plot_metrics, rotation=45, ha='right')
-    ax.legend(loc='lower right', fontsize=8)
-    ax.grid(axis='y', alpha=0.3)
-
-plt.suptitle('Q2-Q5: Transformation-Aligned APEX vs Baselines', fontsize=14, fontweight='bold')
-plt.tight_layout()
-plt.show()
-
-# %% [markdown]
-# ## Plot 2: APEX Improvement Heatmap
-#
-# This heatmap shows the **magnitude and direction** of APEX improvement over the best
-# baseline for each transform-metric combination.
-#
-# **Reading the heatmap**:
-# - **Green cells**: APEX outperforms (positive improvement)
-# - **Red cells**: Baseline outperforms (negative improvement)
-# - **White/pale cells**: Minimal difference
-# - **Color intensity**: Magnitude of difference
-#
-# This view quickly identifies where APEX provides the most value.
-
-# %%
-# =============================================================================
-# PLOT 2: APEX Improvement Over Best Baseline by Transform (Plotly Heatmap)
-# =============================================================================
-print("\n2. APEX Improvement Over Best Baseline...")
-
-# Calculate improvements with correct direction handling
-heatmap_metrics = ['NSE', 'KGE', 'KGE-np', 'FDC-low']
-improvements = []
-
-for transform in transforms:
-    baselines = transform_baselines[transform]
-    apex_name = apex_names[transform]
-    
-    for metric in heatmap_metrics:
-        higher_better = any(x in metric for x in ['NSE', 'KGE'])
-        
-        if higher_better:
-            baseline_best = results_df.loc[baselines, metric].max()
-            apex_val = results_df.loc[apex_name, metric]
-            # Positive diff = APEX better
-            diff = apex_val - baseline_best
-        else:
-            baseline_best = results_df.loc[baselines, metric].min()
-            apex_val = results_df.loc[apex_name, metric]
-            # Negative diff = APEX better (lower is better), so flip sign for display
-            diff = baseline_best - apex_val  # positive = APEX better
-        
-        improvements.append({
-            'Transform': transform.upper(),
-            'Metric': metric,
-            'Improvement': diff
-        })
-
-imp_df = pd.DataFrame(improvements)
-imp_pivot = imp_df.pivot(index='Metric', columns='Transform', values='Improvement')
-imp_pivot = imp_pivot[[t.upper() for t in transforms]]  # Ensure order
-
-# Create Plotly heatmap
-fig_heatmap = go.Figure(data=go.Heatmap(
-    z=imp_pivot.values,
-    x=imp_pivot.columns,
-    y=imp_pivot.index,
-    colorscale='RdYlGn',
-    zmid=0,
-    text=[[f'{v:+.4f}' for v in row] for row in imp_pivot.values],
-    texttemplate='%{text}',
-    textfont=dict(size=12),
-    colorbar=dict(title='Improvement<br>(green = APEX better)')
-))
-
-fig_heatmap.update_layout(
-    title='<b>APEX Improvement Over Best Baseline (Same Transform)</b>',
-    xaxis_title='Transform',
-    yaxis_title='Metric',
-    height=400,
-    width=700
-)
-fig_heatmap.show()
-
-# %% [markdown]
-# ## Plot 3: Q1 Visualization – APEX vs SDEB
-#
-# This is the most important visualization, directly addressing our **core research question**.
-#
-# > Does the dynamics multiplier (κ) improve upon SDEB?
-#
-# Since SDEB and APEX-sqrt share identical structure except for κ (0 vs 0.5), any performance
-# difference is **directly attributable** to the dynamics multiplier innovation.
-#
-# **What to look for**:
-# - If APEX-sqrt (κ=0.5) bars consistently exceed SDEB (κ=0) bars → dynamics multiplier helps
-# - If bars are similar → dynamics multiplier doesn't hurt, but doesn't help much either
-# - If SDEB bars exceed APEX-sqrt → dynamics multiplier may overconstrain the optimization
-
-# %%
-# =============================================================================
-# PLOT 3: Q1 - APEX vs SDEB (Core Question) - Plotly grouped bar
-# =============================================================================
-print("\n3. Q1: APEX vs SDEB (Dynamics Multiplier Effect)...")
-
-q1_plot_metrics = ['NSE', 'NSE(√Q)', 'NSE(log Q)', 'KGE', 'KGE-np', 'FDC-high', 'FDC-mid', 'FDC-low']
-
-fig_q1_bar = go.Figure()
-
-fig_q1_bar.add_trace(go.Bar(
-    name='SDEB (κ=0)',
-    x=q1_plot_metrics,
-    y=[results_df.loc['SDEB', m] for m in q1_plot_metrics],
-    marker_color='#7570B3'
-))
-
-fig_q1_bar.add_trace(go.Bar(
-    name='APEX-sqrt (κ=0.5)',
-    x=q1_plot_metrics,
-    y=[results_df.loc['APEX-sqrt', m] for m in q1_plot_metrics],
-    marker_color='#E7298A'
-))
-
-fig_q1_bar.update_layout(
-    title='<b>Q1: Does the Dynamics Multiplier Improve Upon SDEB?</b>',
-    xaxis_title='Metric',
-    yaxis_title='Metric Value',
-    barmode='group',
-    height=500,
-    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5)
-)
-fig_q1_bar.show()
-
-# %% [markdown]
-# ## Plot 4: Q6 Visualization – Dynamics Strength (κ) Sensitivity
-#
-# This sensitivity analysis tests three levels of dynamics strength:
-# - **κ = 0.3**: Gentle timing correction
-# - **κ = 0.5**: Moderate (default)
-# - **κ = 0.7**: Strong timing correction
-#
-# **Interpretation guidance**:
-# - If bars increase monotonically with κ → stronger dynamics penalty helps
-# - If bars decrease monotonically → weaker penalty is better (or κ=0 might be optimal)
-# - If κ=0.5 is highest → default value is well-tuned
-# - If results are nearly identical → APEX is robust to this choice
-
-# %%
-# =============================================================================
-# PLOT 4: Q6 - Dynamics Strength Sensitivity - Plotly
-# =============================================================================
-print("\n4. Q6: Dynamics Strength Sensitivity...")
-
-q6_plot_metrics = ['NSE', 'NSE(√Q)', 'NSE(log Q)', 'KGE', 'KGE-np', 'FDC-low']
-kappa_labels = ['κ=0.3', 'κ=0.5 (default)', 'κ=0.7']
-kappa_configs_list = ['APEX-sqrt_dyn03', 'APEX-sqrt', 'APEX-sqrt_dyn07']
-kappa_colors = ['#66C2A5', '#377EB8', '#FC8D62']
-
-fig_q6_bar = go.Figure()
-
-for kappa, config, color in zip(kappa_labels, kappa_configs_list, kappa_colors):
-    fig_q6_bar.add_trace(go.Bar(
-        name=kappa,
-        x=q6_plot_metrics,
-        y=[results_df.loc[config, m] for m in q6_plot_metrics],
-        marker_color=color
-    ))
-
-fig_q6_bar.update_layout(
-    title='<b>Q6: Dynamics Strength (κ) Sensitivity</b>',
-    xaxis_title='Metric',
-    yaxis_title='Metric Value',
-    barmode='group',
-    height=500,
-    legend=dict(title='Dynamics Strength', orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5)
-)
-fig_q6_bar.show()
-
-# %% [markdown]
-# ## Plot 5: Q7 Visualization – Regime Emphasis Sensitivity
-#
-# This analysis tests three regime emphasis options:
-# - **uniform**: Equal weight across all flow percentiles
-# - **low_flow**: Extra weight on low-flow percentiles (Q70-Q99)
-# - **balanced**: Extra weight on mid-range percentiles (Q30-Q70)
-#
-# **Expected patterns**:
-# - **FDC-low** should favor "low_flow" emphasis if the mechanism works as intended
-# - **FDC-high** should favor "uniform" or not be significantly affected
-# - **FDC-mid** should favor "balanced" emphasis
-#
-# Deviations from these expectations may indicate complex interactions with the catchment's
-# flow regime or limitations of the regime emphasis mechanism.
-
-# %%
-# =============================================================================
-# PLOT 5: Q7 - Regime Emphasis Sensitivity - Plotly
-# =============================================================================
-print("\n5. Q7: Regime Emphasis Sensitivity...")
-
-q7_plot_metrics = ['FDC-high', 'FDC-mid', 'FDC-low', 'NSE', 'NSE(log Q)']
-regime_labels = ['uniform', 'low_flow', 'balanced']
-regime_configs_list = ['APEX-sqrt', 'APEX-sqrt_lowflow', 'APEX-sqrt_balanced']
-regime_colors = ['#8DA0CB', '#FC8D62', '#66C2A5']
-
-fig_q7_bar = go.Figure()
-
-for regime, config, color in zip(regime_labels, regime_configs_list, regime_colors):
-    fig_q7_bar.add_trace(go.Bar(
-        name=regime,
-        x=q7_plot_metrics,
-        y=[results_df.loc[config, m] for m in q7_plot_metrics],
-        marker_color=color
-    ))
-
-fig_q7_bar.update_layout(
-    title='<b>Q7: Regime Emphasis Sensitivity</b>',
-    xaxis_title='Metric',
-    yaxis_title='Metric Value',
-    barmode='group',
-    height=500,
-    legend=dict(title='Regime Emphasis', orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5)
-)
-fig_q7_bar.show()
-
-# %% [markdown]
-# ## Plot 6: Hydrograph Comparison
-#
-# While numerical metrics are essential, visual inspection of the hydrograph reveals patterns
-# that statistics might miss:
-#
-# - **Timing of peaks**: Are simulated peaks synchronized with observed?
-# - **Recession behavior**: Do recessions follow the observed pattern?
-# - **Baseflow**: Is the minimum flow level captured?
-# - **Event response**: Does the model respond appropriately to rainfall?
-#
-# The two-panel view shows:
-# - **Top (log scale)**: Emphasizes low-flow fit and baseflow recession
-# - **Bottom (linear scale)**: Emphasizes peak flow fit
-#
-# We compare APEX-sqrt against its transformation-matched baselines (NSE-sqrt, KGE-sqrt).
-
-# %%
-# =============================================================================
-# PLOT 6: Hydrograph Comparison (Best Transform)
-# =============================================================================
-print("\n6. Hydrograph Comparison...")
-
-fig, axes = plt.subplots(2, 1, figsize=(16, 10), sharex=True)
-
-# Zoom into last 3 years
-zoom_start = max(0, len(dates) - 3*365)
-zoom_dates = dates[zoom_start:]
-zoom_obs = obs_flow[zoom_start:]
-
-# Compare APEX-sqrt vs NSE-sqrt and KGE-sqrt
-key_methods = ['NSE-sqrt', 'KGE-sqrt', 'APEX-sqrt']
-colors = {'NSE-sqrt': 'blue', 'KGE-sqrt': 'green', 'APEX-sqrt': '#E41A1C'}
-
-# Top: Log scale
-ax1 = axes[0]
-ax1.semilogy(zoom_dates, zoom_obs, 'k-', label='Observed', linewidth=1.5, alpha=0.8)
-for method in key_methods:
-    sim = all_simulations[method][zoom_start:]
-    ax1.semilogy(zoom_dates, sim, label=method, linewidth=1, alpha=0.7, color=colors[method])
-ax1.set_ylabel('Flow (ML/day)', fontsize=12)
-ax1.set_title('Log Scale (low flows)', fontsize=11)
-ax1.legend(loc='upper right', fontsize=9)
-ax1.grid(True, alpha=0.3)
-
-# Bottom: Linear scale
-ax2 = axes[1]
-ax2.plot(zoom_dates, zoom_obs, 'k-', label='Observed', linewidth=1.5, alpha=0.8)
-for method in key_methods:
-    sim = all_simulations[method][zoom_start:]
-    ax2.plot(zoom_dates, sim, label=method, linewidth=1, alpha=0.7, color=colors[method])
-ax2.set_ylabel('Flow (ML/day)', fontsize=12)
-ax2.set_xlabel('Date', fontsize=12)
-ax2.set_title('Linear Scale (peak flows)', fontsize=11)
-ax2.legend(loc='upper right', fontsize=9)
-ax2.grid(True, alpha=0.3)
-
-plt.suptitle('Hydrograph: APEX-sqrt vs Baselines (same transform)', fontsize=14, fontweight='bold')
-plt.tight_layout()
-plt.show()
-
-print("\nVisualization complete!")
 
 # %% [markdown]
 # ---
@@ -2252,7 +1963,7 @@ print("\nVisualization complete!")
 # | α (chronological vs ranked) | 0.1 | 0.1 |
 # | Transformation | sqrt (λ=0.5) | sqrt (λ=0.5) |
 # | Bias multiplier | Yes | Yes |
-# | **Dynamics multiplier (κ)** | **0** | **0.5** |
+# | **Dynamics multiplier (κ)** | **0** | **0.7** |
 #
 # Since all other parameters are identical, any performance difference is **directly attributable**
 # to the dynamics multiplier—APEX's novel contribution.
@@ -2287,11 +1998,11 @@ print("\nVisualization complete!")
 # | κ Value | Interpretation |
 # |---------|----------------|
 # | 0.3 | Subtle timing correction; may be best if timing errors are small |
-# | 0.5 | Moderate correction (default); balanced approach |
-# | 0.7 | Aggressive timing correction; may be best for flashy catchments |
+# | 0.5 | Moderate correction; balanced approach |
+# | 0.7 | Strong timing correction (default); may be best for flashy catchments |
 #
 # **Practical guidance**: Use the results above to select κ for your application. If results
-# are similar across values, κ=0.5 is a safe default.
+# are similar across values, κ=0.7 is a safe default.
 #
 # ---
 #
@@ -2317,11 +2028,11 @@ print("\nVisualization complete!")
 #
 # | Application | Transform | κ | Regime | Rationale |
 # |-------------|-----------|---|--------|-----------|
-# | **Flood forecasting** | none | 0.5 | uniform | Peak timing critical |
-# | **General operations** | sqrt | 0.5 | uniform | Balanced performance |
-# | **Environmental flows** | log | 0.5 | low_flow | Low-flow accuracy critical |
-# | **Drought planning** | inverse | 0.5 | low_flow | Extreme low-flow focus |
-# | **Water quality** | log | 0.3 | low_flow | Dilution depends on low flows |
+# | **Flood forecasting** | none | 0.7 | uniform | Peak timing critical |
+# | **General operations** | sqrt | 0.7 | uniform | Balanced performance |
+# | **Environmental flows** | log | 0.7 | low_flow | Low-flow accuracy critical |
+# | **Drought planning** | inverse | 0.7 | low_flow | Extreme low-flow focus |
+# | **Water quality** | log | 0.5 | low_flow | Dilution depends on low flows |
 #
 # ---
 #
@@ -2344,11 +2055,77 @@ print("\nVisualization complete!")
 #
 # 4. **Dynamics strength (κ) is robust within 0.3-0.7**
 #    - Avoid extremes (κ=0 reverts to SDEB; κ>1 may overconstrain)
-#    - Default of 0.5 is reasonable starting point
+#    - Default of 0.7 is a reasonable starting point
 #
 # 5. **Test multiple configurations for critical applications**
 #    - Catchment characteristics affect optimal configuration
 #    - Sensitivity analysis (like Q6-Q7) helps identify best settings
+
+# %% [markdown]
+# ---
+# # PART 7: BATCH EXPORT TO EXCEL
+#
+# Export all APEX calibration reports (primary + sensitivity) to multi-sheet
+# Excel workbooks for archival, review, or downstream analysis.
+#
+# Each workbook contains four sheets:
+#
+# | Sheet | Contents |
+# |-------|----------|
+# | **TimeSeries** | Date, precipitation, PET, observed flow, simulated flow, baseflow & quickflow (Lyne-Hollick) |
+# | **Best_Calibration** | Best parameters and run metadata |
+# | **Diagnostics** | Canonical 48-metric suite (NSE, KGE, KGE-np variants, RMSE, PBIAS, FDC, raw BFI, signatures) |
+# | **FDC** | Flow duration curve on a 1 % exceedance grid |
+
+# %%
+# --- Export: load all saved APEX reports from this notebook ---------------
+from pyrrm.calibration import CalibrationReport, export_batch
+from types import SimpleNamespace
+
+EXPORT_DIR = OUTPUT_DIR / 'exports'
+EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+pkl_files = sorted(APEX_REPORTS_DIR.glob('410734_sacramento_apex_*.pkl'))
+print(f"Found {len(pkl_files)} saved APEX calibration reports in {APEX_REPORTS_DIR}\n")
+for p in pkl_files:
+    print(f"  {p.name}")
+
+# %%
+# --- Batch export (all APEX reports to Excel) -----------------------------
+reports_dict = {}
+for pkl_path in pkl_files:
+    try:
+        r = CalibrationReport.load(str(pkl_path))
+        key = pkl_path.stem
+        reports_dict[key] = r
+    except Exception as e:
+        print(f"  Skipped {pkl_path.name}: {e}")
+
+print(f"\nLoaded {len(reports_dict)} reports for export.")
+
+batch_like = SimpleNamespace(results=reports_dict)
+
+BATCH_DIR = EXPORT_DIR / 'batch'
+batch_files = export_batch(batch_like, str(BATCH_DIR), format='excel')
+
+print(f"\nBatch export: {len(batch_files)} experiments exported to {BATCH_DIR}/\n")
+for key, paths in sorted(batch_files.items()):
+    for p in paths:
+        print(f"  {Path(p).relative_to(BATCH_DIR)}")
+
+# %%
+# --- Quick sanity check: read back one exported Excel file ----------------
+sample_key = next(iter(sorted(batch_files)))
+sample_paths = batch_files[sample_key]
+sample_xlsx = Path([p for p in sample_paths if p.endswith('.xlsx')][0])
+
+if sample_xlsx.exists():
+    xl = pd.ExcelFile(sample_xlsx)
+    print(f"Sheets in {sample_xlsx.name}: {xl.sheet_names}\n")
+    for sheet in xl.sheet_names:
+        df = pd.read_excel(xl, sheet_name=sheet)
+        print(f"  {sheet}: {df.shape[0]} rows x {df.shape[1]} cols")
+        print(f"    columns: {list(df.columns)}\n")
 
 # %%
 print("\n" + "=" * 80)
@@ -2357,6 +2134,7 @@ print("=" * 80)
 print(f"\nTotal calibrations: {len(all_simulations)}")
 print(f"  - Baselines: {len(baseline_simulations)}")
 print(f"  - APEX configs: {len(apex_simulations)}")
+print(f"  - Excel exports: {len(batch_files)} workbooks in {BATCH_DIR}/")
 print(f"\nKey insight: Transformation-aligned comparisons isolate APEX's structural contribution")
 print(f"\nData consistency: All {len(obs_flow):,} days compared using identical observed data")
 

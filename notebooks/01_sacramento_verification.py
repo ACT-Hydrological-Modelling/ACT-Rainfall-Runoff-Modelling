@@ -6,11 +6,11 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
-#     display_name: Python (pyrrm)
+#     display_name: pyrrm
 #     language: python
-#     name: pyrrm
+#     name: python3
 # ---
 
 # %% [markdown]
@@ -249,6 +249,8 @@ PROJECT_ROOT = Path('..').resolve()
 DATA_DIR = PROJECT_ROOT / 'data' / '410734'
 TEST_DATA_DIR = PROJECT_ROOT / 'test_data'
 CSHARP_RUNNER = PROJECT_ROOT / 'benchmark' / 'CSharpRunner' / 'bin' / 'Debug' / 'net9.0' / 'CSharpRunner'
+OUTPUT_DIR = PROJECT_ROOT / 'test_data' / '01_sacramento_verification'
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Catchment configuration for gauge 410734 (Queanbeyan River)
 # Used to convert model outputs from mm to ML/day
@@ -1131,6 +1133,7 @@ or platform-specific implementation details, not bugs in pyrrm.
 """)
 
 # Save verification results figure
+(OUTPUT_DIR / 'figures').mkdir(parents=True, exist_ok=True)
 fig_summary, ax = plt.subplots(figsize=(10, 6))
 ax.scatter(source_flow, pyrrm_flow, alpha=0.3, s=5, c='steelblue')
 ax.plot([0, source_flow.max()], [0, source_flow.max()], 'r--', lw=2, label='1:1 Line')
@@ -1140,6 +1143,6 @@ ax.set_title(f'pyrrm vs SOURCE (R² = {corr_source**2:.4f})')
 ax.legend()
 ax.set_aspect('equal', adjustable='box')
 plt.tight_layout()
-plt.savefig('figures/01_verification_scatter.png', dpi=150, bbox_inches='tight')
+plt.savefig(OUTPUT_DIR / 'figures' / 'verification_scatter.png', dpi=150, bbox_inches='tight')
 plt.close()
-print("Figure saved: figures/01_verification_scatter.png")
+print(f"Figure saved: {OUTPUT_DIR / 'figures' / 'verification_scatter.png'}")

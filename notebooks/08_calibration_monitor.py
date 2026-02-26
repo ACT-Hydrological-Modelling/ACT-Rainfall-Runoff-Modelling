@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -164,6 +164,9 @@ except ImportError:
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
+OUTPUT_DIR = Path('../test_data/08_calibration_monitor')
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 print("=" * 70)
 print("CALIBRATION PROGRESS MONITOR")
 print("=" * 70)
@@ -216,23 +219,28 @@ PYDREAM_OBJECTIVE = 'nse'
 # ------------------------------------------------------------------------------
 # Path Configuration (automatic based on CALIBRATION_SOURCE)
 # ------------------------------------------------------------------------------
-PYDREAM_DIR = Path('../test_data/reports/pydream')  # For real data calibrations
+NB06_OUTPUT_DIR = Path('../test_data/06_algorithm_comparison')
+PYDREAM_DIR = NB06_OUTPUT_DIR / 'reports'
 
 if CALIBRATION_SOURCE == 'pydream_synthetic':
-    # Synthetic hydrograph test from Notebook 06 (currently running!)
-    CSV_FILE = Path('../notebooks/figures/pydream_synthetic_progress.csv')
+    NB06_FIGURES_DIR = NB06_OUTPUT_DIR / 'figures'
+    CSV_FILE = NB06_FIGURES_DIR / 'pydream_synthetic_progress.csv'
     
 elif CALIBRATION_SOURCE == 'pydream_realdata':
     # Real data calibrations from Notebook 06 (13 objective functions)
     obj_lower = PYDREAM_OBJECTIVE.lower()
     transform_suffixes = {
-        'lognse': ('nse', 'log'), 'invnse': ('nse', 'inv'), 'sqrtnse': ('nse', 'sqrt'),
-        'kge_inv': ('kge', 'inv'), 'kge_sqrt': ('kge', 'sqrt'), 'kge_log': ('kge', 'log'),
-        'kge_np_inv': ('kge_np', 'inv'), 'kge_np_sqrt': ('kge_np', 'sqrt'), 'kge_np_log': ('kge_np', 'log'),
+        'lognse': ('nse', 'log'), 'invnse': ('nse', 'inverse'), 'sqrtnse': ('nse', 'sqrt'),
+        'kge_inv': ('kge', 'inverse'), 'kge_sqrt': ('kge', 'sqrt'), 'kge_log': ('kge', 'log'),
+        'kge_np': ('kgenp', None), 'kge_np_inv': ('kgenp', 'inverse'),
+        'kge_np_sqrt': ('kgenp', 'sqrt'), 'kge_np_log': ('kgenp', 'log'),
     }
     if obj_lower in transform_suffixes:
         base_obj, transform = transform_suffixes[obj_lower]
-        CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{base_obj}_dream_{transform}.csv'
+        if transform:
+            CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{base_obj}_dream_{transform}.csv'
+        else:
+            CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{base_obj}_dream.csv'
     else:
         CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{obj_lower}_dream.csv'
     
@@ -331,13 +339,17 @@ def monitor_pydream(objective: str) -> None:
     
     PYDREAM_OBJECTIVE = objective.lower()
     transform_suffixes = {
-        'lognse': ('nse', 'log'), 'invnse': ('nse', 'inv'), 'sqrtnse': ('nse', 'sqrt'),
-        'kge_inv': ('kge', 'inv'), 'kge_sqrt': ('kge', 'sqrt'), 'kge_log': ('kge', 'log'),
-        'kge_np_inv': ('kge_np', 'inv'), 'kge_np_sqrt': ('kge_np', 'sqrt'), 'kge_np_log': ('kge_np', 'log'),
+        'lognse': ('nse', 'log'), 'invnse': ('nse', 'inverse'), 'sqrtnse': ('nse', 'sqrt'),
+        'kge_inv': ('kge', 'inverse'), 'kge_sqrt': ('kge', 'sqrt'), 'kge_log': ('kge', 'log'),
+        'kge_np': ('kgenp', None), 'kge_np_inv': ('kgenp', 'inverse'),
+        'kge_np_sqrt': ('kgenp', 'sqrt'), 'kge_np_log': ('kgenp', 'log'),
     }
     if PYDREAM_OBJECTIVE in transform_suffixes:
         base_obj, transform = transform_suffixes[PYDREAM_OBJECTIVE]
-        CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{base_obj}_dream_{transform}.csv'
+        if transform:
+            CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{base_obj}_dream_{transform}.csv'
+        else:
+            CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{base_obj}_dream.csv'
     else:
         CSV_FILE = PYDREAM_DIR / f'progress_410734_sacramento_{PYDREAM_OBJECTIVE}_dream.csv'
     

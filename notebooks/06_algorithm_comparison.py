@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.0
 #   kernelspec:
 #     display_name: pyrrm
 #     language: python
@@ -61,9 +61,9 @@
 # | # | Objective | Type | Flow Emphasis |
 # |---|-----------|------|---------------|
 # | 1 | NSE | Standard | High flows |
-# | 2 | LogNSE | Transformed | All flows |
-# | 3 | InvNSE (1/Q) | Transformed | Low flows |
-# | 4 | SqrtNSE (√Q) | Transformed | Balanced |
+# | 2 | NSE_log | Transformed | All flows |
+# | 3 | NSE_inv (1/Q) | Transformed | Low flows |
+# | 4 | NSE_sqrt (√Q) | Transformed | Balanced |
 # | 5 | SDEB | Composite | Balanced + FDC |
 # | 6 | KGE | Standard | High flows |
 # | 7 | KGE(1/Q) | Transformed | Low flows |
@@ -77,6 +77,10 @@
 # %% [markdown]
 # ---
 # ## Setup
+#
+# Calibrations in this notebook use the **NUMBA-accelerated Sacramento** backend.
+# Numba must be installed (`pip install numba`); the notebook will raise an error
+# at run time if it is not available, to avoid long runs on the slow Python path.
 
 # %%
 # Standard imports
@@ -90,8 +94,6 @@ import pickle
 
 # Interactive visualizations
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import plotly.express as px
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -109,31 +111,66 @@ print("\nLibraries loaded successfully!")
 # %%
 # Import pyrrm components
 from pyrrm.models.sacramento import Sacramento
+from pyrrm.models import NUMBA_AVAILABLE
 from pyrrm.calibration import (
-    CalibrationRunner, 
+    CalibrationRunner,
     CalibrationResult,
     CalibrationReport,
-    SPOTPY_AVAILABLE,
-    PYDREAM_AVAILABLE
+    export_report,
+    PYDREAM_AVAILABLE,
+    NUMPYRO_AVAILABLE,
 )
-from pyrrm.calibration.objective_functions import calculate_metrics, GaussianLikelihood, TransformedGaussianLikelihood
+from pyrrm.calibration.objective_functions import GaussianLikelihood, TransformedGaussianLikelihood
+from pyrrm.analysis.diagnostics import compute_diagnostics, print_diagnostics
 from pyrrm.objectives import (
     NSE, KGE, KGENonParametric, FlowTransformation, SDEB
 )
 
+# ArviZ-based MCMC visualisation (shared with NUTS notebooks 13/14)
+try:
+    import arviz as az
+    from pyrrm.visualization.mcmc_plots import (
+        dream_result_to_inference_data,
+        plot_mcmc_traces,
+        plot_dream_traces,
+        plot_posterior_pairs,
+        plot_rhat_summary,
+        plot_rhat_from_pydream,
+    )
+    ARVIZ_AVAILABLE = True
+except ImportError:
+    ARVIZ_AVAILABLE = False
+
 print("\npyrrm components imported!")
+print(f"\nModel acceleration:")
+print(f"  Numba JIT: {'ACTIVE' if NUMBA_AVAILABLE else 'not available (pip install numba)'}")
+
+# Require NUMBA for Sacramento so calibrations use the accelerated backend
+if not NUMBA_AVAILABLE:
+    raise RuntimeError(
+        "This notebook requires the NUMBA-accelerated Sacramento backend. "
+        "Install numba: pip install numba. Then restart the kernel."
+    )
+print("  Sacramento: using NUMBA-accelerated backend (required for this notebook)")
+
 print(f"\nAvailable calibration backends:")
-print(f"  SpotPy (DREAM, SCE-UA): {SPOTPY_AVAILABLE}")
-print(f"  PyDREAM: {PYDREAM_AVAILABLE}")
+print(f"  SCE-UA (vendored): always available")
+print(f"  SciPy (DE, Dual Annealing): always available")
+print(f"  PyDREAM (MT-DREAM(ZS)): {PYDREAM_AVAILABLE}")
+print(f"  NumPyro NUTS: {NUMPYRO_AVAILABLE}")
+print(f"\nVisualization:")
+print(f"  ArviZ MCMC diagnostics: {'ACTIVE' if ARVIZ_AVAILABLE else 'not available (pip install arviz)'}")
 
 if not PYDREAM_AVAILABLE:
     print("\nWARNING: PyDREAM not installed!")
     print("Install with: pip install pydream")
     print("This notebook requires PyDREAM for the algorithm comparison.")
 
-# Create figures directory for saving plots
-figures_dir = Path('figures')
-figures_dir.mkdir(exist_ok=True)
+OUTPUT_DIR = Path('../test_data/06_algorithm_comparison')
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+figures_dir = OUTPUT_DIR / 'figures'
+figures_dir.mkdir(parents=True, exist_ok=True)
+NB02_REPORTS_DIR = Path('../test_data/02_calibration_quickstart/reports')
 print(f"\nFigures will be saved to: {figures_dir.absolute()}")
 
 # %% [markdown]
@@ -145,14 +182,14 @@ print(f"\nFigures will be saved to: {figures_dir.absolute()}")
 
 # %%
 # Define report file paths
-REPORTS_DIR = Path('../test_data/reports')
+REPORTS_DIR = NB02_REPORTS_DIR
 
 # Map of objective function names to report files
 SCEUA_REPORTS = {
     'NSE': '410734_sacramento_nse_sceua.pkl',
-    'LogNSE': '410734_sacramento_nse_sceua_log.pkl',
-    'InvNSE': '410734_sacramento_nse_sceua_inverse.pkl',
-    'SqrtNSE': '410734_sacramento_nse_sceua_sqrt.pkl',
+    'NSE_log': '410734_sacramento_nse_sceua_log.pkl',
+    'NSE_inv': '410734_sacramento_nse_sceua_inverse.pkl',
+    'NSE_sqrt': '410734_sacramento_nse_sceua_sqrt.pkl',
     'SDEB': '410734_sacramento_sdeb_sceua.pkl',
     'KGE': '410734_sacramento_kge_sceua.pkl',
     'KGE_inv': '410734_sacramento_kge_sceua_inverse.pkl',
@@ -192,35 +229,18 @@ print(f"\nLoaded {len(sceua_results)}/13 SCE-UA calibrations")
 # We need the same data used in Notebook 02 for the PyDREAM calibrations.
 
 # %%
-# Load calibration data from files
-# Note: We need full data (including warmup) for running PyDREAM calibrations
+from pyrrm.data import load_catchment_data
+
 DATA_DIR = Path('../data/410734')
 CATCHMENT_AREA_KM2 = 516.62667
 WARMUP_DAYS = 365
 
-# Load rainfall
-rainfall_df = pd.read_csv(DATA_DIR / 'Default Input Set - Rain_QBN01.csv',
-                          parse_dates=['Date'], index_col='Date')
-rainfall_df.columns = ['rainfall']
-
-# Load PET
-pet_df = pd.read_csv(DATA_DIR / 'Default Input Set - Mwet_QBN01.csv',
-                     parse_dates=['Date'], index_col='Date')
-pet_df.columns = ['pet']
-
-# Load observed flow
-flow_df = pd.read_csv(DATA_DIR / '410734_output_SDmodel.csv',
-                      parse_dates=['Date'], index_col='Date')
-observed_col = 'Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)'
-observed_df = flow_df[[observed_col]].copy()
-observed_df.columns = ['observed_flow']
-observed_df['observed_flow'] = observed_df['observed_flow'].replace(-9999, np.nan)
-observed_df = observed_df.dropna()
-
-# Merge datasets
-data = rainfall_df.join(pet_df, how='inner').join(observed_df, how='inner')
-cal_inputs = data[['rainfall', 'pet']].copy()
-cal_observed = data['observed_flow'].values
+cal_inputs, cal_observed = load_catchment_data(
+    precipitation_file=DATA_DIR / 'Default Input Set - Rain_QBN01.csv',
+    pet_file=DATA_DIR / 'Default Input Set - Mwet_QBN01.csv',
+    observed_file=DATA_DIR / '410734_output_SDmodel.csv',
+    observed_value_column='Gauge: 410734: Recorded Gauging Station Flow (ML.day^-1)',
+)
 
 print("=" * 50)
 print("CALIBRATION DATA")
@@ -242,9 +262,9 @@ print(f"Catchment area: {CATCHMENT_AREA_KM2} km²")
 objectives = {
     # NSE-based
     'NSE': NSE(),
-    'LogNSE': NSE(transform=FlowTransformation('log', epsilon_value=0.01)),
-    'InvNSE': NSE(transform=FlowTransformation('inverse', epsilon_value=0.01)),
-    'SqrtNSE': NSE(transform=FlowTransformation('sqrt')),
+    'NSE_log': NSE(transform=FlowTransformation('log', epsilon_value=0.01)),
+    'NSE_inv': NSE(transform=FlowTransformation('inverse', epsilon_value=0.01)),
+    'NSE_sqrt': NSE(transform=FlowTransformation('sqrt')),
     
     # Composite
     'SDEB': SDEB(alpha=0.1, lam=0.5),
@@ -267,7 +287,7 @@ print("OBJECTIVE FUNCTIONS DEFINED")
 print("=" * 70)
 print(f"\nTotal: {len(objectives)} objective functions")
 print("\nNSE-based (4):")
-for name in ['NSE', 'LogNSE', 'InvNSE', 'SqrtNSE']:
+for name in ['NSE', 'NSE_log', 'NSE_inv', 'NSE_sqrt']:
     print(f"  - {name}")
 print("\nComposite (1):")
 print(f"  - SDEB")
@@ -288,9 +308,9 @@ for name in ['KGE_np', 'KGE_np_inv', 'KGE_np_sqrt', 'KGE_np_log']:
 # | Objective | Transform | Flow Emphasis |
 # |-----------|-----------|---------------|
 # | NSE, KGE, KGE_np | 'none' | High flows |
-# | SqrtNSE, KGE_sqrt, KGE_np_sqrt | 'sqrt' | Balanced |
-# | LogNSE, KGE_log, KGE_np_log | 'log' | Low flows |
-# | InvNSE, KGE_inv, KGE_np_inv | 'inverse' | Very low flows |
+# | NSE_sqrt, KGE_sqrt, KGE_np_sqrt | 'sqrt' | Balanced |
+# | NSE_log, KGE_log, KGE_np_log | 'log' | Low flows |
+# | NSE_inv, KGE_inv, KGE_np_inv | 'inverse' | Very low flows |
 # | SDEB | 'sqrt' | Balanced (default) |
 
 # %%
@@ -299,9 +319,9 @@ for name in ['KGE_np', 'KGE_np_inv', 'KGE_np_sqrt', 'KGE_np_log']:
 LIKELIHOOD_TRANSFORM_MAPPING = {
     # NSE-based - transform matches the NSE variant
     'NSE': 'none',           # Standard NSE → no transform (high-flow emphasis)
-    'LogNSE': 'log',         # Log-transformed NSE → log transform (low-flow emphasis)
-    'InvNSE': 'inverse',     # Inverse NSE → inverse transform (very low-flow emphasis)
-    'SqrtNSE': 'sqrt',       # Sqrt NSE → sqrt transform (balanced)
+    'NSE_log': 'log',        # NSE_log → log transform (low-flow emphasis)
+    'NSE_inv': 'inverse',    # NSE_inv → inverse transform (very low-flow emphasis)
+    'NSE_sqrt': 'sqrt',      # NSE_sqrt → sqrt transform (balanced)
     
     # Composite objectives - use balanced transform
     'SDEB': 'sqrt',          # SDEB is balanced → sqrt transform
@@ -358,37 +378,46 @@ for obj_name, transform in LIKELIHOOD_TRANSFORM_MAPPING.items():
 DEMO_MODE = True  # Set to False for full production runs
 
 if DEMO_MODE:
-    # Optimized for fast convergence on synthetic/validation data
-    PYDREAM_ITERATIONS = 1500   # Per chain (sufficient for synthetic test)
+    # Demo: enough iterations for 22-parameter Sacramento to converge on real data
+    PYDREAM_ITERATIONS = 15000  # Max per chain (early stopping when GR < 1.05)
     PYDREAM_CHAINS = 5          # 5 chains (minimum for DEpairs=2)
     PYDREAM_MULTITRY = 3        # Multi-try for better mixing
     PYDREAM_DEPAIRS = 2         # DE pairs for better exploration
     PYDREAM_SNOOKER = 0.15      # Snooker probability for mode jumping
     PYDREAM_ADAPT_GAMMA = False # Disabled due to PyDREAM bug
-    print("⚠ DEMO MODE: Optimized for fast convergence")
-    print("  Set DEMO_MODE = False for production-quality results")
+    PYDREAM_BATCH_SIZE = 1000   # Check GR convergence every 1000 iterations
+    PYDREAM_MIN_ITER = 4000     # Allow burn-in before checking convergence
+    PYDREAM_PATIENCE = 2        # 2 consecutive converged batches to stop
+    PYDREAM_POST_CONV = 1500    # Extra samples after convergence (better behaved chains)
+    print("DEMO MODE: 15k max iterations with early stopping (GR < 1.05)")
 else:
-    # Production settings with more chains for robust convergence
-    PYDREAM_ITERATIONS = 5000   # Per chain (sufficient for convergence)
+    # Production settings for publication-quality posteriors
+    PYDREAM_ITERATIONS = 25000  # Max per chain
     PYDREAM_CHAINS = 5          # 5 chains for robust Gelman-Rubin
     PYDREAM_MULTITRY = 4        # Multi-try for better mixing
     PYDREAM_DEPAIRS = 2         # DE pairs for exploration
     PYDREAM_SNOOKER = 0.15      # Snooker probability
     PYDREAM_ADAPT_GAMMA = False # Disabled due to PyDREAM bug
-    print("PRODUCTION MODE: Full iterations with parallel chains")
+    PYDREAM_BATCH_SIZE = 2000   # Check GR convergence every 2000 iterations
+    PYDREAM_MIN_ITER = 6000     # Allow burn-in before checking convergence
+    PYDREAM_PATIENCE = 2        # 2 consecutive converged batches to stop
+    PYDREAM_POST_CONV = 2500    # Extra samples after convergence (better behaved chains)
+    print("PRODUCTION MODE: 25k max iterations with early stopping (GR < 1.05)")
 
-# Convergence settings
-PYDREAM_CONVERGENCE_THRESHOLD = 1.1  # Gelman-Rubin threshold (strict: 1.1)
+# Convergence: strict threshold so "at stop" R-hats are all ≤ 1.05
+PYDREAM_CONVERGENCE_THRESHOLD = 1.05
 
-print(f"\nPyDREAM Configuration (Optimized for Convergence):")
-print(f"  Iterations per chain: {PYDREAM_ITERATIONS}")
+print(f"\nPyDREAM Configuration (Real Data — 22 Parameters):")
+print(f"  Max iterations per chain: {PYDREAM_ITERATIONS}")
 print(f"  Number of chains: {PYDREAM_CHAINS} (min: {2*PYDREAM_DEPAIRS+1} for DEpairs={PYDREAM_DEPAIRS})")
 print(f"  Multi-try samples: {PYDREAM_MULTITRY}")
 print(f"  DE pairs: {PYDREAM_DEPAIRS} (for better exploration)")
 print(f"  Snooker probability: {PYDREAM_SNOOKER:.1%}")
-print(f"  Adaptive gamma: {PYDREAM_ADAPT_GAMMA}")
 print(f"  Convergence threshold: GR < {PYDREAM_CONVERGENCE_THRESHOLD}")
-print(f"  Total samples: ~{PYDREAM_ITERATIONS * PYDREAM_CHAINS:,}")
+print(f"  Batch early stopping: every {PYDREAM_BATCH_SIZE} iter, "
+      f"min {PYDREAM_MIN_ITER}, patience {PYDREAM_PATIENCE}")
+print(f"  Post-convergence samples: {PYDREAM_POST_CONV}")
+print(f"  Max total samples: ~{PYDREAM_ITERATIONS * PYDREAM_CHAINS:,}")
 
 # %% [markdown]
 # ---
@@ -429,8 +458,8 @@ TRUE_SAC_PARAMS = {
     'rexp': 1.5,      # Percolation equation exponent - lower for more consistent percolation
     'pfree': 0.50,    # Fraction of percolation to free water - HIGH (50% goes to groundwater)
     'pctim': 0.01,    # Impervious fraction
-    'apts': 0.0,      # Active area adjustment
-    'riva': 0.0,      # Riparian vegetation area
+    'adimp': 0.0,     # Additional impervious area
+    'sarva': 0.0,     # Riparian vegetation area fraction
     'side': 0.0,      # Ratio of deep recharge to streamflow
     'ssout': 0.0,     # Groundwater outflow (none - all goes to stream)
     'uh1': 0.5,       # Unit hydrograph ordinates - slightly smoothed
@@ -682,30 +711,36 @@ print(f"      First year used as warmup to stabilize model states")
 # %% [markdown]
 # ### Calibration Setup for Synthetic Test
 #
-# For faster testing, we'll only calibrate a subset of the most sensitive
-# Sacramento parameters. The full model has 22 parameters, but we'll focus
-# on the 6 most important ones for this validation.
+# We calibrate the **6 most important Sacramento parameters** (the water
+# balance stores and upper zone drainage rate) while holding the remaining
+# 16 at their true values. This keeps the synthetic test fast and focused
+# on demonstrating algorithm behaviour.  The real-data section below
+# calibrates all 22 parameters.
 
 # %%
-# Define subset of parameters to calibrate (for faster testing)
-# Includes key baseflow parameters: lzfpm (storage), lzpk (recession rate), pfree (recharge)
-CALIBRATION_PARAMS = ['uztwm', 'uzfwm', 'lzfpm', 'uzk', 'lzpk', 'pfree']
+# Calibrate only the 6 most important Sacramento parameters (dominant water
+# balance stores and drainage).  The remaining 16 are fixed at their true
+# values — this keeps the synthetic test fast and focused on demonstrating
+# that both algorithms can recover the key parameters.
+_sac_synth = Sacramento(catchment_area_km2=SYNTHETIC_CATCHMENT_AREA)
+full_bounds = _sac_synth.get_parameter_bounds()
 
-# Get parameter bounds for calibration subset
-full_bounds = Sacramento().get_parameter_bounds()
+CALIBRATION_PARAMS = ['uztwm', 'uzfwm', 'lztwm', 'lzfpm', 'lzfsm', 'uzk']
 subset_bounds = {p: full_bounds[p] for p in CALIBRATION_PARAMS}
 
 print("=" * 70)
 print("CALIBRATION SETUP (SYNTHETIC DATA)")
 print("=" * 70)
-print(f"\nCalibrating {len(CALIBRATION_PARAMS)} parameters (subset for speed):")
+print(f"\nCalibrating {len(CALIBRATION_PARAMS)} key Sacramento parameters:")
 for p in CALIBRATION_PARAMS:
     bounds = subset_bounds[p]
-    true_val = TRUE_SAC_PARAMS[p]
-    print(f"  {p:8s}: bounds [{bounds[0]:>8.3f}, {bounds[1]:>8.3f}], true = {true_val:.3f}")
+    true_val = TRUE_SAC_PARAMS.get(p)
+    true_str = f"{true_val:.3f}" if true_val is not None else "N/A"
+    print(f"  {p:8s}: bounds [{bounds[0]:>8.3f}, {bounds[1]:>8.3f}], true = {true_str}")
 
-# Fixed parameters (not calibrated) - these will be set as initial values
+# Fixed parameters (not calibrated) — held at true values
 fixed_params = {k: v for k, v in TRUE_SAC_PARAMS.items() if k not in CALIBRATION_PARAMS}
+print(f"\nFixed at true values ({len(fixed_params)} params): {', '.join(fixed_params.keys())}")
 
 # Warmup period - 2 full years to allow groundwater stores to fill
 SYNTHETIC_WARMUP = 730  # 2 years warmup for deep groundwater equilibrium
@@ -726,7 +761,7 @@ synthetic_runner_sceua = CalibrationRunner(
     inputs=synthetic_inputs,
     observed=synthetic_observed,
     objective=NSE(transform=FlowTransformation('sqrt')),  # Balanced: NSE(sqrt)
-    parameter_bounds=subset_bounds,  # Only calibrate the subset of parameters
+    parameter_bounds=subset_bounds,  # 6 key parameters
     warmup_period=SYNTHETIC_WARMUP
 )
 
@@ -741,8 +776,8 @@ synthetic_runner_sceua = CalibrationRunner(
 # Flow transformation options:
 #   - 'none': High flow emphasis (equivalent to GaussianLikelihood)
 #   - 'sqrt': BALANCED emphasis (recommended default) - equivalent to NSE(sqrt)
-#   - 'log':  Low flow emphasis - equivalent to LogNSE
-#   - 'inverse': Very low flow emphasis - equivalent to InvNSE
+#   - 'log':  Low flow emphasis - equivalent to NSE_log
+#   - 'inverse': Very low flow emphasis - equivalent to NSE_inv
 #
 # Using 'sqrt' for balanced calibration that gives appropriate weight to
 # both high flows (peaks) and low flows (baseflow/recession).
@@ -792,17 +827,20 @@ print("=" * 70)
 print("TEST 1: SCE-UA ON SYNTHETIC HYDROGRAPH")
 print("=" * 70)
 
-# Use CalibrationRunner's run_sceua_direct method
-print(f"\nRunning SCE-UA with {len(CALIBRATION_PARAMS)} parameters...")
-print("  Max evaluations: 5000")
+# Use CalibrationRunner's run_sceua_direct method (n_complexes = 2n+1 for n params)
+n_params_synth = len(CALIBRATION_PARAMS)
+n_complexes_synth = 2 * n_params_synth + 1
+print(f"\nRunning SCE-UA with {n_params_synth} key parameters...")
+print(f"  Max evaluations: 20000")
+print(f"  n_complexes: {n_complexes_synth} (2n+1 for good exploration)")
 print("  Using CalibrationRunner.run_sceua_direct()")
 
 start_time = time.time()
 
 sceua_result = synthetic_runner_sceua.run_sceua_direct(
-    max_evals=10000,  # Increased for better convergence
-    max_tolerant_iter=100,  # Stop after 100 iterations without improvement
-    n_complexes=7,  # More complexes for better exploration
+    max_evals=20000,  # Generous budget for tight convergence
+    max_tolerant_iter=200,  # Allow more patience before early stop
+    n_complexes=n_complexes_synth,  # 2n+1 per Duan et al. (1994)
     seed=42,
     verbose=True,
     progress_bar=True
@@ -832,20 +870,20 @@ print("TEST 2: PYDREAM ON SYNTHETIC HYDROGRAPH")
 print("=" * 70)
 
 if PYDREAM_AVAILABLE:
-    # PyDREAM hyperparameters - BATCH MODE (with early stopping)
-    SYNTHETIC_ITERATIONS = 1000      # Max iterations per chain (may stop early)
-    SYNTHETIC_CHAINS = 3             # 3 chains (minimum for DEpairs=1: 2*1+1=3)
-    SYNTHETIC_MULTITRY = 1           # Standard DREAM (no multi-try for speed)
-    SYNTHETIC_DEPAIRS = 1            # DE pairs
-    SYNTHETIC_SNOOKER = 0.10         # Snooker probability (10% default)
-    SYNTHETIC_CONVERGENCE = 1.05     # Stricter R-hat threshold
-    SYNTHETIC_BATCH_SIZE = 500       # Check convergence every 500 iterations
-    SYNTHETIC_MIN_ITER = 500         # Minimum before checking convergence
-    SYNTHETIC_PATIENCE = 2           # Stop after 2 consecutive converged batches
-    
-    print(f"\nRunning PyDREAM (BATCH MODE with early stopping) with {len(CALIBRATION_PARAMS)} parameters...")
+    # PyDREAM hyperparameters - BATCH MODE (with early stopping), 6 key params
+    SYNTHETIC_ITERATIONS = 8000      # Generous budget for 6 parameters
+    SYNTHETIC_CHAINS = 3              # 3 chains (minimum for DEpairs=1: 2*1+1=3)
+    SYNTHETIC_MULTITRY = 1            # Standard DREAM (no multi-try for speed)
+    SYNTHETIC_DEPAIRS = 1             # DE pairs
+    SYNTHETIC_SNOOKER = 0.10          # Snooker probability (10% default)
+    SYNTHETIC_CONVERGENCE = 1.05      # Stricter R-hat threshold
+    SYNTHETIC_BATCH_SIZE = 500        # Check convergence every 500 iterations
+    SYNTHETIC_MIN_ITER = 1500         # Allow burn-in before checking convergence
+    SYNTHETIC_PATIENCE = 3            # Stop after 3 consecutive converged batches
+
+    print(f"\nRunning PyDREAM (BATCH MODE with early stopping) with {len(CALIBRATION_PARAMS)} key parameters...")
     print(f"  Max iterations per chain: {SYNTHETIC_ITERATIONS}")
-    print(f"  Number of chains: {SYNTHETIC_CHAINS} (parallel)")
+    print(f"  Number of chains: {SYNTHETIC_CHAINS}")
     print(f"  Multi-try samples: {SYNTHETIC_MULTITRY}")
     print(f"  DE pairs: {SYNTHETIC_DEPAIRS}")
     print(f"  Snooker probability: {SYNTHETIC_SNOOKER:.1%}")
@@ -860,9 +898,7 @@ if PYDREAM_AVAILABLE:
     sys.stdout.flush()
     
     # Ensure figures directory exists (fallback if setup cell wasn't run)
-    if 'figures_dir' not in dir():
-        figures_dir = Path('figures')
-        figures_dir.mkdir(exist_ok=True)
+    # figures_dir already defined at top of notebook
     
     # Use dbname for CSV-based progress tracking - monitor externally with:
     # tail -f figures/pydream_synthetic_progress.csv
@@ -886,7 +922,7 @@ if PYDREAM_AVAILABLE:
         min_iterations=SYNTHETIC_MIN_ITER,
         patience=SYNTHETIC_PATIENCE,
         post_convergence_iterations=500,  # Extra samples after convergence
-        parallel=True,            # Use multiprocessing for parallel chains
+        parallel=False,           # Multi-try parallelism off; Numba evals too fast to benefit
         dbname=str(pydream_progress_file),  # CSV progress tracking
         verbose=True,
     )
@@ -951,6 +987,57 @@ else:
     pydream_nse = np.nan
 
 # %% [markdown]
+# ### ArviZ Posterior Diagnostics (Synthetic Test)
+#
+# Professional MCMC diagnostics using ArviZ — trace plots show chain
+# mixing and marginal densities, pair plots reveal parameter correlations.
+# **Only the last 1000 samples per chain (post-convergence)** are used for
+# these posterior plots.
+
+# %%
+if PYDREAM_AVAILABLE and ARVIZ_AVAILABLE and pydream_best is not None:
+    print("=" * 70)
+    print("ARVIZ POSTERIOR DIAGNOSTICS — SYNTHETIC DREAM")
+    print("=" * 70)
+
+    idata_synth = dream_result_to_inference_data(
+        pydream_result, burn_fraction=0.3, post_convergence_draws=1000
+    )
+    all_params_synth = list(idata_synth.posterior.data_vars)
+
+    print(f"\nTrace + posterior (all {len(all_params_synth)} params, full trajectory, post-convergence highlighted):")
+    plot_dream_traces(
+        pydream_result, var_names=all_params_synth,
+        param_bounds=subset_bounds,
+        burn_fraction=0.3, post_convergence_draws=1000, kde_bw=1.5,
+    )
+    plt.savefig(figures_dir / '05_synth_dream_traces.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+    print(f"\nPair plot (all {len(all_params_synth)} params — posterior correlations, smooth KDE):")
+    plot_posterior_pairs(
+        idata_synth, var_names=all_params_synth, kde_bw=2.5, compact=True, use_seaborn=True,
+        max_samples=1000,
+    )
+    plt.savefig(figures_dir / '05_synth_dream_pairs.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+    print(f"\nConvergence: R-hat per parameter (all {len(all_params_synth)} params, from PyDREAM full chains):")
+    try:
+        plot_rhat_from_pydream(pydream_result, var_names=all_params_synth)
+    except ValueError:
+        plot_rhat_summary(idata_synth, var_names=all_params_synth)
+    plt.savefig(figures_dir / '05_synth_dream_rhat.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+    print("\nArviZ summary (R-hat, ESS, posterior stats — all parameters):")
+    synth_summary = az.summary(idata_synth, var_names=all_params_synth)
+    display(synth_summary) if hasattr(__builtins__, '__IPYTHON__') else print(synth_summary.to_string())
+else:
+    if not ARVIZ_AVAILABLE:
+        print("ArviZ not available — install with: pip install arviz")
+
+# %% [markdown]
 # ### Comparison: SCE-UA vs PyDREAM on Synthetic Hydrograph
 
 # %%
@@ -994,31 +1081,48 @@ ax1.set_title('Hydrograph Comparison')
 ax1.legend(fontsize=9)
 ax1.set_yscale('log')
 
-# 2. Parameter recovery
+# 2. Parameter recovery: True bar always at 1.0; recovery = ratio when true!=0, else 1+estimate when true=0
 ax2 = plt.subplot(2, 2, 2)
 x_pos = np.arange(len(CALIBRATION_PARAMS))
 width = 0.25
+eps = 1e-10  # treat as zero for display
 
-true_vals = [TRUE_SAC_PARAMS[p] for p in CALIBRATION_PARAMS]
-sceua_vals = [sceua_params.get(p, TRUE_SAC_PARAMS[p]) for p in CALIBRATION_PARAMS]
-
-# Normalize by true values for comparison
-true_norm = [1.0] * len(CALIBRATION_PARAMS)
-sceua_norm = [sceua_params.get(p, TRUE_SAC_PARAMS[p]) / TRUE_SAC_PARAMS[p] for p in CALIBRATION_PARAMS]
+# Single rule: display value = 1 means "perfect recovery" for every parameter.
+# When true != 0: recovery = est/true (so 1 = perfect).
+# When true == 0: recovery = 1 + est (so 1 = estimated 0 = perfect). No division by zero.
+true_norm = [1.0] * len(CALIBRATION_PARAMS)  # True reference always at 1.0
+sceua_norm = []
+for p in CALIBRATION_PARAMS:
+    t = TRUE_SAC_PARAMS.get(p, 0)
+    s = sceua_params.get(p, t)
+    if abs(t) > eps:
+        sceua_norm.append(s / t)
+    else:
+        sceua_norm.append(1.0 + s)
 
 ax2.bar(x_pos - width/2, true_norm, width, label='True', color='black', alpha=0.7)
 ax2.bar(x_pos + width/2, sceua_norm, width, label='SCE-UA', color='blue', alpha=0.7)
 
 if PYDREAM_AVAILABLE and posterior_means is not None:
-    pydream_norm = [posterior_means.get(p, TRUE_SAC_PARAMS[p]) / TRUE_SAC_PARAMS[p] for p in CALIBRATION_PARAMS]
-    pydream_err = [posterior_stds.get(p, 0.0) / TRUE_SAC_PARAMS[p] for p in CALIBRATION_PARAMS]
+    pydream_norm = []
+    pydream_err = []
+    for p in CALIBRATION_PARAMS:
+        t = TRUE_SAC_PARAMS.get(p, 0)
+        m = posterior_means.get(p, t)
+        std = posterior_stds.get(p, 0.0)
+        if abs(t) > eps:
+            pydream_norm.append(m / t)
+            pydream_err.append(std / t)
+        else:
+            pydream_norm.append(1.0 + m)
+            pydream_err.append(std)
     ax2.bar(x_pos + width*1.5, pydream_norm, width, label='PyDREAM', color='red', alpha=0.7,
             yerr=pydream_err, capsize=3)
 
 ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
 ax2.set_xticks(x_pos)
-ax2.set_xticklabels(CALIBRATION_PARAMS, rotation=45, ha='right')
-ax2.set_ylabel('Ratio to True Value')
+ax2.set_xticklabels(CALIBRATION_PARAMS, rotation=90, ha='center', fontsize=8)
+ax2.set_ylabel('Recovery (1 = perfect: ratio when true≠0, 1+est when true=0)')
 ax2.set_title('Parameter Recovery (normalized)')
 ax2.legend()
 ax2.set_ylim(0, 2)
@@ -1099,31 +1203,24 @@ print(f"\nFigure saved: {figures_dir / '05_synthetic_validation.png'}")
 
 # %%
 # Directory for PyDREAM results
-PYDREAM_RESULTS_DIR = REPORTS_DIR / 'pydream'
-PYDREAM_RESULTS_DIR.mkdir(exist_ok=True)
+PYDREAM_RESULTS_DIR = OUTPUT_DIR / 'reports'
+PYDREAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-PYDREAM_FILENAMES = {
-    'NSE': '410734_sacramento_nse_dream',
-    'LogNSE': '410734_sacramento_nse_dream_log',
-    'InvNSE': '410734_sacramento_nse_dream_inverse',
-    'SqrtNSE': '410734_sacramento_nse_dream_sqrt',
-    'SDEB': '410734_sacramento_sdeb_dream',
-    'KGE': '410734_sacramento_kge_dream',
-    'KGE_inv': '410734_sacramento_kge_dream_inverse',
-    'KGE_sqrt': '410734_sacramento_kge_dream_sqrt',
-    'KGE_log': '410734_sacramento_kge_dream_log',
-    'KGE_np': '410734_sacramento_kgenp_dream',
-    'KGE_np_inv': '410734_sacramento_kgenp_dream_inverse',
-    'KGE_np_sqrt': '410734_sacramento_kgenp_dream_sqrt',
-    'KGE_np_log': '410734_sacramento_kgenp_dream_log',
+# PyDREAM runs once per flow transform (4 runs), not per objective (13 runs).
+# Mapping: objective name -> likelihood transform used for that run
+TRANSFORMS = ['none', 'sqrt', 'log', 'inverse']
+PYDREAM_FILENAMES_BY_TRANSFORM = {
+    t: f'410734_sacramento_dream_{t}' for t in TRANSFORMS
 }
 
-# Storage for PyDREAM results
-pydream_results = {}
-pydream_reports = {}
+# Storage: one result per transform, then pydream_results[name] = by_transform[transform]
+pydream_results_by_transform = {}
+pydream_reports_by_transform = {}
+pydream_results = {}   # name -> result (same result shared by objectives with same transform)
+pydream_reports = {}   # name -> report (for compatibility; one report per transform)
 
 # Check if we should run calibrations or load existing results
-RUN_CALIBRATIONS = True  # Set to False to only load existing results
+RUN_CALIBRATIONS = False  # Set to False to skip running and only load existing results
 
 if not PYDREAM_AVAILABLE:
     print("=" * 70)
@@ -1135,122 +1232,104 @@ if not PYDREAM_AVAILABLE:
 # %%
 if RUN_CALIBRATIONS and PYDREAM_AVAILABLE:
     print("=" * 70)
-    print("RUNNING PYDREAM CALIBRATIONS")
+    print("RUNNING PYDREAM CALIBRATIONS (4 RUNS — ONE PER FLOW TRANSFORM)")
     print("=" * 70)
-    print(f"\nThis will run {len(objectives)} calibrations...")
-    print("Estimated time: 1-2 hours (demo mode) or 4-8 hours (production)")
+    print(f"\nTransforms: {TRANSFORMS} (one PyDREAM run per transform)")
+    print(f"  Early stopping enabled — may finish sooner if chains converge")
     print("\n" + "-" * 70)
-    
+
     total_start = time.time()
-    
-    for i, (name, objective) in enumerate(objectives.items(), 1):
-        print(f"\n[{i}/{len(objectives)}] {name}")
+
+    for i, transform in enumerate(TRANSFORMS, 1):
+        print(f"\n[{i}/{len(TRANSFORMS)}] Transform: {transform}")
         print("=" * 50)
-        
-        # Check if result already exists
-        _pkl_name = PYDREAM_FILENAMES[name]
+
+        _pkl_name = PYDREAM_FILENAMES_BY_TRANSFORM[transform]
         result_file = PYDREAM_RESULTS_DIR / f'{_pkl_name}.pkl'
-        
+
         if result_file.exists():
             print(f"  Loading existing result: {result_file.name}")
             report = CalibrationReport.load(str(result_file))
-            pydream_reports[name] = report
-            pydream_results[name] = report.result
-            print(f"  ✓ Loaded (Best objective: {report.result.best_objective:.4f})")
+            pydream_reports_by_transform[transform] = report
+            pydream_results_by_transform[transform] = report.result
+            print(f"  ✓ Loaded (Best log-lik: {report.result.best_objective:.4f})")
             continue
-        
-        # Get the equivalent likelihood transform for this objective
-        # This ensures PyDREAM uses the same flow emphasis as the objective function
-        likelihood_transform = LIKELIHOOD_TRANSFORM_MAPPING.get(name, 'sqrt')
-        likelihood = TransformedGaussianLikelihood(likelihood_transform)
-        
-        print(f"  Objective: {name}")
-        print(f"  Likelihood: TransformedGaussianLikelihood('{likelihood_transform}') - {likelihood.flow_emphasis} emphasis")
-        
-        # Create CalibrationRunner with proper log-likelihood for MCMC
+
+        likelihood = TransformedGaussianLikelihood(transform)
+        print(f"  Likelihood: {likelihood.flow_emphasis} emphasis")
+
         runner = CalibrationRunner(
             model=Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2),
             inputs=cal_inputs,
             observed=cal_observed,
-            objective=likelihood,  # Use proper log-likelihood, not the efficiency metric
+            objective=likelihood,
             warmup_period=WARMUP_DAYS
         )
-        
-        # Run PyDREAM calibration
-        # Progress file for external monitoring: tail -f <progress_file>.csv
+
         progress_file = PYDREAM_RESULTS_DIR / f'progress_{_pkl_name}'
-        print(f"  Config: {PYDREAM_ITERATIONS} iter × {PYDREAM_CHAINS} chains (parallel)")
-        print(f"  Progress file: {progress_file}.csv")
-        print(f"  Monitor with: tail -f {progress_file}.csv")
+        print(f"  Config: {PYDREAM_ITERATIONS} max iter × {PYDREAM_CHAINS} chains")
+        print(f"  Progress: tail -f {progress_file}.csv")
         start_time = time.time()
-        
+
         try:
             result = runner.run_pydream(
                 n_iterations=PYDREAM_ITERATIONS,
                 n_chains=PYDREAM_CHAINS,
                 multitry=PYDREAM_MULTITRY,
-                snooker=PYDREAM_SNOOKER,  # Snooker probability for mode jumping
-                parallel=True,            # Enable multiprocessing for parallel chains
-                adapt_crossover=False,    # Disabled due to PyDREAM bug
-                adapt_gamma=PYDREAM_ADAPT_GAMMA,  # Adaptive gamma for step size
-                DEpairs=PYDREAM_DEPAIRS, # DE pairs for exploration
+                snooker=PYDREAM_SNOOKER,
+                parallel=False,
+                adapt_crossover=False,
+                adapt_gamma=PYDREAM_ADAPT_GAMMA,
+                DEpairs=PYDREAM_DEPAIRS,
                 verbose=True,
-                nverbose=100,             # Print progress every 100 iterations
-                dbname=str(progress_file),  # CSV progress tracking
-                hardboundaries=True,      # Enforce parameter bounds
-                convergence_check=True,   # Calculate Gelman-Rubin diagnostics
-                convergence_threshold=PYDREAM_CONVERGENCE_THRESHOLD  # GR < 1.2
+                nverbose=100,
+                dbname=str(progress_file),
+                hardboundaries=True,
+                convergence_check=True,
+                convergence_threshold=PYDREAM_CONVERGENCE_THRESHOLD,
+                batch_size=PYDREAM_BATCH_SIZE,
+                min_iterations=PYDREAM_MIN_ITER,
+                patience=PYDREAM_PATIENCE,
+                post_convergence_iterations=PYDREAM_POST_CONV,
             )
-            
+
             elapsed = time.time() - start_time
-            print(f"  ✓ Completed in {elapsed:.1f}s")
-            print(f"  Best log-likelihood: {result.best_objective:.4f}")
-            
-            # Calculate the actual objective function value (NSE/KGE/etc.) for the best parameters
-            # This allows fair comparison with SCE-UA results
-            eval_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-            eval_model.set_parameters(result.best_parameters)
-            eval_model.reset()
-            sim_output = eval_model.run(cal_inputs)
-            sim_values = sim_output['runoff'].values[WARMUP_DAYS:]
-            obs_values = cal_observed[WARMUP_DAYS:]
-            
-            # Evaluate with the original objective function
-            actual_obj_value = objective(obs_values, sim_values)
-            print(f"  Actual {name}: {actual_obj_value:.4f}")
-            
-            # Store the actual objective value in result for comparison
-            result.actual_objective_value = actual_obj_value
-            result.objective_name = name
-            
-            # Check convergence
+            print(f"  ✓ Completed in {elapsed:.1f}s (Best log-lik: {result.best_objective:.4f})")
+
             if 'gelman_rubin' in result.convergence_diagnostics:
                 gr_vals = result.convergence_diagnostics['gelman_rubin']
                 max_gr = max(gr_vals.values())
                 converged = result.convergence_diagnostics.get('converged', False)
                 status = "✓ Converged" if converged else f"⚠ Max R-hat: {max_gr:.3f}"
                 print(f"  Convergence: {status}")
-            
-            # Save result
+
             report = runner.create_report(result, catchment_info={
-                'name': 'Queanbeyan River', 
-                'gauge_id': '410734', 
+                'name': 'Queanbeyan River',
+                'gauge_id': '410734',
                 'area_km2': CATCHMENT_AREA_KM2
             })
             report.save(str(result_file.with_suffix('')))
-            
-            pydream_results[name] = result
-            pydream_reports[name] = report
-            
+
+            pydream_results_by_transform[transform] = result
+            pydream_reports_by_transform[transform] = report
+
         except Exception as e:
             print(f"  ✗ Failed: {e}")
             continue
-    
+
+    # Per-objective view: each objective uses its transform's result
+    for name in objectives.keys():
+        t = LIKELIHOOD_TRANSFORM_MAPPING.get(name, 'sqrt')
+        if t in pydream_results_by_transform:
+            pydream_results[name] = pydream_results_by_transform[t]
+            pydream_reports[name] = pydream_reports_by_transform.get(t)
+
     total_elapsed = time.time() - total_start
     print("\n" + "=" * 70)
-    print(f"ALL CALIBRATIONS COMPLETE")
+    print("PYDREAM CALIBRATIONS COMPLETE")
     print(f"Total time: {total_elapsed/60:.1f} minutes")
-    print(f"Successful: {len(pydream_results)}/{len(objectives)}")
+    print(f"Runs completed: {len(pydream_results_by_transform)}/{len(TRANSFORMS)}")
+    print(f"Objectives mapped: {len(pydream_results)}/{len(objectives)}")
     print("=" * 70)
 
 # %% [markdown]
@@ -1260,505 +1339,501 @@ if RUN_CALIBRATIONS and PYDREAM_AVAILABLE:
 # If calibrations were run previously, load them from disk.
 
 # %%
-# Load any existing PyDREAM results not already in memory
+# Load existing PyDREAM results by transform (4 files), then map to objectives
 print("=" * 70)
 print("LOADING PYDREAM RESULTS")
 print("=" * 70)
 
-for name in objectives.keys():
-    if name in pydream_results:
-        continue  # Already loaded
-    
-    _pkl_name = PYDREAM_FILENAMES[name]
+for transform in TRANSFORMS:
+    if transform in pydream_results_by_transform:
+        continue  # Already loaded from run section
+    _pkl_name = PYDREAM_FILENAMES_BY_TRANSFORM[transform]
     result_file = PYDREAM_RESULTS_DIR / f'{_pkl_name}.pkl'
     if result_file.exists():
         try:
             report = CalibrationReport.load(str(result_file))
-            pydream_reports[name] = report
-            pydream_results[name] = report.result
-            print(f"  ✓ {name:<12}: Loaded")
+            pydream_reports_by_transform[transform] = report
+            pydream_results_by_transform[transform] = report.result
+            print(f"  ✓ {transform:<10}: Loaded")
         except Exception as e:
-            print(f"  ✗ {name:<12}: Failed to load ({e})")
+            print(f"  ✗ {transform:<10}: Failed to load ({e})")
     else:
-        print(f"  - {name:<12}: Not found")
+        print(f"  - {transform:<10}: Not found")
 
-print(f"\nTotal PyDREAM results available: {len(pydream_results)}/{len(objectives)}")
+# Per-objective view
+for name in objectives.keys():
+    t = LIKELIHOOD_TRANSFORM_MAPPING.get(name, 'sqrt')
+    if t in pydream_results_by_transform:
+        pydream_results[name] = pydream_results_by_transform[t]
+        pydream_reports[name] = pydream_reports_by_transform.get(t)
+
+print(f"\nPyDREAM runs loaded: {len(pydream_results_by_transform)}/{len(TRANSFORMS)}")
+print(f"Objectives mapped: {len(pydream_results)}/{len(objectives)}")
 
 # %% [markdown]
 # ---
-# ## SCE-UA vs PyDREAM: Performance Comparison
+# ## Compact Algorithm Comparison
 #
-# Let's compare the best objective values and performance metrics achieved
-# by each algorithm across all objective functions.
+# One table combining objective values, cross-evaluated NSE/KGE, and
+# runtime for **both** algorithms across all 13 objective functions.
+# Objectives are grouped by the PyDREAM flow transform they map to.
 
 # %%
-# Build comparison table
-comparison_data = []
+print("=" * 70)
+print("COMPACT ALGORITHM COMPARISON (13 objectives)")
+print("=" * 70)
 
+compact_rows = []
 for name in objectives.keys():
-    row = {'Objective': name}
-    
-    # SCE-UA results
+    obj_func = objectives[name]
+    transform = LIKELIHOOD_TRANSFORM_MAPPING.get(name, 'sqrt')
+    row = {"Objective": name, "Transform": transform}
+
     if name in sceua_results:
-        row['SCE-UA Best'] = sceua_results[name].best_objective
-        row['SCE-UA Runtime (s)'] = sceua_results[name].runtime_seconds
-    else:
-        row['SCE-UA Best'] = np.nan
-        row['SCE-UA Runtime (s)'] = np.nan
-    
-    # PyDREAM results
-    if name in pydream_results:
-        row['PyDREAM Best'] = pydream_results[name].best_objective
-        row['PyDREAM Runtime (s)'] = pydream_results[name].runtime_seconds
-    else:
-        row['PyDREAM Best'] = np.nan
-        row['PyDREAM Runtime (s)'] = np.nan
-    
-    comparison_data.append(row)
-
-comparison_df = pd.DataFrame(comparison_data)
-
-print("=" * 70)
-print("ALGORITHM PERFORMANCE COMPARISON")
-print("=" * 70)
-print(f"\n{comparison_df.to_string(index=False)}")
-
-# %%
-# Calculate and display model performance metrics for both algorithms
-print("\n" + "=" * 70)
-print("MODEL PERFORMANCE METRICS (NSE, KGE)")
-print("=" * 70)
-
-metrics_data = []
-
-for name in objectives.keys():
-    row = {'Objective': name}
-    
-    # SCE-UA simulation
-    if name in sceua_results:
+        res_s = sceua_results[name]
+        row["SCE-UA_best"] = res_s.best_objective
+        row["SCE-UA_time_s"] = res_s.runtime_seconds
         model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-        model.set_parameters(sceua_results[name].best_parameters)
+        model.set_parameters(res_s.best_parameters)
         model.reset()
         sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
         obs = cal_observed[WARMUP_DAYS:]
-        metrics = calculate_metrics(sim, obs)
-        row['SCE-UA NSE'] = metrics['NSE']
-        row['SCE-UA KGE'] = metrics['KGE']
+        m = compute_diagnostics(sim, obs)
+        row["SCE-UA_NSE"] = m["NSE"]
+        row["SCE-UA_KGE"] = m["KGE"]
     else:
-        row['SCE-UA NSE'] = np.nan
-        row['SCE-UA KGE'] = np.nan
-    
-    # PyDREAM simulation
+        row.update({"SCE-UA_best": np.nan, "SCE-UA_time_s": np.nan, "SCE-UA_NSE": np.nan, "SCE-UA_KGE": np.nan})
+
     if name in pydream_results:
+        res_p = pydream_results[name]
+        row["PyDREAM_time_s"] = res_p.runtime_seconds
         model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-        model.set_parameters(pydream_results[name].best_parameters)
+        model.set_parameters(res_p.best_parameters)
         model.reset()
         sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
         obs = cal_observed[WARMUP_DAYS:]
-        metrics = calculate_metrics(sim, obs)
-        row['PyDREAM NSE'] = metrics['NSE']
-        row['PyDREAM KGE'] = metrics['KGE']
+        row["PyDREAM_best"] = obj_func(obs, sim)
+        m = compute_diagnostics(sim, obs)
+        row["PyDREAM_NSE"] = m["NSE"]
+        row["PyDREAM_KGE"] = m["KGE"]
     else:
-        row['PyDREAM NSE'] = np.nan
-        row['PyDREAM KGE'] = np.nan
-    
-    metrics_data.append(row)
+        row.update({"PyDREAM_best": np.nan, "PyDREAM_time_s": np.nan, "PyDREAM_NSE": np.nan, "PyDREAM_KGE": np.nan})
 
-metrics_df = pd.DataFrame(metrics_data)
-print(f"\n{metrics_df.round(4).to_string(index=False)}")
-
-# %% [markdown]
-# ---
-# ## Parameter Comparison: Point Estimates vs Posterior Distributions
-#
-# This is the key comparison! We visualize the posterior distributions from PyDREAM
-# compared to the point estimates from SCE-UA.
-
-# %%
-def plot_posterior_vs_point(obj_name, pydream_result, sceua_result, param_bounds):
-    """
-    Create a figure comparing PyDREAM posteriors with SCE-UA point estimates.
-    """
-    if pydream_result.all_samples is None or len(pydream_result.all_samples) == 0:
-        print(f"No samples available for {obj_name}")
-        return None
-    
-    samples = pydream_result.all_samples
-    param_names = list(sceua_result.best_parameters.keys())
-    
-    # Select key parameters for visualization (most important ones)
-    key_params = ['uztwm', 'uzfwm', 'lztwm', 'lzfpm', 'lzfsm', 
-                  'uzk', 'lzpk', 'lzsk', 'zperc', 'rexp',
-                  'pfree', 'pctim']
-    
-    # Filter to available parameters
-    key_params = [p for p in key_params if p in param_names and p in samples.columns]
-    
-    n_params = min(len(key_params), 12)
-    n_cols = 4
-    n_rows = (n_params + n_cols - 1) // n_cols
-    
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 3.5 * n_rows))
-    axes = axes.flatten()
-    
-    for i, param in enumerate(key_params[:n_params]):
-        ax = axes[i]
-        
-        # Get posterior samples
-        posterior = samples[param].values
-        
-        # Get SCE-UA point estimate
-        sceua_value = sceua_result.best_parameters[param]
-        
-        # Get PyDREAM best estimate
-        pydream_value = pydream_result.best_parameters[param]
-        
-        # Get parameter bounds
-        bounds = param_bounds.get(param, (posterior.min(), posterior.max()))
-        
-        # Plot posterior histogram
-        ax.hist(posterior, bins=50, density=True, alpha=0.7, color='steelblue',
-                label='PyDREAM Posterior', edgecolor='white', linewidth=0.5)
-        
-        # Plot SCE-UA point estimate
-        ax.axvline(sceua_value, color='red', linewidth=2, linestyle='-',
-                   label=f'SCE-UA: {sceua_value:.2f}')
-        
-        # Plot PyDREAM MAP estimate
-        ax.axvline(pydream_value, color='green', linewidth=2, linestyle='--',
-                   label=f'PyDREAM MAP: {pydream_value:.2f}')
-        
-        # Add credible interval
-        ci_low, ci_high = np.percentile(posterior, [2.5, 97.5])
-        ax.axvspan(ci_low, ci_high, alpha=0.2, color='steelblue',
-                   label=f'95% CI: [{ci_low:.2f}, {ci_high:.2f}]')
-        
-        ax.set_xlabel(param, fontsize=10, fontweight='bold')
-        ax.set_ylabel('Density')
-        ax.set_xlim(bounds)
-        
-        if i == 0:
-            ax.legend(fontsize=7, loc='upper right')
-    
-    # Hide unused subplots
-    for i in range(n_params, len(axes)):
-        axes[i].set_visible(False)
-    
-    plt.suptitle(f'Posterior Distributions vs SCE-UA Point Estimates: {obj_name}', 
-                 fontsize=14, fontweight='bold', y=1.02)
-    plt.tight_layout()
-    
-    return fig
-
-
-# Get parameter bounds
-model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-param_bounds = model.get_parameter_bounds()
-
-# %%
-# Create comparison plots for available results
-print("=" * 70)
-print("POSTERIOR vs POINT ESTIMATE COMPARISON")
-print("=" * 70)
-
-# Create figures directory
-figures_dir = Path('../figures')
-figures_dir.mkdir(exist_ok=True)
-
-# Select a few key objective functions to visualize in detail
-key_objectives = ['NSE', 'KGE', 'InvNSE', 'SDEB']
-
-for obj_name in key_objectives:
-    if obj_name in pydream_results and obj_name in sceua_results:
-        print(f"\nPlotting: {obj_name}")
-        fig = plot_posterior_vs_point(
-            obj_name, 
-            pydream_results[obj_name], 
-            sceua_results[obj_name],
-            param_bounds
-        )
-        if fig:
-            plt.savefig(figures_dir / f'05_posterior_vs_sceua_{obj_name.lower()}.png', 
-                       dpi=150, bbox_inches='tight')
-            plt.show()
-            plt.close()
+    if not np.isnan(row.get("SCE-UA_time_s", np.nan)) and not np.isnan(row.get("PyDREAM_time_s", np.nan)):
+        row["Speedup"] = f"{row['PyDREAM_time_s'] / row['SCE-UA_time_s']:.0f}x"
     else:
-        print(f"\n{obj_name}: Missing results for comparison")
+        row["Speedup"] = ""
+    compact_rows.append(row)
+
+compact_df = pd.DataFrame(compact_rows).sort_values(["Transform", "Objective"]).reset_index(drop=True)
+display_cols = ["Objective", "Transform", "SCE-UA_best", "PyDREAM_best",
+                "SCE-UA_NSE", "PyDREAM_NSE", "SCE-UA_KGE", "PyDREAM_KGE",
+                "SCE-UA_time_s", "PyDREAM_time_s", "Speedup"]
+pd.set_option("display.float_format", "{:.4f}".format)
+display(compact_df[display_cols]) if hasattr(__builtins__, '__IPYTHON__') else print(compact_df[display_cols].to_string(index=False))
+pd.reset_option("display.float_format")
+compact_df.to_csv(figures_dir / "06_compact_comparison.csv", index=False)
+print(f"\nSaved: {figures_dir / '06_compact_comparison.csv'}")
+
+# %% [markdown]
+# ### Runtime: SCE-UA vs PyDREAM by Flow Transform
+
+# %%
+if len(sceua_results) > 0 and len(pydream_results) > 0:
+    runtime_data = []
+    for t in TRANSFORMS:
+        objs_t = [n for n, tr in LIKELIHOOD_TRANSFORM_MAPPING.items() if tr == t]
+        s_times = [sceua_results[n].runtime_seconds for n in objs_t if n in sceua_results]
+        p_time = pydream_results_by_transform[t].runtime_seconds if t in pydream_results_by_transform else np.nan
+        runtime_data.append({"Transform": t, "SCE-UA_mean_s": np.mean(s_times) if s_times else np.nan, "PyDREAM_s": p_time})
+    rt_df = pd.DataFrame(runtime_data)
+
+    fig_rt = go.Figure()
+    fig_rt.add_trace(go.Bar(name="SCE-UA (mean)", x=rt_df["Transform"], y=rt_df["SCE-UA_mean_s"], marker_color="#1f77b4"))
+    fig_rt.add_trace(go.Bar(name="PyDREAM", x=rt_df["Transform"], y=rt_df["PyDREAM_s"], marker_color="#d62728"))
+    fig_rt.update_layout(
+        title="Runtime: SCE-UA (mean over mapped objectives) vs PyDREAM",
+        yaxis_title="Runtime (seconds)", yaxis_type="log",
+        barmode="group", template="plotly_white", height=350,
+        legend=dict(orientation="h", y=1.02, xanchor="center", x=0.5),
+    )
+    fig_rt.show()
+    fig_rt.write_html(str(figures_dir / "06_runtime_comparison.html"))
+    print(f"Saved: {figures_dir / '06_runtime_comparison.html'}")
 
 # %% [markdown]
 # ---
-# ## Comprehensive Posterior Comparison: All Objectives
+# ## Posterior Diagnostics: All Parameters, All Objectives
 #
-# Let's create a comprehensive figure showing posteriors for a single key parameter
-# across all objective functions.
-
-# %%
-def plot_all_posteriors_single_param(param_name, pydream_results, sceua_results, param_bounds):
-    """
-    Plot posterior distributions for one parameter across all objectives.
-    """
-    available = [name for name in pydream_results.keys() 
-                 if pydream_results[name].all_samples is not None 
-                 and param_name in pydream_results[name].all_samples.columns]
-    
-    if len(available) == 0:
-        print(f"No posteriors available for {param_name}")
-        return None
-    
-    n_obj = len(available)
-    n_cols = 3
-    n_rows = (n_obj + n_cols - 1) // n_cols
-    
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 4 * n_rows))
-    axes = axes.flatten()
-    
-    bounds = param_bounds.get(param_name, (0, 1))
-    
-    for i, obj_name in enumerate(available):
-        ax = axes[i]
-        
-        samples = pydream_results[obj_name].all_samples
-        posterior = samples[param_name].values
-        
-        sceua_value = sceua_results[obj_name].best_parameters[param_name] if obj_name in sceua_results else None
-        pydream_value = pydream_results[obj_name].best_parameters[param_name]
-        
-        # Histogram
-        ax.hist(posterior, bins=40, density=True, alpha=0.7, color='steelblue',
-                edgecolor='white', linewidth=0.5)
-        
-        # SCE-UA point
-        if sceua_value is not None:
-            ax.axvline(sceua_value, color='red', linewidth=2, linestyle='-',
-                       label=f'SCE-UA: {sceua_value:.1f}')
-        
-        # PyDREAM MAP
-        ax.axvline(pydream_value, color='green', linewidth=2, linestyle='--',
-                   label=f'PyDREAM: {pydream_value:.1f}')
-        
-        # 95% CI
-        ci_low, ci_high = np.percentile(posterior, [2.5, 97.5])
-        ax.axvspan(ci_low, ci_high, alpha=0.2, color='steelblue')
-        
-        ax.set_title(obj_name, fontsize=11, fontweight='bold')
-        ax.set_xlim(bounds)
-        ax.set_xlabel(param_name)
-        ax.set_ylabel('Density')
-        
-        if i == 0:
-            ax.legend(fontsize=8)
-    
-    # Hide unused
-    for i in range(n_obj, len(axes)):
-        axes[i].set_visible(False)
-    
-    plt.suptitle(f'Posterior Distributions for {param_name} Across All Objective Functions', 
-                 fontsize=14, fontweight='bold', y=1.02)
-    plt.tight_layout()
-    
-    return fig
-
-# %%
-# Plot posteriors for key parameters
-key_storage_params = ['uztwm', 'lztwm']
-key_rate_params = ['uzk', 'lzpk']
-
-for param in key_storage_params + key_rate_params:
-    if len(pydream_results) > 0:
-        print(f"\nPlotting all posteriors for: {param}")
-        fig = plot_all_posteriors_single_param(param, pydream_results, sceua_results, param_bounds)
-        if fig:
-            plt.savefig(figures_dir / f'05_all_posteriors_{param}.png', dpi=150, bbox_inches='tight')
-            plt.show()
-            plt.close()
-
-# %% [markdown]
-# ---
-# ## Interactive Comparison Dashboard
+# Professional MCMC diagnostics for **every** PyDREAM calibration using
+# **all 22 Sacramento parameters**.  For each objective function we show:
 #
-# Create an interactive Plotly figure for comprehensive comparison.
-
-# %%
-def create_comparison_dashboard(pydream_results, sceua_results, objectives):
-    """Create interactive comparison dashboard."""
-    
-    # Prepare data
-    obj_names = list(objectives.keys())
-    
-    # Get NSE and KGE for both algorithms
-    sceua_nse = []
-    sceua_kge = []
-    pydream_nse = []
-    pydream_kge = []
-    sceua_runtime = []
-    pydream_runtime = []
-    
-    for name in obj_names:
-        # SCE-UA
-        if name in sceua_results:
-            model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-            model.set_parameters(sceua_results[name].best_parameters)
-            model.reset()
-            sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
-            obs = cal_observed[WARMUP_DAYS:]
-            metrics = calculate_metrics(sim, obs)
-            sceua_nse.append(metrics['NSE'])
-            sceua_kge.append(metrics['KGE'])
-            sceua_runtime.append(sceua_results[name].runtime_seconds)
-        else:
-            sceua_nse.append(None)
-            sceua_kge.append(None)
-            sceua_runtime.append(None)
-        
-        # PyDREAM
-        if name in pydream_results:
-            model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
-            model.set_parameters(pydream_results[name].best_parameters)
-            model.reset()
-            sim = model.run(cal_inputs)['runoff'].values[WARMUP_DAYS:]
-            obs = cal_observed[WARMUP_DAYS:]
-            metrics = calculate_metrics(sim, obs)
-            pydream_nse.append(metrics['NSE'])
-            pydream_kge.append(metrics['KGE'])
-            pydream_runtime.append(pydream_results[name].runtime_seconds)
-        else:
-            pydream_nse.append(None)
-            pydream_kge.append(None)
-            pydream_runtime.append(None)
-    
-    # Create subplots
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=(
-            'NSE by Objective Function',
-            'KGE by Objective Function',
-            'Runtime Comparison (log scale)',
-            'NSE: SCE-UA vs PyDREAM'
-        ),
-        specs=[[{'type': 'bar'}, {'type': 'bar'}],
-               [{'type': 'bar'}, {'type': 'scatter'}]]
-    )
-    
-    # NSE comparison
-    fig.add_trace(
-        go.Bar(name='SCE-UA', x=obj_names, y=sceua_nse, marker_color='steelblue'),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Bar(name='PyDREAM', x=obj_names, y=pydream_nse, marker_color='coral'),
-        row=1, col=1
-    )
-    
-    # KGE comparison
-    fig.add_trace(
-        go.Bar(name='SCE-UA', x=obj_names, y=sceua_kge, marker_color='steelblue', showlegend=False),
-        row=1, col=2
-    )
-    fig.add_trace(
-        go.Bar(name='PyDREAM', x=obj_names, y=pydream_kge, marker_color='coral', showlegend=False),
-        row=1, col=2
-    )
-    
-    # Runtime comparison
-    fig.add_trace(
-        go.Bar(name='SCE-UA', x=obj_names, y=sceua_runtime, marker_color='steelblue', showlegend=False),
-        row=2, col=1
-    )
-    fig.add_trace(
-        go.Bar(name='PyDREAM', x=obj_names, y=pydream_runtime, marker_color='coral', showlegend=False),
-        row=2, col=1
-    )
-    
-    # Scatter: SCE-UA vs PyDREAM NSE
-    fig.add_trace(
-        go.Scatter(
-            x=sceua_nse, y=pydream_nse, mode='markers+text',
-            text=obj_names, textposition='top center',
-            marker=dict(size=12, color='purple'),
-            showlegend=False
-        ),
-        row=2, col=2
-    )
-    # 1:1 line
-    max_val = max([v for v in sceua_nse + pydream_nse if v is not None])
-    min_val = min([v for v in sceua_nse + pydream_nse if v is not None])
-    fig.add_trace(
-        go.Scatter(
-            x=[min_val, max_val], y=[min_val, max_val],
-            mode='lines', line=dict(dash='dash', color='gray'),
-            showlegend=False
-        ),
-        row=2, col=2
-    )
-    
-    # Update axes
-    fig.update_yaxes(title_text="NSE", row=1, col=1)
-    fig.update_yaxes(title_text="KGE", row=1, col=2)
-    fig.update_yaxes(title_text="Runtime (s)", type="log", row=2, col=1)
-    fig.update_xaxes(title_text="SCE-UA NSE", row=2, col=2)
-    fig.update_yaxes(title_text="PyDREAM NSE", row=2, col=2)
-    
-    fig.update_layout(
-        title="<b>Algorithm Comparison: SCE-UA vs PyDREAM</b><br>" +
-              "<sup>Across 13 Objective Functions</sup>",
-        height=800,
-        showlegend=True,
-        barmode='group',
-        legend=dict(orientation='h', y=1.02)
-    )
-    
-    return fig
-
-# %%
-if len(pydream_results) > 0 and len(sceua_results) > 0:
-    fig = create_comparison_dashboard(pydream_results, sceua_results, objectives)
-    fig.show()
-    
-    # Save as HTML
-    fig.write_html(str(figures_dir / '05_algorithm_comparison_dashboard.html'))
-    print(f"\nDashboard saved to: {figures_dir / '05_algorithm_comparison_dashboard.html'}")
-
-# %% [markdown]
-# ---
-# ## Convergence Diagnostics
+# 1. **Trace + posterior** — full chain trajectory with the post-convergence
+#    window highlighted; KDE spans the full feasible parameter range.
+# 2. **Pair plot** — KDE contours for all parameters.
+# 3. **R-hat bar chart** — PyDREAM’s Gelman–Rubin (full chains), so it matches the convergence criterion.
+# 4. **Numerical summary** — R-hat, ESS, mean, sd, HDI.
 #
-# For MCMC methods, checking convergence is critical. We examine the 
-# Gelman-Rubin statistic (R-hat) across all calibrations.
+# Only the **last 1000 post-convergence samples** per chain feed the KDEs
+# and summary statistics.
 
 # %%
-print("=" * 70)
-print("PYDREAM CONVERGENCE DIAGNOSTICS")
-print("=" * 70)
+# Full Sacramento parameter list (canonical order for pair/forest plots)
+SAC_PARAM_ORDER = [
+    'uztwm', 'uzfwm', 'lztwm', 'lzfpm', 'lzfsm', 'uzk', 'lzpk', 'lzsk',
+    'zperc', 'rexp', 'pctim', 'adimp', 'pfree', 'rserv', 'side', 'ssout', 'sarva',
+    'uh1', 'uh2', 'uh3', 'uh4', 'uh5',
+]
+_sac_model = Sacramento(catchment_area_km2=CATCHMENT_AREA_KM2)
+SAC_BOUNDS = _sac_model.get_parameter_bounds()
 
-convergence_data = []
+# Convert DREAM results to ArviZ InferenceData (one per transform, then map by objective)
+pydream_idatas = {}
+idata_by_transform = {}
 
-for name, result in pydream_results.items():
-    if 'gelman_rubin' in result.convergence_diagnostics:
-        gr_vals = result.convergence_diagnostics['gelman_rubin']
-        max_gr = max(gr_vals.values())
-        mean_gr = np.mean(list(gr_vals.values()))
-        converged = result.convergence_diagnostics.get('converged', False)
-        
-        convergence_data.append({
-            'Objective': name,
-            'Max R-hat': max_gr,
-            'Mean R-hat': mean_gr,
-            'Converged': '✓' if converged else '✗'
-        })
-
-if convergence_data:
-    conv_df = pd.DataFrame(convergence_data)
-    print(f"\n{conv_df.round(3).to_string(index=False)}")
-    print("\nR-hat < 1.2 indicates convergence")
-    print("Consider increasing iterations if not converged")
+if ARVIZ_AVAILABLE and len(pydream_results_by_transform) > 0:
+    for transform in TRANSFORMS:
+        if transform not in pydream_results_by_transform:
+            continue
+        try:
+            result = pydream_results_by_transform[transform]
+            idata = dream_result_to_inference_data(
+                result, burn_fraction=0.3, post_convergence_draws=1000
+            )
+            idata_by_transform[transform] = idata
+        except Exception as e:
+            print(f"  Could not convert transform {transform}: {e}")
+    for name in objectives.keys():
+        t = LIKELIHOOD_TRANSFORM_MAPPING.get(name, 'sqrt')
+        if t in idata_by_transform:
+            pydream_idatas[name] = idata_by_transform[t]
+    print(f"Converted {len(idata_by_transform)} DREAM runs to ArviZ InferenceData; {len(pydream_idatas)} objectives mapped")
 else:
-    print("\nNo convergence diagnostics available")
+    print("ArviZ not available or no DREAM results — skipping conversion")
+
+# %%
+# Posterior diagnostics: one block per flow transform (4 blocks; objectives share by transform)
+print("=" * 70)
+print("POSTERIOR DIAGNOSTICS — BY FLOW TRANSFORM (4 RUNS)")
+print("=" * 70)
+
+for transform in TRANSFORMS:
+    if transform not in idata_by_transform or transform not in pydream_results_by_transform:
+        print(f"\nTransform {transform}: No InferenceData — skipping")
+        continue
+
+    idata = idata_by_transform[transform]
+    result = pydream_results_by_transform[transform]
+    obj_names_using = [n for n, t in LIKELIHOOD_TRANSFORM_MAPPING.items() if t == transform]
+    # Use canonical order; include only params present in this idata
+    all_params = [p for p in SAC_PARAM_ORDER if p in idata.posterior.data_vars]
+    if not all_params:
+        all_params = list(idata.posterior.data_vars)
+
+    print(f"\n{'='*70}")
+    print(f"  Transform: {transform}  — objectives: {', '.join(obj_names_using)}  ({len(all_params)} params)")
+    print(f"{'='*70}")
+
+    # 1) Trace + posterior (full parameter range)
+    print(f"\n  Trace + posterior (full range, last 1000 highlighted):")
+    plot_dream_traces(
+        result, var_names=all_params,
+        param_bounds=SAC_BOUNDS,
+        burn_fraction=0.3, post_convergence_draws=1000, kde_bw=1.5,
+        title=f"DREAM Posterior — transform '{transform}'",
+    )
+    plt.savefig(figures_dir / f'06_dream_traces_{transform}.png',
+                dpi=150, bbox_inches='tight')
+    plt.show()
+
+    # 2) Pair plot — all parameters, larger figure; subsampled draws for speed
+    if len(all_params) >= 2:
+        print(f"\n  Pair plot (all {len(all_params)} params, smooth KDE, subsampled):")
+        plot_posterior_pairs(
+            idata, var_names=all_params, kde_bw=2.5, compact=True, use_seaborn=True,
+            max_samples=1000,
+        )
+        plt.savefig(figures_dir / f'06_dream_pairs_{transform}.png',
+                    dpi=150, bbox_inches='tight')
+        plt.show()
+
+    # 3) R-hat bar chart — uses PyDREAM’s GR at stop (when batch mode), so all bars ≤ threshold
+    print(f"\n  R-hat convergence summary:")
+    try:
+        plot_rhat_from_pydream(result, var_names=all_params)
+    except ValueError:
+        plot_rhat_summary(idata, var_names=all_params)
+    plt.savefig(figures_dir / f'06_dream_rhat_{transform}.png',
+                dpi=150, bbox_inches='tight')
+    plt.show()
+
+    # 4) PyDREAM R-hat table (matches the bar chart above)
+    _cd = getattr(result, 'convergence_diagnostics', None) or {}
+    _raw = getattr(result, '_raw_result', None) or {}
+    _hist = _cd.get('convergence_history') or _raw.get('convergence_history')
+    _conv_iter = _cd.get('convergence_iteration') or _raw.get('convergence_iteration')
+    _gr_end = _cd.get('gelman_rubin') or (_raw.get('convergence_diagnostics') or {}).get('gelman_rubin')
+    _gr_stop = None
+    if _hist and _conv_iter is not None:
+        for _e in _hist:
+            if _e.get('iteration') == _conv_iter:
+                _gr_stop = _e.get('gr_values')
+                break
+    if _gr_stop is None and _hist:
+        _conv_entries = [_e for _e in _hist if _e.get('converged')]
+        if _conv_entries:
+            _gr_stop = _conv_entries[0].get('gr_values')
+    if _gr_end is not None:
+        _names = [p for p in all_params if p in _gr_end]
+        if _names:
+            _rhat_df = pd.DataFrame({
+                'param': _names,
+                'Rhat_at_stop': [_gr_stop.get(p, np.nan) if _gr_stop else np.nan for p in _names],
+                'Rhat_end_of_run': [_gr_end.get(p, np.nan) for p in _names],
+            }).set_index('param')
+            print(f"\n  PyDREAM R-hat (values in bar chart above):")
+            display(_rhat_df) if hasattr(__builtins__, '__IPYTHON__') else print(_rhat_df.to_string())
+            print("  (ArviZ summary below is on last-1000 draws per chain; its r_hat can differ.)")
+
+    # 5) ArviZ summary (ESS, HDI, etc.; r_hat from ArviZ on truncated posterior)
+    print(f"\n  ArviZ summary (on last 1000 post-convergence draws; r_hat ≠ bar chart):")
+    summary_df = az.summary(idata, var_names=all_params)
+    display(summary_df) if hasattr(__builtins__, '__IPYTHON__') else print(summary_df.to_string())
+    print()
+
+# %% [markdown]
+# ---
+# ## Section A — Parameter Identifiability Heatmap
+#
+# One heatmap answering: **which parameters are well-identified and which show
+# equifinality?** Rows = 22 parameters, columns = 4 PyDREAM transforms,
+# cell = normalised posterior width (94 % HDI width / parameter range).
+# Green = narrow (well-identified), red = wide (poorly identified).
+
+# %%
+forest_params = ['uztwm', 'uzfwm', 'lztwm', 'lzfpm', 'lzfsm', 'uzk',
+                 'lzpk', 'lzsk', 'zperc', 'rexp', 'pctim', 'adimp',
+                 'pfree', 'rserv', 'side', 'ssout', 'sarva',
+                 'uh1', 'uh2', 'uh3', 'uh4', 'uh5']
+
+def _posterior_summary(idata, param):
+    """Return (mean, hdi_lo, hdi_hi) for *param* from ArviZ InferenceData."""
+    if param not in idata.posterior.data_vars:
+        return None
+    try:
+        s = az.summary(idata, var_names=[param])
+        row = s.iloc[0]
+        mean = float(row["mean"])
+        if "hdi_3%" in row and "hdi_97%" in row:
+            return mean, float(row["hdi_3%"]), float(row["hdi_97%"])
+        sd = float(row.get("sd", 0))
+        return mean, mean - 2 * sd, mean + 2 * sd
+    except Exception:
+        return None
+
+if ARVIZ_AVAILABLE and len(idata_by_transform) > 0:
+    norm_width = np.full((len(forest_params), len(TRANSFORMS)), np.nan)
+    hdi_text = np.empty_like(norm_width, dtype=object)
+    hover_text = np.empty_like(norm_width, dtype=object)
+
+    for i, param in enumerate(forest_params):
+        lo_bound, hi_bound = SAC_BOUNDS.get(param, (0, 1))
+        param_range = hi_bound - lo_bound
+        for j, t in enumerate(TRANSFORMS):
+            if t not in idata_by_transform:
+                hdi_text[i, j] = ""
+                hover_text[i, j] = ""
+                continue
+            summ = _posterior_summary(idata_by_transform[t], param)
+            if summ is None:
+                hdi_text[i, j] = ""
+                hover_text[i, j] = ""
+                continue
+            mean, hdi_lo, hdi_hi = summ
+            width = hdi_hi - hdi_lo
+            nw = width / param_range if param_range > 0 else np.nan
+            norm_width[i, j] = nw
+            hdi_text[i, j] = f"{nw:.0%}"
+            hover_text[i, j] = (
+                f"<b>{param}</b> ({t})<br>"
+                f"Mean: {mean:.4g}<br>"
+                f"94% HDI: [{hdi_lo:.4g}, {hdi_hi:.4g}]<br>"
+                f"Width: {width:.4g}<br>"
+                f"Normalised: {nw:.1%}"
+            )
+
+    fig_ident = go.Figure(data=go.Heatmap(
+        z=norm_width,
+        x=TRANSFORMS,
+        y=forest_params,
+        text=hdi_text,
+        texttemplate="%{text}",
+        hovertext=hover_text,
+        hovertemplate="%{hovertext}<extra></extra>",
+        colorscale=[[0, "#2ca02c"], [0.5, "#ffffbf"], [1, "#d62728"]],
+        zmin=0, zmax=1,
+        colorbar=dict(title="HDI / range", tickformat=".0%"),
+    ))
+    fig_ident.update_layout(
+        title="Parameter Identifiability (94% HDI width / parameter range)",
+        yaxis=dict(autorange="reversed", dtick=1),
+        xaxis_title="PyDREAM flow transform",
+        template="plotly_white", height=700, width=550,
+        margin=dict(l=100, r=40, t=60, b=50),
+    )
+    fig_ident.show()
+    fig_ident.write_html(str(figures_dir / "06_identifiability_heatmap.html"))
+    print(f"Saved: {figures_dir / '06_identifiability_heatmap.html'}")
+else:
+    print("ArviZ or PyDREAM data unavailable — skipping identifiability heatmap.")
+
+# %% [markdown]
+# ---
+# ## Section B — SCE-UA Point Estimates vs PyDREAM Posteriors
+#
+# Heatmap answering: **where do the 13 SCE-UA point estimates fall within the
+# posterior distributions?** Rows = 22 parameters, columns = 13 objectives
+# (grouped by transform). Cell = position of the SCE-UA point within the
+# PyDREAM 94 % HDI as a percentage (0 % = lower bound, 100 % = upper bound).
+# Blue = inside HDI, red = outside.
+
+# %%
+if ARVIZ_AVAILABLE and len(idata_by_transform) > 0 and len(sceua_results) > 0:
+    obj_names_ordered = sorted(objectives.keys(), key=lambda n: (LIKELIHOOD_TRANSFORM_MAPPING.get(n, "sqrt"), n))
+    n_params = len(forest_params)
+    n_objs = len(obj_names_ordered)
+
+    pos_matrix = np.full((n_params, n_objs), np.nan)
+    annot_text = np.empty_like(pos_matrix, dtype=object)
+    hover_matrix = np.empty_like(pos_matrix, dtype=object)
+
+    for i, param in enumerate(forest_params):
+        for j, obj_name in enumerate(obj_names_ordered):
+            transform = LIKELIHOOD_TRANSFORM_MAPPING.get(obj_name, "sqrt")
+            annot_text[i, j] = ""
+            hover_matrix[i, j] = ""
+            if transform not in idata_by_transform:
+                continue
+            summ = _posterior_summary(idata_by_transform[transform], param)
+            if summ is None:
+                continue
+            if obj_name not in sceua_results or param not in sceua_results[obj_name].best_parameters:
+                continue
+            _, hdi_lo, hdi_hi = summ
+            pt = sceua_results[obj_name].best_parameters[param]
+            width = hdi_hi - hdi_lo
+            if width > 0:
+                pct = (pt - hdi_lo) / width * 100
+            else:
+                pct = 50.0
+            inside = 0 <= pct <= 100
+            pos_matrix[i, j] = pct if inside else -1
+            annot_text[i, j] = "In" if inside else "Out"
+            hover_matrix[i, j] = (
+                f"<b>{param}</b> — {obj_name} ({transform})<br>"
+                f"SCE-UA: {pt:.4g}<br>"
+                f"HDI: [{hdi_lo:.4g}, {hdi_hi:.4g}]<br>"
+                f"Position: {pct:.0f}%<br>"
+                f"{'Inside' if inside else 'Outside'} 94% HDI"
+            )
+
+    colorscale = [
+        [0.0, "#d62728"],   # -1 (Out) → red
+        [0.009, "#d62728"],
+        [0.01, "#6baed6"],  # 0% (In, at lower HDI bound) → light blue
+        [0.5, "#08519c"],   # 50% (In, at mean) → dark blue
+        [0.99, "#6baed6"],  # 100% (In, at upper HDI bound) → light blue
+        [1.0, "#6baed6"],
+    ]
+
+    fig_pip = go.Figure(data=go.Heatmap(
+        z=pos_matrix,
+        x=[f"{n}<br>({LIKELIHOOD_TRANSFORM_MAPPING.get(n, '?')})" for n in obj_names_ordered],
+        y=forest_params,
+        text=annot_text,
+        texttemplate="%{text}",
+        hovertext=hover_matrix,
+        hovertemplate="%{hovertext}<extra></extra>",
+        colorscale=colorscale,
+        zmin=-1, zmax=100,
+        colorbar=dict(title="Position in HDI (%)", tickvals=[0, 25, 50, 75, 100]),
+    ))
+    fig_pip.update_layout(
+        title="SCE-UA Point Estimates: Position Within PyDREAM 94% HDI",
+        yaxis=dict(autorange="reversed", dtick=1),
+        xaxis_title="Objective (transform)",
+        template="plotly_white", height=750, width=1000,
+        margin=dict(l=100, r=40, t=60, b=120),
+        xaxis=dict(tickangle=-45),
+    )
+    fig_pip.show()
+    fig_pip.write_html(str(figures_dir / "06_sceua_in_posterior_heatmap.html"))
+    print(f"Saved: {figures_dir / '06_sceua_in_posterior_heatmap.html'}")
+
+    # Print summary: fraction of SCE-UA points inside HDI, overall and per transform
+    total_inside = np.nansum((pos_matrix >= 0) & (pos_matrix <= 100))
+    total_valid = np.sum(~np.isnan(pos_matrix))
+    print(f"\nOverall: {int(total_inside)}/{int(total_valid)} SCE-UA point estimates inside PyDREAM 94% HDI "
+          f"({total_inside / total_valid * 100:.0f}%)")
+    for t in TRANSFORMS:
+        cols_t = [k for k, n in enumerate(obj_names_ordered) if LIKELIHOOD_TRANSFORM_MAPPING.get(n, "sqrt") == t]
+        if not cols_t:
+            continue
+        sub = pos_matrix[:, cols_t]
+        ins = np.nansum((sub >= 0) & (sub <= 100))
+        val = np.sum(~np.isnan(sub))
+        if val > 0:
+            print(f"  {t}: {int(ins)}/{int(val)} ({ins / val * 100:.0f}%)")
+else:
+    print("Skipping SCE-UA-in-posterior heatmap (missing data).")
+
+# %% [markdown]
+# ---
+# ## Section E — MCMC Convergence Summary
+#
+# One compact table summarising convergence across the four PyDREAM transforms:
+# max/mean R-hat, min ESS (bulk and tail), and overall convergence status.
+
+# %%
+if ARVIZ_AVAILABLE and len(idata_by_transform) > 0:
+    conv_rows = []
+    for t in TRANSFORMS:
+        if t not in idata_by_transform:
+            continue
+        idata = idata_by_transform[t]
+        all_vars = list(idata.posterior.data_vars)
+        if not all_vars:
+            continue
+        s = az.summary(idata, var_names=all_vars)
+        rhat_col = "r_hat" if "r_hat" in s.columns else None
+        ess_bulk_col = "ess_bulk" if "ess_bulk" in s.columns else None
+        ess_tail_col = "ess_tail" if "ess_tail" in s.columns else None
+        row = {"Transform": t}
+        if rhat_col:
+            row["Max R-hat"] = s[rhat_col].max()
+            row["Mean R-hat"] = s[rhat_col].mean()
+            row["Converged"] = "Yes" if s[rhat_col].max() < 1.2 else "No"
+        if ess_bulk_col:
+            row["Min ESS bulk"] = int(s[ess_bulk_col].min())
+        if ess_tail_col:
+            row["Min ESS tail"] = int(s[ess_tail_col].min())
+        conv_rows.append(row)
+
+    if conv_rows:
+        conv_summary_df = pd.DataFrame(conv_rows)
+        print("=" * 70)
+        print("MCMC CONVERGENCE SUMMARY (4 PyDREAM transforms)")
+        print("=" * 70)
+        print("R-hat < 1.2 indicates convergence; ESS > 100 is a practical minimum.\n")
+        display(conv_summary_df.round(3)) if hasattr(__builtins__, '__IPYTHON__') else print(conv_summary_df.round(3).to_string(index=False))
+    else:
+        print("No convergence data available.")
+else:
+    print("ArviZ or PyDREAM data unavailable — skipping convergence summary.")
 
 # %% [markdown]
 # ---
 # ## Summary and Recommendations
-#
-# ### Key Findings
 #
 # | Aspect | SCE-UA | PyDREAM |
 # |--------|--------|---------|
@@ -1770,31 +1845,19 @@ else:
 #
 # ### When to Use Each Algorithm
 #
-# **Use SCE-UA when:**
-# - You need a quick calibration
-# - Point estimates are sufficient
-# - Computational resources are limited
-# - Running many catchments
-#
-# **Use PyDREAM when:**
-# - Parameter uncertainty is important
-# - Need credible intervals for predictions
-# - Assessing model structural uncertainty
-# - Research applications requiring full posteriors
+# - **SCE-UA**: quick calibration, point estimates sufficient, many catchments, limited compute.
+# - **PyDREAM**: parameter uncertainty matters, credible intervals for predictions, research papers, structural uncertainty.
 
 # %%
 print("=" * 70)
 print("ALGORITHM COMPARISON SUMMARY")
 print("=" * 70)
 
-# Summary statistics
 if len(sceua_results) > 0 and len(pydream_results) > 0:
     common = set(sceua_results.keys()) & set(pydream_results.keys())
-    
-    if len(common) > 0:
+    if common:
         sceua_times = [sceua_results[k].runtime_seconds for k in common]
         pydream_times = [pydream_results[k].runtime_seconds for k in common]
-        
         print(f"\nCompared {len(common)} objective functions")
         print(f"\nRuntime comparison:")
         print(f"  SCE-UA average:  {np.mean(sceua_times):.1f} seconds")
@@ -1803,12 +1866,48 @@ if len(sceua_results) > 0 and len(pydream_results) > 0:
 
 print("""
 Recommendations:
-  • For quick calibration     → SCE-UA (fast, reliable)
-  • For uncertainty analysis  → PyDREAM (full posteriors)
-  • For research papers       → PyDREAM (publishable uncertainty)
-  • For operational use       → SCE-UA (efficient at scale)
-  • For best of both          → SCE-UA first, PyDREAM for final model
+  - For quick calibration     -> SCE-UA (fast, reliable)
+  - For uncertainty analysis  -> PyDREAM (full posteriors)
+  - For research papers       -> PyDREAM (publishable uncertainty)
+  - For operational use       -> SCE-UA (efficient at scale)
+  - For best of both          -> SCE-UA first, PyDREAM for final model
 """)
+
+# %% [markdown]
+# ---
+# ## Export PyDREAM Calibrations to Excel
+#
+# Export the four PyDREAM calibration reports (one per flow transform) to Excel
+# for sharing or further analysis. Each file contains timeseries, best parameters,
+# diagnostics, and FDC sheets.
+
+# %%
+PYDREAM_EXPORT_DIR = OUTPUT_DIR / 'exports'
+PYDREAM_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+exported_pydream = []
+for transform in TRANSFORMS:
+    if transform not in pydream_reports_by_transform:
+        continue
+    report = pydream_reports_by_transform[transform]
+    base_name = PYDREAM_FILENAMES_BY_TRANSFORM[transform]
+    xlsx_path = PYDREAM_EXPORT_DIR / f'{base_name}.xlsx'
+    try:
+        export_report(report, str(xlsx_path), format='excel')
+        exported_pydream.append(xlsx_path)
+    except Exception as e:
+        print(f"  ✗ {transform}: {e}")
+
+if exported_pydream:
+    print("=" * 70)
+    print("PYDREAM REPORTS EXPORTED TO EXCEL")
+    print("=" * 70)
+    print(f"\nDirectory: {PYDREAM_EXPORT_DIR.absolute()}\n")
+    for p in exported_pydream:
+        print(f"  {p.name}")
+    print(f"\nTotal: {len(exported_pydream)}/{len(TRANSFORMS)} PyDREAM calibrations exported.")
+else:
+    print("No PyDREAM reports available to export (run or load calibrations first).")
 
 # %% [markdown]
 # ---
