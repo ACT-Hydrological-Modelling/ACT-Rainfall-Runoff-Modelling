@@ -20,6 +20,11 @@ import warnings
 from pyrrm.models.base import BaseRainfallRunoffModel, ModelParameter, ModelState
 from pyrrm.models.utils.s_curves import s_curve1, s_curve2
 
+try:
+    from pyrrm.models.numba_kernels import NUMBA_AVAILABLE, _gr4j_core_numba
+except ImportError:
+    NUMBA_AVAILABLE = False
+
 
 def _gr4j_core(
     x1: float,
@@ -300,37 +305,28 @@ class GR4J(BaseRainfallRunoffModel):
             DataFrame with 'flow' column.
             Units are mm if catchment_area_km2 is not set, ML/day if it is set.
         """
-        # Extract input columns (handle different column names)
-        if 'precipitation' in inputs.columns:
-            precip = inputs['precipitation'].values.astype(float)
-        elif 'rainfall' in inputs.columns:
-            precip = inputs['rainfall'].values.astype(float)
-        else:
-            raise ValueError("Input must contain 'precipitation' or 'rainfall' column")
-        
-        if 'evapotranspiration' in inputs.columns:
-            pet = inputs['evapotranspiration'].values.astype(float)
-        elif 'pet' in inputs.columns:
-            pet = inputs['pet'].values.astype(float)
-        else:
-            raise ValueError("Input must contain 'evapotranspiration' or 'pet' column")
+        from pyrrm.data import resolve_column
+
+        pcol = resolve_column(inputs, "precipitation", raise_on_missing=True)
+        precip = inputs[pcol].values.astype(float)
+
+        ecol = resolve_column(inputs, "pet", raise_on_missing=True)
+        pet = inputs[ecol].values.astype(float)
         
         # Get initial states in mm
         prod_store_mm = self._production_store * self._params['X1']
         rout_store_mm = self._routing_store * self._params['X3']
         
-        # Run core algorithm
-        flow, prod_final, rout_final, uh1_final, uh2_final = _gr4j_core(
-            x1=self._params['X1'],
-            x2=self._params['X2'],
-            x3=self._params['X3'],
-            x4=self._params['X4'],
-            precipitation=precip,
-            evapotranspiration=pet,
-            production_store=prod_store_mm,
-            routing_store=rout_store_mm,
-            uh1_stores=self._uh1,
-            uh2_stores=self._uh2,
+        # Run core algorithm (dispatch to Numba when available)
+        core_fn = _gr4j_core_numba if NUMBA_AVAILABLE else _gr4j_core
+        flow, prod_final, rout_final, uh1_final, uh2_final = core_fn(
+            self._params['X1'],
+            self._params['X2'],
+            self._params['X3'],
+            self._params['X4'],
+            precip, pet,
+            prod_store_mm, rout_store_mm,
+            self._uh1, self._uh2,
         )
         
         # Update states (normalize to fractions)
@@ -369,17 +365,15 @@ class GR4J(BaseRainfallRunoffModel):
         prod_store_mm = self._production_store * self._params['X1']
         rout_store_mm = self._routing_store * self._params['X3']
         
-        flow, prod_final, rout_final, uh1_final, uh2_final = _gr4j_core(
-            x1=self._params['X1'],
-            x2=self._params['X2'],
-            x3=self._params['X3'],
-            x4=self._params['X4'],
-            precipitation=precip_arr,
-            evapotranspiration=pet_arr,
-            production_store=prod_store_mm,
-            routing_store=rout_store_mm,
-            uh1_stores=self._uh1,
-            uh2_stores=self._uh2,
+        core_fn = _gr4j_core_numba if NUMBA_AVAILABLE else _gr4j_core
+        flow, prod_final, rout_final, uh1_final, uh2_final = core_fn(
+            self._params['X1'],
+            self._params['X2'],
+            self._params['X3'],
+            self._params['X4'],
+            precip_arr, pet_arr,
+            prod_store_mm, rout_store_mm,
+            self._uh1, self._uh2,
         )
         
         # Update states

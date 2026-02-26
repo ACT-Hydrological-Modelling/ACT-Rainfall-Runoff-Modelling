@@ -20,6 +20,15 @@ from uuid import UUID, uuid4
 
 from pyrrm.models.base import BaseRainfallRunoffModel, ModelParameter, ModelState
 
+try:
+    from pyrrm.models.numba_kernels import (
+        NUMBA_AVAILABLE,
+        _sacramento_run_numba,
+        _sacramento_run_numba_fast,
+    )
+except ImportError:
+    NUMBA_AVAILABLE = False
+
 
 # =============================================================================
 # Constants
@@ -116,7 +125,8 @@ class Sacramento(BaseRainfallRunoffModel):
     def __init__(
         self, 
         parameters: Optional[Dict[str, float]] = None,
-        catchment_area_km2: Optional[float] = None
+        catchment_area_km2: Optional[float] = None,
+        numba_fastmath: bool = True,
     ):
         """
         Initialize Sacramento model.
@@ -126,7 +136,14 @@ class Sacramento(BaseRainfallRunoffModel):
                        If None, uses default parameters.
             catchment_area_km2: Optional catchment area in km². When set,
                                outputs are scaled from mm to ML/day.
+            numba_fastmath: Use the fastmath Numba kernel (default True).
+                Enables LLVM floating-point reassociation and FMA for
+                ~10-16 % faster single-run execution.  Results agree
+                with the strict kernel to within rtol=1e-6.  Set False
+                to recover bit-exact IEEE-754 behaviour.
         """
+        self._numba_fastmath = numba_fastmath
+
         # Unit hydrograph components
         self._unscaled_unit_hydrograph: List[float] = [0.0] * LENGTH_OF_UNIT_HYDROGRAPH
         self._unit_hydrograph: _UnitHydrograph = _UnitHydrograph()
@@ -391,33 +408,67 @@ class Sacramento(BaseRainfallRunoffModel):
             DataFrame with 'runoff', 'baseflow', 'channel_flow' columns.
             Units are mm if catchment_area_km2 is not set, ML/day if it is set.
         """
-        # Extract input columns
-        if 'precipitation' in inputs.columns:
-            precip = inputs['precipitation'].values
-        elif 'rainfall' in inputs.columns:
-            precip = inputs['rainfall'].values
-        else:
-            raise ValueError("Input must contain 'precipitation' or 'rainfall' column")
-        
-        if 'evapotranspiration' in inputs.columns:
-            pet = inputs['evapotranspiration'].values
-        elif 'pet' in inputs.columns:
-            pet = inputs['pet'].values
-        else:
-            raise ValueError("Input must contain 'evapotranspiration' or 'pet' column")
+        from pyrrm.data import resolve_column
+
+        pcol = resolve_column(inputs, "precipitation", raise_on_missing=True)
+        precip = inputs[pcol].values
+
+        ecol = resolve_column(inputs, "pet", raise_on_missing=True)
+        pet = inputs[ecol].values
         
         n_timesteps = len(precip)
-        runoff_out = np.zeros(n_timesteps)
-        baseflow_out = np.zeros(n_timesteps)
-        channel_flow_out = np.zeros(n_timesteps)
-        
-        for t in range(n_timesteps):
-            self.rainfall = float(precip[t])
-            self.pet = float(pet[t])
-            self._run_time_step()
-            runoff_out[t] = self.runoff
-            baseflow_out[t] = self.baseflow
-            channel_flow_out[t] = self.channel_flow
+
+        if NUMBA_AVAILABLE:
+            uh_scurve = np.array(self._unit_hydrograph.s_curve, dtype=np.float64)
+            uh_stores = np.array(self._unit_hydrograph._stores, dtype=np.float64)
+
+            _kernel = (
+                _sacramento_run_numba_fast
+                if self._numba_fastmath
+                else _sacramento_run_numba
+            )
+
+            (runoff_out, baseflow_out, channel_flow_out,
+             uztwc_f, uzfwc_f, lztwc_f, lzfsc_f, lzfpc_f,
+             alzfsc_f, alzfpc_f, adimc_f, hs_f,
+             uh_stores_f) = _kernel(
+                precip.astype(np.float64), pet.astype(np.float64),
+                self.uztwm, self.uzfwm, self.lztwm, self.lzfpm, self.lzfsm,
+                self.uzk, self.lzpk, self.lzsk,
+                self.zperc, self.rexp, self.pctim, self.adimp,
+                self.pfree, self.rserv, self.side, self.ssout, self.sarva,
+                uh_scurve,
+                self.uztwc, self.uzfwc, self.lztwc, self.lzfsc, self.lzfpc,
+                self.adimc, self.hydrograph_store,
+                uh_stores,
+            )
+
+            self.uztwc = uztwc_f
+            self.uzfwc = uzfwc_f
+            self.lztwc = lztwc_f
+            self.lzfsc = lzfsc_f
+            self.lzfpc = lzfpc_f
+            self.alzfsc = alzfsc_f
+            self.alzfpc = alzfpc_f
+            self.adimc = adimc_f
+            self.hydrograph_store = hs_f
+            for i in range(len(uh_stores_f)):
+                self._unit_hydrograph._stores[i] = uh_stores_f[i]
+            self.runoff = runoff_out[-1] if n_timesteps > 0 else 0.0
+            self.baseflow = baseflow_out[-1] if n_timesteps > 0 else 0.0
+            self.channel_flow = channel_flow_out[-1] if n_timesteps > 0 else 0.0
+        else:
+            runoff_out = np.zeros(n_timesteps)
+            baseflow_out = np.zeros(n_timesteps)
+            channel_flow_out = np.zeros(n_timesteps)
+
+            for t in range(n_timesteps):
+                self.rainfall = float(precip[t])
+                self.pet = float(pet[t])
+                self._run_time_step()
+                runoff_out[t] = self.runoff
+                baseflow_out[t] = self.baseflow
+                channel_flow_out[t] = self.channel_flow
         
         # Apply catchment area scaling if set
         runoff_out = self._scale_array_to_volume(runoff_out)

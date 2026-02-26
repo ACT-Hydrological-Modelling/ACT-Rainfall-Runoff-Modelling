@@ -21,6 +21,8 @@ __all__ = [
     "gr4j_run_jax",
     "sacramento_run_jax",
     "JAX_AVAILABLE",
+    "MLX_AVAILABLE",
+    "NUMBA_AVAILABLE",
 ]
 
 # Lazy imports
@@ -47,6 +49,18 @@ def __getattr__(name):
         try:
             import jax
             return True
+        except ImportError:
+            return False
+    elif name == "MLX_AVAILABLE":
+        try:
+            import mlx.core  # noqa: F401
+            return True
+        except ImportError:
+            return False
+    elif name == "NUMBA_AVAILABLE":
+        try:
+            from pyrrm.models.numba_kernels import NUMBA_AVAILABLE as _na
+            return _na
         except ImportError:
             return False
     raise AttributeError(f"module 'pyrrm.models' has no attribute '{name}'")
