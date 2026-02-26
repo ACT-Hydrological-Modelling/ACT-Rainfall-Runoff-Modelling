@@ -8,35 +8,71 @@ alwaysApply: true
 
 This project is a Python rainfall-runoff modeling library (`pyrrm`) that provides:
 - Multiple rainfall-runoff models (Sacramento, GR4J, GR5J, GR6J)
-- Flexible calibration framework (PyDREAM, SCE-UA, SciPy)
+- Flexible calibration framework (PyDREAM, NumPyro NUTS, SCE-UA, SciPy)
+- Numba JIT-compiled kernels for 30–70x faster model execution
+- Batch and multi-catchment network calibration
+- 48-metric canonical diagnostic suite
 - Sensitivity analysis using Sobol methods
-- Comprehensive visualization tools
+- Comprehensive visualization tools (Matplotlib and Plotly)
+- CalibrationReport export to Excel / CSV
 
 ## Project Structure
 
 ```
 pyrrm/
-├── models/           # Rainfall-runoff model implementations
-│   ├── base.py       # BaseRainfallRunoffModel abstract class
-│   ├── sacramento.py # Sacramento model
-│   ├── gr4j.py       # GR4J model
-│   └── utils/        # Shared utilities (unit hydrographs, S-curves)
-├── calibration/      # Calibration framework
-│   ├── runner.py           # CalibrationRunner unified interface
-│   ├── pydream_adapter.py  # PyDREAM MT-DREAM(ZS) adapter
-│   ├── sceua_adapter.py    # Vendored SCE-UA implementation
-│   ├── scipy_adapter.py    # SciPy optimization adapter
-│   └── objective_functions.py  # NSE, KGE, RMSE, etc.
-├── analysis/         # Post-calibration analysis
-│   ├── sensitivity.py      # Sobol sensitivity analysis
-│   └── diagnostics.py      # Model diagnostics
-├── visualization/    # Plotting functions
-│   ├── model_plots.py      # Hydrographs, FDC, scatter plots
-│   ├── calibration_plots.py # Parameter traces, posteriors
-│   └── sensitivity_plots.py # Sobol indices visualization
-├── data/             # Data handling utilities
-│   └── input_handler.py
-└── examples/         # Example scripts
+├── parallel.py                # Parallel backends (Sequential, Multiprocessing, Ray)
+├── models/                    # Rainfall-runoff model implementations
+│   ├── base.py                # BaseRainfallRunoffModel abstract class
+│   ├── sacramento.py          # Sacramento model
+│   ├── gr4j.py                # GR4J model
+│   ├── gr5j.py                # GR5J model
+│   ├── gr6j.py                # GR6J model
+│   ├── numba_kernels.py       # Numba JIT-compiled kernels (all models)
+│   ├── sacramento_jax.py      # Sacramento JAX implementation
+│   ├── gr4j_jax.py            # GR4J JAX implementation
+│   └── utils/                 # Shared utilities (unit hydrographs, S-curves)
+├── routing/                   # Channel routing methods
+│   ├── base.py                # BaseRouter abstract class
+│   ├── muskingum.py           # NonlinearMuskingumRouter
+│   └── routed_model.py        # RoutedModel wrapper
+├── objectives/                # Comprehensive objective functions library
+│   ├── core/                  # Base classes, MetricResult, utilities
+│   ├── metrics/               # NSE, KGE, RMSE, MAE, PBIAS, SDEB, APEX
+│   ├── transformations/       # Flow transformations (sqrt, log, inverse, etc.)
+│   ├── fdc/                   # Flow duration curve metrics
+│   ├── signatures/            # Hydrological signatures
+│   └── composite/             # WeightedObjective, factory functions
+├── calibration/               # Calibration framework
+│   ├── runner.py              # CalibrationRunner unified interface
+│   ├── report.py              # CalibrationReport for saving/loading
+│   ├── export.py              # Export to Excel / CSV
+│   ├── batch.py               # BatchExperimentRunner and ExperimentGrid
+│   ├── checkpoint.py          # CheckpointManager for resumable calibration
+│   ├── pydream_adapter.py     # PyDREAM MT-DREAM(ZS) adapter
+│   ├── numpyro_adapter.py     # NumPyro NUTS adapter
+│   ├── scipy_adapter.py       # SciPy optimization adapter
+│   ├── sceua_adapter.py       # Vendored SCE-UA implementation
+│   ├── tvp_priors.py          # Time-varying parameter priors
+│   └── objective_functions.py # Legacy compatibility layer
+├── network/                   # Multi-catchment network calibration
+│   ├── topology.py            # CatchmentNetwork DAG
+│   ├── data.py                # NetworkDataLoader
+│   ├── runner.py              # CatchmentNetworkRunner
+│   └── visualization.py       # Network plots and Mermaid diagrams
+├── analysis/                  # Post-calibration analysis
+│   ├── diagnostics.py         # Canonical 48-metric diagnostic suite
+│   ├── sensitivity.py         # Sobol global sensitivity analysis
+│   └── mcmc_diagnostics.py    # MCMC convergence diagnostics (ArviZ)
+├── visualization/             # Plotting functions
+│   ├── model_plots.py         # Hydrographs, FDC, scatter plots
+│   ├── calibration_plots.py   # Parameter traces, posteriors
+│   ├── report_plots.py        # Report cards (Matplotlib & Plotly)
+│   ├── sensitivity_plots.py   # Sobol indices visualization
+│   └── mcmc_plots.py          # MCMC traces, rank plots, uncertainty bands
+├── data/                      # Data handling utilities
+│   ├── input_handler.py       # COLUMN_ALIASES, load_catchment_data()
+│   └── parameter_bounds.py    # Parameter bounds definitions
+└── examples/                  # Example scripts
 ```
 
 ## Code Style Principles
@@ -139,6 +175,9 @@ When adding new calibration methods, follow the adapter pattern:
 - New models should be verifiable against reference implementations
 - Calibration methods should work with toy problems
 - Visualization functions should handle edge cases (empty data, NaN values)
+- Tests live co-located with their subpackage (e.g. `pyrrm/models/tests/`)
+- See `test-maintenance.mdc` for detailed test conventions
+- CI runs via GitHub Actions (`.github/workflows/ci.yml`); see `ci-infrastructure.mdc`
 
 ## Version Control
 

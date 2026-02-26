@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Tier 1: Fast lint and type check ───────────────────────────────
+  lint:
+    name: "Lint & Type Check"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linting tools
+        run: pip install ruff mypy
+
+      - name: Ruff check
+        run: ruff check pyrrm/
+
+      - name: Mypy (informational)
+        run: mypy pyrrm/ --ignore-missing-imports || true
+
+  # ── Tier 2: Core tests (no optional dependencies) ─────────────────
+  test-core:
+    name: "Core Tests (Python ${{ matrix.python-version }})"
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      - name: Install core dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-cov
+
+      - name: Run core tests
+        run: pytest pyrrm/ -m "not slow" -v --tb=short -x --ignore=pyrrm/models/tests/test_numba_equivalence.py --ignore=pyrrm/models/tests/test_numba_benchmark.py --ignore=pyrrm/models/tests/test_sacramento_jax.py --ignore=pyrrm/models/tests/test_gr4j_jax.py --ignore=pyrrm/calibration/tests/test_numpyro_adapter.py --ignore=pyrrm/calibration/tests/test_likelihoods_jax.py --ignore=pyrrm/models/tests/test_sacramento_perf_comparison.py
+
+  # ── Tier 3: Optional dependency tests ──────────────────────────────
+  test-optional:
+    name: "Optional Deps (Python ${{ matrix.python-version }})"
+    needs: test-core
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-optional-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      - name: Install with optional dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[calibration,sensitivity,numba,export]"
+          pip install seaborn plotly
+          pip install pytest pytest-cov
+
+      - name: Run full test suite
+        run: pytest pyrrm/ -m "not slow" -v --tb=short --ignore=pyrrm/models/tests/test_sacramento_jax.py --ignore=pyrrm/models/tests/test_gr4j_jax.py --ignore=pyrrm/calibration/tests/test_numpyro_adapter.py --ignore=pyrrm/calibration/tests/test_likelihoods_jax.py --ignore=pyrrm/models/tests/test_sacramento_perf_comparison.py
+
+      - name: Run Numba equivalence tests
+        run: pytest pyrrm/models/tests/test_numba_equivalence.py -v --tb=short
+
+  # ── Tier 4: JAX / NumPyro tests ───────────────────────────────────
+  test-jax:
+    name: "JAX / NumPyro (Python ${{ matrix.python-version }})"
+    needs: test-core
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+      fail-fast: false
+    env:
+      JAX_PLATFORM_NAME: cpu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-jax-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      - name: Install with JAX dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[jax]"
+          pip install pytest
+
+      - name: Run JAX model tests
+        run: |
+          pytest pyrrm/models/tests/test_sacramento_jax.py pyrrm/models/tests/test_gr4j_jax.py -v --tb=short
+
+      - name: Run NumPyro adapter tests
+        run: |
+          pytest pyrrm/calibration/tests/test_numpyro_adapter.py pyrrm/calibration/tests/test_likelihoods_jax.py -v --tb=short

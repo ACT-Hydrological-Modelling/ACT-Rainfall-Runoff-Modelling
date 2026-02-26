@@ -1,0 +1,145 @@
+---
+description: "Guidelines for maintaining CI/CD pipelines and GitHub Actions workflows"
+globs: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+alwaysApply: false
+---
+
+# CI Infrastructure Maintenance
+
+This rule governs the GitHub Actions CI pipeline and related automation. Follow it when editing workflow files, adding test jobs, or troubleshooting CI failures.
+
+## Workflow Files
+
+All CI workflows live in `.github/workflows/`:
+
+| File | Purpose | Triggers |
+|------|---------|----------|
+| `ci.yml` | Core test suite, lint, type-check | push to main, all PRs |
+
+## Workflow Design Principles
+
+### 1. Layered Test Strategy
+
+The CI pipeline uses a tiered approach to balance speed and coverage:
+
+```
+┌──────────────────────────────────────────┐
+│  Tier 1: Lint + Type Check  (< 1 min)   │  ← Runs first, fails fast
+├──────────────────────────────────────────┤
+│  Tier 2: Core Tests         (< 3 min)   │  ← Core deps only (numpy, scipy, etc.)
+├──────────────────────────────────────────┤
+│  Tier 3: Optional-Dep Tests (< 5 min)   │  ← pydream, SALib, numba, openpyxl
+├──────────────────────────────────────────┤
+│  Tier 4: JAX/NumPyro Tests  (< 8 min)   │  ← Separate job (large deps)
+└──────────────────────────────────────────┘
+```
+
+### 2. Matrix Strategy
+
+Test against the supported Python versions:
+
+```yaml
+strategy:
+  matrix:
+    python-version: ["3.9", "3.10", "3.11", "3.12"]
+  fail-fast: false   # Don't cancel siblings on first failure
+```
+
+### 3. Dependency Caching
+
+Cache pip downloads to speed up repeated runs:
+
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: ~/.cache/pip
+    key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+    restore-keys: |
+      ${{ runner.os }}-pip-${{ matrix.python-version }}-
+```
+
+### 4. Fail-Fast Linting
+
+Lint and type-check in a separate job that blocks the test matrix:
+
+```yaml
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pip install ruff mypy
+      - run: ruff check pyrrm/
+      - run: mypy pyrrm/ --ignore-missing-imports
+```
+
+## When to Update the CI Workflow
+
+| Change | CI Update Required |
+|--------|-------------------|
+| New optional dependency added | Add install step in the appropriate tier; add `skipif` marker if not always installed |
+| New test directory created | Verify `testpaths` in `pyproject.toml` includes it (currently `["tests", "pyrrm"]`) |
+| New pytest marker introduced | Register in `pyproject.toml` `[tool.pytest.ini_options]` |
+| Minimum Python version changed | Update the matrix and `requires-python` in `pyproject.toml` |
+| New workflow file added | Document it in this rule's table above |
+
+## Secrets and Environment
+
+- **No secrets** should be needed for test-only CI
+- Do not commit `.env` files or API keys
+- Use `env:` blocks in workflows for configuration, not hardcoded values
+- JAX tests should set `JAX_PLATFORM_NAME=cpu` to avoid GPU-related issues in CI
+
+## Job Naming Conventions
+
+Use clear, descriptive job names that appear in the GitHub Checks UI:
+
+```yaml
+jobs:
+  lint:
+    name: "Lint & Type Check"
+  test-core:
+    name: "Core Tests (Python ${{ matrix.python-version }})"
+  test-optional:
+    name: "Optional Deps (Python ${{ matrix.python-version }})"
+  test-jax:
+    name: "JAX / NumPyro (Python ${{ matrix.python-version }})"
+```
+
+## Handling Flaky Tests
+
+Stochastic calibration tests may occasionally fail due to random seed variance. Mitigations:
+
+1. **Generous tolerances** — see `test-maintenance.mdc` for guidance
+2. **Fixed seeds** where possible (`np.random.seed(42)`)
+3. **Retry on failure** — use `pytest-rerunfailures` or `continue-on-error` for known-flaky jobs
+4. **Mark as flaky** — `@pytest.mark.flaky(reruns=2)` if using pytest-rerunfailures
+
+Do NOT suppress genuine failures by marking everything as flaky.
+
+## Adding a New CI Job
+
+When adding a new job:
+
+1. Add the job definition to `ci.yml`
+2. Use dependency caching
+3. Set appropriate `needs:` to define execution order
+4. Add the job to the table in this rule
+5. Test the workflow locally with `act` if possible, or push to a feature branch
+
+## Keeping CI Fast
+
+- Core tests (Tier 2) should complete in under 3 minutes
+- Use `-m "not slow"` for the default test run; run slow tests only on `main` pushes or nightly
+- Cache aggressively (pip, pre-built wheels)
+- Use `ubuntu-latest` unless macOS/Windows-specific testing is needed
+- Avoid installing the `[full]` group when only core tests are needed
+
+## Troubleshooting CI Failures
+
+When CI fails:
+
+1. **Read the full log** — don't guess from the job name alone
+2. **Check if it's a flaky test** — re-run once; if it passes, investigate the flakiness
+3. **Check dependency changes** — did a transitive dependency release a breaking version?
+4. **Pin if necessary** — add version pins to `pyproject.toml` for problematic deps
+5. **Update LESSONS_LEARNT.md** if the root cause is non-obvious

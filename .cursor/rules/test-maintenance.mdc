@@ -1,0 +1,196 @@
+---
+description: "Guidelines for writing, organising, and maintaining tests in pyrrm"
+globs: ["pyrrm/**/test_*.py", "pyrrm/**/tests/**"]
+alwaysApply: false
+---
+
+# Test Maintenance
+
+This rule governs how tests are written, organised, and kept in sync with the codebase. Follow it whenever you add, modify, or review test files.
+
+## Test Location Conventions
+
+Tests live **inside the subpackage they cover**, in a `tests/` subdirectory:
+
+```
+pyrrm/
+├── models/
+│   ├── sacramento.py
+│   └── tests/
+│       ├── __init__.py
+│       ├── test_numba_equivalence.py
+│       └── test_numba_benchmark.py
+├── calibration/
+│   ├── runner.py
+│   └── tests/
+│       ├── __init__.py
+│       ├── test_sceua_direct.py
+│       └── test_batch.py
+├── objectives/
+│   └── tests/
+│       ├── __init__.py
+│       ├── test_traditional.py
+│       ├── test_kge.py
+│       └── ...
+├── data/
+│   └── tests/
+│       └── test_input_handler.py
+```
+
+**Rules:**
+- Every subpackage with public API functions **must** have a `tests/` directory
+- Each `tests/` directory must contain an empty `__init__.py`
+- Test file names follow `test_<module_or_feature>.py`
+- Never place tests at the repository root; they are always co-located with their subpackage
+
+## When to Write Tests
+
+Add or update tests whenever:
+
+| Trigger | Required Tests |
+|---------|---------------|
+| New model | Equivalence tests (pure Python vs Numba), edge cases (zero rain, zero PET, extreme params), mass balance |
+| New calibration adapter | Toy-problem convergence test, parameter recovery, import-guard for optional dependency |
+| New objective function | Known-value tests (perfect score, worst case), symmetry properties, NaN/edge handling |
+| New data utility | Column resolution, missing data, type coercion |
+| Bug fix | Regression test reproducing the exact bug before the fix |
+| Numba kernel change | Run full `test_numba_equivalence.py` suite (96 tests) to confirm parity |
+| Refactor | Existing tests must pass unchanged; add tests if behaviour subtly shifts |
+
+## Test Naming and Structure
+
+### File Naming
+
+```
+test_<topic>.py          # Functional tests
+test_<topic>_benchmark.py  # Performance benchmarks (mark with @pytest.mark.slow)
+```
+
+### Test Function Naming
+
+```python
+def test_<function_or_class>_<scenario>():
+    """One sentence describing what is being verified."""
+```
+
+Good examples:
+```python
+def test_nse_perfect_simulation():
+def test_kge_2012_known_values():
+def test_sacramento_numba_matches_python():
+def test_sceua_recovers_known_parameters():
+def test_resolve_column_case_insensitive():
+```
+
+Bad examples:
+```python
+def test_1():
+def test_model():
+def test_it_works():
+```
+
+### Test Body Pattern
+
+Use **Arrange / Act / Assert** with clear separation:
+
+```python
+def test_kge_perfect_simulation():
+    """KGE should return 1.0 when simulated equals observed."""
+    observed = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    simulated = observed.copy()
+
+    result = KGE().calculate(simulated, observed)
+
+    assert result == pytest.approx(1.0, abs=1e-10)
+```
+
+## Tolerances for Numerical Tests
+
+Different backends require different tolerances:
+
+| Comparison | Recommended Tolerance |
+|------------|----------------------|
+| Pure Python vs Numba | `rtol=1e-12` (near exact) |
+| Pure Python vs JAX (float64) | `rtol=1e-4, atol=1e-8` |
+| Cross-language (C# reference) | R² > 0.9999, MAE < 0.001 |
+| Stochastic calibration (SCE-UA, DREAM) | `rtol=0.1` or check `best_objective > threshold` |
+
+Always use `pytest.approx()` or `np.testing.assert_allclose()`, never bare `==` for floats.
+
+## Handling Optional Dependencies
+
+Tests for features that need optional packages must skip gracefully:
+
+```python
+import pytest
+
+try:
+    import pydream
+    PYDREAM_AVAILABLE = True
+except ImportError:
+    PYDREAM_AVAILABLE = False
+
+@pytest.mark.skipif(not PYDREAM_AVAILABLE, reason="pydream not installed")
+def test_dream_adapter_convergence():
+    ...
+```
+
+Use these skip markers consistently:
+- `pydream` — PyDREAM MCMC tests
+- `jax` / `numpyro` — JAX and NUTS tests
+- `numba` — Numba kernel tests
+- `openpyxl` — Excel export tests
+
+## Pytest Markers
+
+Register markers in `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+```
+
+Use `@pytest.mark.slow` for:
+- Calibration convergence tests (> 5 seconds)
+- Benchmark tests
+- Full Numba equivalence suite when running individually
+
+## Running Tests
+
+```bash
+conda activate pyrrm
+
+# All tests (fast only)
+pytest -m "not slow"
+
+# All tests including slow
+pytest
+
+# Specific subpackage
+pytest pyrrm/objectives/tests/
+
+# With coverage
+pytest --cov=pyrrm --cov-report=term-missing
+
+# Verbose with short tracebacks
+pytest -v --tb=short
+```
+
+## Test Data
+
+- Small synthetic arrays: define inline in the test
+- Shared fixtures: place in a `fixtures.py` file in the `tests/` directory (see `pyrrm/objectives/tests/fixtures.py`)
+- Real catchment data: reference files in `test_data/` using relative paths from the repo root
+- Never commit large (> 1 MB) generated data; regenerate from seed if needed
+
+## Checklist Before Committing Tests
+
+- [ ] All new public functions have at least one test
+- [ ] Edge cases covered (empty input, NaN, zeros, extreme values)
+- [ ] Optional-dependency tests have `skipif` guards
+- [ ] Numerical tolerances documented with a rationale comment if non-obvious
+- [ ] `pytest -m "not slow"` passes locally
+- [ ] No hardcoded absolute paths
+- [ ] Test file has `__init__.py` sibling in its directory

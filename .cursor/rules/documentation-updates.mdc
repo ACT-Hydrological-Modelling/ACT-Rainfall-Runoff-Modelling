@@ -27,31 +27,47 @@ For each triggering change, review and update the following files:
 
 | Section | When to Update |
 |---------|---------------|
-| **Features** (lines ~45-90) | New model, calibration method, routing, objective, analysis tool, or visualization capability |
-| **Dependencies table** (lines ~125-135) | New optional dependency added to `pyproject.toml` |
-| **Calibration Methods table** (lines ~385-395) | New `run_*()` method on `CalibrationRunner` |
-| **Project Structure tree** (lines ~510-575) | Any new `.py` file under `pyrrm/` |
-| **Tutorial Notebooks table** (lines ~600-615) | New notebook added to `notebooks/` |
-| **Learning Paths** (lines ~620-640) | New notebook that fits into an existing or new learning path |
-| **Quick Start examples** (lines ~140-260) | Major new workflow that users should see immediately |
-| **References** (lines ~650-670) | New model or algorithm with citable paper |
+| **Features** | New model, calibration method, routing, objective, analysis tool, diagnostic, data utility, or visualization capability |
+| **Dependencies table** | New optional dependency added to `pyproject.toml` |
+| **Optional Dependency Groups** | New install group (e.g. `[numba]`, `[export]`) |
+| **Quick Start examples** | Major new workflow that users should see immediately |
+| **Calibration Methods table** | New `run_*()` method on `CalibrationRunner` |
+| **Project Structure tree** | Any new `.py` file or subpackage under `pyrrm/` |
+| **Additional Directories** | New top-level directory in the repository |
+| **Web GUI section** | Significant GUI changes |
+| **Tutorial Notebooks table** | New notebook added to `notebooks/` |
+| **Learning Paths** | New notebook that fits into an existing or new learning path |
+| **Supplementary Documentation table** | New document in `docs/` |
+| **References** | New model or algorithm with citable paper |
 
 ### 2. CHANGELOG.md
 
 Add an entry under the `## [Unreleased]` section. See `changelog-maintenance.mdc` for format details.
 
-### 3. pyproject.toml
+### 3. LESSONS_LEARNT.md
+
+Add an entry if the change involved a non-obvious pitfall, surprising behaviour, or architectural decision. See `lessons-learnt.mdc` for format details.
+
+### 4. pyproject.toml
 
 If a new optional dependency is introduced:
 - Add it to the appropriate optional dependency group
 - Add it to the `[full]` group
 - Update the conda install instructions in README.md
+- Update the Dependencies table in README.md
 
-### 4. Package `__init__.py` Exports
+### 5. Package `__init__.py` Exports
 
 When adding a new public class or function:
 - Export from the relevant subpackage `__init__.py`
 - Export from the top-level `pyrrm/__init__.py` if it is a primary user-facing API
+
+### 6. CI Pipeline
+
+If the change introduces a new test file, optional dependency, or pytest marker:
+- Verify `.github/workflows/ci.yml` installs the dependency in the correct tier
+- Register new markers in `pyproject.toml` `[tool.pytest.ini_options]`
+- See `ci-infrastructure.mdc` for details
 
 ## Commit Convention
 
@@ -77,3 +93,11 @@ When adding a notebook:
 2. Link to the `.py` file (canonical source), not the `.ipynb`
 3. Consider which learning path(s) it belongs to and update accordingly
 4. Verify that notebook numbering is sequential with no gaps
+5. Current notebooks: 01–13 (13 total)
+
+## Supplementary Documentation
+
+When adding a new document to `docs/`:
+1. Add a row to the Supplementary Documentation table in README.md
+2. Include a brief one-line description
+3. Ensure the file is linked correctly (relative path from repo root)

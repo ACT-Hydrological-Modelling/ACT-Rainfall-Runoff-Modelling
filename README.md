@@ -19,7 +19,8 @@
   <a href="#quick-start">Quick Start</a> •
   <a href="#available-models">Models</a> •
   <a href="#calibration">Calibration</a> •
-  <a href="#documentation">Documentation</a>
+  <a href="#documentation">Documentation</a> •
+  <a href="#web-gui">Web GUI</a>
 </p>
 
 ---
@@ -36,11 +37,13 @@ Whether you're forecasting floods, managing water supply systems, assessing clim
 |-----------|----------------|
 | **Fragmented tools** | Unified API across all models and calibration methods |
 | **Black-box calibration** | Full Bayesian uncertainty quantification with MCMC (PyDREAM + NumPyro NUTS) |
-| **Slow calibration** | JAX-accelerated models for GPU/TPU speedup |
+| **Slow model runs** | Numba JIT kernels (30–70x speedup); optional JAX acceleration for GPU/TPU |
 | **Parameter sensitivity** | Built-in Sobol global sensitivity analysis |
 | **Multi-catchment systems** | Network runner with DAG topology for upstream-to-downstream calibration |
-| **Reproducibility** | Clean, tested code with comprehensive documentation |
-| **Integration** | Works seamlessly with pandas, numpy, JAX, and the Python ecosystem |
+| **Batch experiments** | Grid-based experiment design with checkpointing and parallel backends |
+| **Sharing results** | Export calibration reports to Excel / CSV with full diagnostics |
+| **Reproducibility** | Clean, tested code with 48-metric canonical diagnostic suite |
+| **Integration** | Works seamlessly with pandas, numpy, and the Python ecosystem |
 
 ---
 
@@ -48,11 +51,12 @@ Whether you're forecasting floods, managing water supply systems, assessing clim
 
 ### Hydrological Models
 
-- **Sacramento** — Complex multi-zone soil moisture accounting model (US NWS)
+- **Sacramento** — Complex multi-zone soil moisture accounting model (US NWS, 22 parameters)
 - **GR4J** — Parsimonious 4-parameter daily model (INRAE, France)
 - **GR5J** — Extended GR4J with improved groundwater exchange
 - **GR6J** — Further extended with exponential store for low-flow simulation
-- **JAX Acceleration** — GPU/TPU-accelerated implementations of Sacramento and GR4J for fast calibration
+- **Numba JIT Acceleration** — Compiled kernels for all four models, 30–70x faster than pure Python
+- **JAX Acceleration** — GPU/TPU-accelerated Sacramento and GR4J for gradient-based calibration
 
 ### Calibration Framework
 
@@ -61,8 +65,8 @@ Whether you're forecasting floods, managing water supply systems, assessing clim
 - **Global Optimization** — SCE-UA (vendored), Differential Evolution, Dual Annealing
 - **Time-Varying Parameters** — TVP framework with Gaussian Random Walk priors for non-stationary calibration
 - **Multiple Objectives** — NSE, KGE (2009/2012/2021), RMSE, MAE, PBIAS, FDC metrics, APEX
-- **Flow Transformations** — sqrt, log, inverse transforms for low-flow emphasis
-- **Composite Objectives** — Weighted combinations for multi-objective calibration
+- **Flow Transformations** — sqrt, log, inverse, squared, power, Box-Cox for low-flow emphasis
+- **Composite Objectives** — Weighted combinations and factory functions for multi-objective calibration
 
 ### Channel Routing
 
@@ -80,21 +84,35 @@ Whether you're forecasting floods, managing water supply systems, assessing clim
 ### Objective Functions Module (`pyrrm.objectives`)
 
 - **Traditional Metrics** — NSE, RMSE, MAE, PBIAS, SDEB
-- **KGE Variants** — 2009, 2012, 2021 formulations; non-parametric options
-- **APEX** — Novel adaptive process-explicit objective extending SDEB with dynamics and lag multipliers
-- **Flow Transformations** — sqrt, log, inverse for low-flow emphasis
-- **Composite Objectives** — Weighted combinations, factory functions
+- **KGE Variants** — 2009, 2012, 2021 formulations; non-parametric (Spearman) option
+- **APEX** — Adaptive process-explicit objective extending SDEB with dynamics and lag multipliers
+- **Flow Transformations** — sqrt, log, inverse, squared, power, Box-Cox for flow-regime emphasis
+- **Composite Objectives** — Weighted combinations, factory functions (`kge_hilo`, `comprehensive_objective`, etc.)
 - **FDC Metrics** — Flow duration curve segment-based evaluation
-- **Hydrological Signatures** — Flow indices, dynamics, water balance
+- **Hydrological Signatures** — BFI, flashiness, Q5/Q95, water balance indices
+
+### Diagnostics & Export
+
+- **Canonical Diagnostic Suite** — 48-metric grouped evaluation via `compute_diagnostics()` covering NSE, KGE (4 variants x 4 transforms), bias, correlation, signatures
+- **Baseflow Separation** — Lyne-Hollick digital filter for baseflow/quickflow partitioning
+- **CalibrationReport Export** — Save results to multi-sheet Excel or CSV with time series, diagnostics, and parameters
+- **Batch Export** — Bulk export all experiments from a `BatchResult` in one call
 
 ### Analysis & Visualization
 
 - **Sobol Sensitivity Analysis** — Identify influential parameters with confidence intervals
-- **Publication-Ready Plots** — Hydrographs, scatter plots, flow duration curves
+- **Publication-Ready Plots** — Hydrographs, scatter plots, flow duration curves (Matplotlib)
 - **Interactive Plotly Plots** — Report cards, hydrographs, FDC, scatter with hover and zoom
 - **MCMC Diagnostics** — Trace plots, posterior distributions, convergence metrics (R-hat), ArviZ integration
 - **NUTS-Specific Visualization** — Rank plots, posterior pairs, hydrographs with uncertainty bands
+- **PyDREAM Diagnostics** — R-hat bar charts, forest grids, parameter identifiability heatmaps
 - **Calibration Dashboards** — Comprehensive multi-panel summaries (Matplotlib and Plotly)
+
+### Data Utilities
+
+- **Column Alias Resolution** — `COLUMN_ALIASES` and `resolve_column()` for robust, case-insensitive column matching
+- **Convenience Loader** — `load_catchment_data()` replaces ~30 lines of CSV-loading boilerplate
+- **Data Preparation Guide** — Standalone guide for hydrologists ([docs/data_preparation.md](docs/data_preparation.md))
 
 ---
 
@@ -121,16 +139,31 @@ pip install -e ".[full]"
 conda create -n pyrrm python=3.11 -y
 conda activate pyrrm
 
-# Install dependencies
+# Install core + common optional dependencies
 pip install numpy pandas scipy matplotlib seaborn plotly
-pip install pydream SALib  # Optional: calibration libraries
-pip install jupytext ipykernel    # Optional: notebook support
+pip install numba            # JIT acceleration (recommended)
+pip install pydream SALib    # Calibration & sensitivity
+pip install jupytext ipykernel  # Notebook support
 
-# Install pyrrm
+# Install pyrrm in editable mode
 pip install -e .
 
 # Register Jupyter kernel (if using notebooks)
 python -m ipykernel install --user --name pyrrm --display-name "Python (pyrrm)"
+```
+
+### Optional Dependency Groups
+
+Install only what you need:
+
+```bash
+pip install -e ".[numba]"        # Numba JIT kernels (30-70x speedup)
+pip install -e ".[calibration]"  # PyDREAM MCMC
+pip install -e ".[sensitivity]"  # SALib Sobol analysis
+pip install -e ".[jax]"          # JAX + NumPyro NUTS + ArviZ
+pip install -e ".[export]"       # Excel export (openpyxl)
+pip install -e ".[full]"         # Everything above
+pip install -e ".[dev]"          # Development tools (pytest, ruff, mypy)
 ```
 
 ### Dependencies
@@ -138,13 +171,15 @@ python -m ipykernel install --user --name pyrrm --display-name "Python (pyrrm)"
 | Category | Packages | Purpose |
 |----------|----------|---------|
 | **Core** | numpy, pandas, scipy, matplotlib | Essential functionality |
+| **Acceleration** | numba | JIT-compiled model kernels (30–70x faster) |
 | **Visualization** | seaborn, plotly | Enhanced and interactive plotting |
 | **Calibration** | pydream | MT-DREAM(ZS) advanced MCMC |
 | **JAX/Bayesian** | jax, jaxlib, numpyro, arviz | GPU acceleration, NUTS sampler, MCMC diagnostics |
 | **Sensitivity** | SALib | Sobol analysis |
+| **Export** | openpyxl | CalibrationReport export to Excel |
 | **Notebooks** | jupytext | Paired notebook workflow |
 
-> **Note**: pyrrm works with only core dependencies installed. Optional packages enable advanced calibration and analysis features. Install with `pip install -e ".[full]"` for all features.
+> **Note**: pyrrm works with only core dependencies installed. Numba is strongly recommended for production use — it accelerates all model kernels with no API changes. Other optional packages enable advanced calibration, analysis, and export features.
 
 ---
 
@@ -156,7 +191,6 @@ python -m ipykernel install --user --name pyrrm --display-name "Python (pyrrm)"
 import pandas as pd
 from pyrrm.models import GR4J
 
-# Create a GR4J model with parameters
 model = GR4J({
     'X1': 350,   # Production store capacity (mm)
     'X2': 0,     # Groundwater exchange coefficient (mm/d)
@@ -167,12 +201,20 @@ model = GR4J({
 # Load input data (must have 'precipitation' and 'pet' columns)
 inputs = pd.read_csv('catchment_data.csv', index_col='date', parse_dates=True)
 
-# Run simulation
 results = model.run(inputs, warmup_period=365)
+print(f"Mean flow: {results['flow'].mean():.2f} mm/d")
+```
 
-# Access outputs
-streamflow = results['flow']
-print(f"Mean flow: {streamflow.mean():.2f} mm/d")
+### Loading Data with Convenience Function
+
+```python
+from pyrrm.data import load_catchment_data
+
+inputs, observed = load_catchment_data(
+    'catchment_data.csv',
+    start_date='2000-01-01',
+    end_date='2020-12-31'
+)
 ```
 
 ### Calibrating with DREAM
@@ -180,49 +222,40 @@ print(f"Mean flow: {streamflow.mean():.2f} mm/d")
 ```python
 from pyrrm.models import GR4J
 from pyrrm.calibration import CalibrationRunner
-from pyrrm.objectives import KGE  # New objectives module
+from pyrrm.objectives import KGE
 
-# Prepare data
-inputs = pd.read_csv('catchment_data.csv', index_col='date', parse_dates=True)
-observed = inputs['observed_flow'].values
-
-# Set up calibration
 model = GR4J()
 runner = CalibrationRunner(
     model=model,
     inputs=inputs,
     observed=observed,
-    objective=KGE(),  # Use KGE objective
+    objective=KGE(),
     warmup_period=365
 )
 
-# Run Bayesian calibration
 result = runner.run_dream(n_iterations=10000, n_chains=5)
-
-# Examine results
 print(f"Best KGE: {result.best_objective:.4f}")
 print(f"Best parameters: {result.best_parameters}")
 ```
 
-### Sensitivity Analysis
+### Evaluating with the Diagnostic Suite
 
 ```python
-from pyrrm.analysis import SobolSensitivityAnalysis
-from pyrrm.objectives import NSE
+from pyrrm.analysis import compute_diagnostics, print_diagnostics
 
-# Configure analysis
-analysis = SobolSensitivityAnalysis(
-    model=model,
-    inputs=inputs,
-    observed=observed,
-    objective=NSE()
-)
+diagnostics = compute_diagnostics(simulated, observed)
+print_diagnostics(diagnostics)
+# Grouped table of 48 metrics: NSE, KGE variants, bias, signatures, etc.
+```
 
-# Run Sobol method (requires SALib)
-sensitivity = analysis.run(n_samples=1024)
+### Exporting Results
 
-# View first-order and total-effect indices
-print(sensitivity.summary())
+```python
+# Single report to Excel
+result.create_report().export('results/my_calibration.xlsx', fmt='excel')
+
+# Batch export all experiments
+batch_result.export('results/', fmt='csv')
 ```
 
 ### Adding Channel Routing
@@ -233,21 +266,14 @@ from pyrrm.routing import NonlinearMuskingumRouter, RoutedModel
 from pyrrm.calibration import CalibrationRunner
 from pyrrm.objectives import NSE
 
-# Create rainfall-runoff model
 rr_model = Sacramento()
-
-# Create router with initial parameters
 router = NonlinearMuskingumRouter(K=5.0, m=0.8, n_subreaches=3)
-
-# Combine into routed model
 model = RoutedModel(rr_model, router)
 
-# Run simulation (routing applied automatically)
 results = model.run(inputs)
 
-# Calibrate with routing - parameters are automatically combined
 runner = CalibrationRunner(model, inputs, observed, objective=NSE())
-result = runner.run_differential_evolution()  # Calibrates both RR and routing params
+result = runner.run_differential_evolution()
 ```
 
 ### Bayesian Calibration with NumPyro NUTS
@@ -260,11 +286,25 @@ from pyrrm.objectives import KGE
 model = GR4J()
 runner = CalibrationRunner(model, inputs, observed, objective=KGE(), warmup_period=365)
 
-# Run NUTS sampler (requires JAX + NumPyro)
 result = runner.run_nuts(num_warmup=500, num_samples=1000, num_chains=4)
-
 print(f"Best KGE: {result.best_objective:.4f}")
-print(f"Best parameters: {result.best_parameters}")
+```
+
+### Sensitivity Analysis
+
+```python
+from pyrrm.analysis import SobolSensitivityAnalysis
+from pyrrm.objectives import NSE
+
+analysis = SobolSensitivityAnalysis(
+    model=model,
+    inputs=inputs,
+    observed=observed,
+    objective=NSE()
+)
+
+sensitivity = analysis.run(n_samples=1024)
+print(sensitivity.summary())
 ```
 
 ### Batch Experiments
@@ -289,10 +329,10 @@ results.summary()
 from pyrrm.visualization import (
     plot_hydrograph_with_precipitation,
     plot_flow_duration_curve,
-    plot_scatter_with_metrics
+    plot_scatter_with_metrics,
+    plot_report_card_plotly
 )
 
-# Create publication-ready hydrograph
 fig = plot_hydrograph_with_precipitation(
     dates=inputs.index,
     observed=observed,
@@ -341,9 +381,9 @@ model = Sacramento({
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         RAINFALL                             │
-└─────────────────────────────┬───────────────────────────────┘
-                              │
-                              ▼
+└─────────────────────────────────┬───────────────────────────┘
+                                  │
+                                  ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    UPPER ZONE                                │
 │  ┌──────────────────┐    ┌──────────────────┐               │
@@ -461,23 +501,16 @@ A novel objective function that extends SDEB with dynamics and lag penalty multi
 ```python
 from pyrrm.objectives import APEX
 
-# APEX with dynamics multiplier (penalizes gradient mismatch)
 apex = APEX(
     alpha=0.1,              # Weight for chronological term
     dynamics_strength=0.5,  # κ: strength of dynamics penalty
-    regime_emphasis='uniform'  # Flow regime weighting
+    regime_emphasis='uniform'
 )
 
-# Use in calibration
 runner = CalibrationRunner(model, inputs, observed, objective=apex)
 ```
 
 APEX formula: `APEX = [α × E_chron + (1-α) × E_ranked] × BiasMultiplier × DynamicsMultiplier × [LagMultiplier]`
-
-Novel contributions:
-- **Dynamics Multiplier**: Penalizes mismatch in gradient/rate-of-change patterns
-- **Lag Multiplier** (optional): Penalizes systematic timing offsets
-- **Regime-weighted ranked term**: Continuous flow-regime weighting
 
 **Flow Transformations:**
 
@@ -486,14 +519,9 @@ Apply transformations to shift emphasis between high and low flows:
 ```python
 from pyrrm.objectives import KGE, FlowTransformation
 
-# Standard KGE (high-flow emphasis)
-kge = KGE()
-
-# Log-transformed KGE (low-flow emphasis)
-kge_log = KGE(transform=FlowTransformation('log'))
-
-# Inverse-transformed KGE (strong low-flow emphasis)
-kge_inv = KGE(transform=FlowTransformation('inverse'))
+kge = KGE()                                         # Standard (high-flow emphasis)
+kge_log = KGE(transform=FlowTransformation('log'))   # Low-flow emphasis
+kge_inv = KGE(transform=FlowTransformation('inverse'))  # Strong low-flow emphasis
 ```
 
 Available transformations: `none`, `sqrt`, `log`, `inverse`, `squared`, `power`, `boxcox`
@@ -503,19 +531,15 @@ Available transformations: `none`, `sqrt`, `log`, `inverse`, `squared`, `power`,
 ```python
 from pyrrm.objectives import NSE, KGE, FlowTransformation, WeightedObjective
 
-# Manual weighted combination
 combined = WeightedObjective([
-    (KGE(), 0.5),  # High flows
-    (KGE(transform=FlowTransformation('inverse')), 0.5),  # Low flows
+    (KGE(), 0.5),
+    (KGE(transform=FlowTransformation('inverse')), 0.5),
 ])
 
 # Or use factory functions for common combinations
 from pyrrm.objectives import kge_hilo, comprehensive_objective
 
-# Balanced high/low flow objective
 objective = kge_hilo(kge_weight=0.5)
-
-# Comprehensive multi-metric objective
 objective = comprehensive_objective()
 
 runner = CalibrationRunner(model, inputs, observed, objective=objective)
@@ -540,6 +564,9 @@ Evaluate how changes in precipitation and temperature patterns may affect future
 ### Environmental Flows
 Model natural flow regimes to establish environmental flow requirements and assess the impacts of water extraction on aquatic ecosystems.
 
+### Multi-Catchment Network Calibration
+Calibrate interconnected catchment systems in topological order, using upstream simulated flows as downstream inputs — essential for nested basin studies and water supply networks.
+
 ### Research & Education
 The clean API and comprehensive documentation make pyrrm an excellent platform for teaching rainfall-runoff concepts and conducting academic research.
 
@@ -549,80 +576,100 @@ The clean API and comprehensive documentation make pyrrm an excellent platform f
 
 ```
 pyrrm/
-├── parallel.py                # Parallel backends (Sequential, Multiprocessing, Ray)
-├── models/                    # Rainfall-runoff model implementations
-│   ├── base.py                # BaseRainfallRunoffModel abstract class
-│   ├── sacramento.py          # Sacramento Soil Moisture Accounting
-│   ├── sacramento_jax.py      # Sacramento JAX implementation (GPU-accelerated)
-│   ├── gr4j.py                # GR4J model
-│   ├── gr4j_jax.py            # GR4J JAX implementation (GPU-accelerated)
-│   ├── gr5j.py                # GR5J model
-│   ├── gr6j.py                # GR6J model
-│   └── utils/                 # Shared utilities
-│       ├── unit_hydrograph.py # Unit hydrograph convolution
-│       ├── s_curves.py        # S-curve interpolation
-│       └── s_curves_jax.py    # S-curves JAX implementation
-├── routing/                   # Channel routing methods
-│   ├── base.py                # BaseRouter abstract class
-│   ├── muskingum.py           # NonlinearMuskingumRouter
-│   └── routed_model.py        # RoutedModel wrapper for RR + routing
-├── objectives/                # Comprehensive objective functions library
-│   ├── core/                  # Base classes and utilities
-│   │   ├── base.py            # ObjectiveFunction abstract class
-│   │   ├── result.py          # MetricResult container
-│   │   └── utils.py           # evaluate_all, print_evaluation_report
-│   ├── metrics/               # Traditional and KGE metrics
-│   │   ├── traditional.py     # NSE, RMSE, MAE, PBIAS, SDEB
-│   │   ├── kge.py             # KGE (2009/2012/2021), KGENonParametric
-│   │   ├── apex.py            # APEX adaptive process-explicit objective
-│   │   └── correlation.py     # Pearson, Spearman correlation
-│   ├── transformations/       # Flow transformations
-│   │   └── flow_transforms.py # sqrt, log, inverse, power, boxcox
-│   ├── fdc/                   # Flow Duration Curve metrics
-│   │   ├── curves.py          # compute_fdc
-│   │   └── metrics.py         # FDCMetric
-│   ├── signatures/            # Hydrological signatures
-│   │   ├── flow_indices.py    # SignatureMetric
-│   │   ├── dynamics.py        # Dynamic flow characteristics
-│   │   └── water_balance.py   # Water balance signatures
-│   └── composite/             # Multi-objective functions
-│       ├── weighted.py        # WeightedObjective
-│       ├── factories.py       # kge_hilo, comprehensive_objective
-│       └── adaptive.py        # Adaptive composite objectives
-├── calibration/               # Calibration framework
-│   ├── runner.py              # Unified CalibrationRunner interface
-│   ├── report.py              # CalibrationReport for saving/loading results
-│   ├── pydream_adapter.py     # PyDREAM MT-DREAM(ZS) adapter
-│   ├── numpyro_adapter.py     # NumPyro NUTS sampler adapter
-│   ├── scipy_adapter.py       # SciPy optimization adapter
-│   ├── sceua_adapter.py       # Direct SCE-UA implementation
-│   ├── batch.py               # BatchExperimentRunner and ExperimentGrid
-│   ├── checkpoint.py          # CheckpointManager for resumable calibration
-│   ├── tvp_priors.py          # Time-varying parameter priors (GaussianRandomWalk)
-│   ├── likelihoods_jax.py     # JAX-based likelihood functions
-│   └── objective_functions.py # Legacy compatibility layer
-├── network/                   # Multi-catchment network calibration
-│   ├── topology.py            # CatchmentNetwork DAG representation
-│   ├── data.py                # NetworkDataLoader for multi-catchment data
-│   ├── runner.py              # CatchmentNetworkRunner (upstream-to-downstream)
-│   └── visualization.py       # Network visualization (Mermaid, plots)
-├── analysis/                  # Post-calibration analysis
-│   ├── sensitivity.py         # Sobol global sensitivity analysis
-│   ├── diagnostics.py         # Model performance diagnostics
-│   └── mcmc_diagnostics.py    # MCMC convergence diagnostics (ArviZ)
-├── visualization/             # Plotting functions
-│   ├── model_plots.py         # Hydrographs, FDC, scatter plots
-│   ├── calibration_plots.py   # Parameter traces, posteriors
-│   ├── report_plots.py        # Report cards (Matplotlib & Plotly)
-│   ├── sensitivity_plots.py   # Sobol indices visualization
-│   └── mcmc_plots.py          # NUTS-specific traces, rank plots, uncertainty bands
-├── data/                      # Data handling utilities
-│   ├── input_handler.py       # Input data loading and validation
-│   └── parameter_bounds.py    # Parameter bounds definitions
-└── examples/                  # Example scripts
-    ├── quick_start.py         # Getting started example
-    └── mpi_calibration_example.py  # MPI parallelization example
+├── __init__.py                    # Package entry point (lazy imports)
+├── parallel.py                    # Parallel backends (Sequential, Multiprocessing, Ray)
+├── models/                        # Rainfall-runoff model implementations
+│   ├── base.py                    # BaseRainfallRunoffModel abstract class
+│   ├── sacramento.py              # Sacramento Soil Moisture Accounting
+│   ├── gr4j.py                    # GR4J model
+│   ├── gr5j.py                    # GR5J model
+│   ├── gr6j.py                    # GR6J model
+│   ├── numba_kernels.py           # Numba JIT-compiled kernels (all models)
+│   ├── sacramento_jax.py          # Sacramento JAX implementation (GPU)
+│   ├── gr4j_jax.py                # GR4J JAX implementation (GPU)
+│   └── utils/                     # Shared utilities
+│       ├── unit_hydrograph.py     # Unit hydrograph convolution
+│       ├── s_curves.py            # S-curve interpolation
+│       └── s_curves_jax.py        # S-curves JAX implementation
+├── routing/                       # Channel routing methods
+│   ├── base.py                    # BaseRouter abstract class
+│   ├── muskingum.py               # NonlinearMuskingumRouter
+│   └── routed_model.py            # RoutedModel wrapper for RR + routing
+├── objectives/                    # Comprehensive objective functions library
+│   ├── core/                      # Base classes, MetricResult, utilities
+│   ├── metrics/                   # NSE, KGE, RMSE, MAE, PBIAS, SDEB, APEX
+│   ├── transformations/           # sqrt, log, inverse, power, boxcox
+│   ├── fdc/                       # Flow duration curve metrics
+│   ├── signatures/                # Hydrological signatures (BFI, flashiness, etc.)
+│   └── composite/                 # WeightedObjective, factory functions
+├── calibration/                   # Calibration framework
+│   ├── runner.py                  # Unified CalibrationRunner interface
+│   ├── report.py                  # CalibrationReport for saving/loading results
+│   ├── export.py                  # Export to Excel / CSV
+│   ├── batch.py                   # BatchExperimentRunner and ExperimentGrid
+│   ├── checkpoint.py              # CheckpointManager for resumable calibration
+│   ├── pydream_adapter.py         # PyDREAM MT-DREAM(ZS) adapter
+│   ├── numpyro_adapter.py         # NumPyro NUTS sampler adapter
+│   ├── scipy_adapter.py           # SciPy optimization adapter
+│   ├── sceua_adapter.py           # Direct SCE-UA implementation
+│   ├── tvp_priors.py              # Time-varying parameter priors
+│   ├── likelihoods_jax.py         # JAX-based likelihood functions
+│   └── objective_functions.py     # Legacy compatibility layer
+├── network/                       # Multi-catchment network calibration
+│   ├── topology.py                # CatchmentNetwork DAG representation
+│   ├── data.py                    # NetworkDataLoader for multi-catchment data
+│   ├── runner.py                  # CatchmentNetworkRunner
+│   └── visualization.py           # Network visualization (Mermaid, plots)
+├── analysis/                      # Post-calibration analysis
+│   ├── diagnostics.py             # Canonical 48-metric diagnostic suite
+│   ├── sensitivity.py             # Sobol global sensitivity analysis
+│   └── mcmc_diagnostics.py        # MCMC convergence diagnostics (ArviZ)
+├── visualization/                 # Plotting functions
+│   ├── model_plots.py             # Hydrographs, FDC, scatter plots
+│   ├── calibration_plots.py       # Parameter traces, posteriors
+│   ├── report_plots.py            # Report cards (Matplotlib & Plotly)
+│   ├── sensitivity_plots.py       # Sobol indices visualization
+│   └── mcmc_plots.py              # MCMC traces, rank plots, uncertainty bands
+├── data/                          # Data handling utilities
+│   ├── input_handler.py           # COLUMN_ALIASES, load_catchment_data()
+│   └── parameter_bounds.py        # Parameter bounds definitions
+└── examples/                      # Example scripts
+    ├── quick_start.py
+    └── mpi_calibration_example.py
 ```
+
+### Additional Directories
+
+```
+notebooks/           # 13 Jupytext-paired educational notebooks (see Documentation)
+notebooks_ACT/       # ACT Government catchment calibration notebooks
+benchmark/           # Sacramento verification against C# reference implementation
+test_data/           # Test data and saved calibration reports
+docs/                # Supplementary documentation (data preparation guide, specs)
+pyrrm-gui/           # Web-based GUI application (React + FastAPI + Celery)
+diagrams/            # Architecture and model diagrams
+```
+
+---
+
+## Web GUI
+
+pyrrm includes a web-based graphical user interface for running and analyzing calibrations without writing code. Built with React (frontend), FastAPI (backend), and Celery (background workers).
+
+**Features:**
+- Step-by-step experiment configuration wizard
+- Asynchronous calibration with real-time WebSocket progress
+- Interactive results visualization (hydrographs, FDC, scatter)
+- Experiment comparison dashboard
+
+```bash
+cd pyrrm-gui
+docker-compose up --build
+# Frontend: http://localhost:3000
+# API Docs: http://localhost:8000/api/docs
+```
+
+See [pyrrm-gui/README.md](pyrrm-gui/README.md) for full setup instructions.
 
 ---
 
@@ -643,7 +690,9 @@ Key verification metrics:
 - **Mean Absolute Error**: < 0.001 mm/day
 - **Mass Balance**: Preserved within numerical precision
 
-See [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) for detailed verification results and methodology.
+Numba kernels are tested for exact equivalence (96 tests) across all models, edge cases, and class interfaces.
+
+See the `benchmark/` directory for verification scripts and detailed results.
 
 ---
 
@@ -651,67 +700,72 @@ See [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) for detailed verificati
 
 ### Tutorial Notebooks
 
-The `notebooks/` directory contains a comprehensive series of educational notebooks that guide you through pyrrm's capabilities:
+The `notebooks/` directory contains 13 educational notebooks (Jupytext-paired `.py` scripts) that guide you through pyrrm's capabilities:
 
 | # | Notebook | Description | Best For |
 |---|----------|-------------|----------|
 | 01 | [sacramento_verification](notebooks/01_sacramento_verification.py) | Verification against C# and SOURCE benchmarks | Implementation correctness |
 | 02 | [calibration_quickstart](notebooks/02_calibration_quickstart.py) | **Start here!** Loading data and calibrating models | **New users** |
 | 03 | [routing_quickstart](notebooks/03_routing_quickstart.py) | Channel routing with Nonlinear Muskingum | Adding routing to models |
-| 04 | [objective_functions](notebooks/04_objective_functions.py) | Deep dive into objective functions (WIP) | Understanding what to optimize |
+| 04 | [objective_functions](notebooks/04_objective_functions.py) | Deep dive into objective functions | Understanding what to optimize |
 | 05 | [apex_complete_guide](notebooks/05_apex_complete_guide.py) | APEX objective function research & evaluation | Advanced calibration |
-| 06 | [algorithm_comparison](notebooks/06_algorithm_comparison.py) | PyDREAM, SCE-UA, SciPy comparison | Choosing algorithms |
+| 06 | [algorithm_comparison](notebooks/06_algorithm_comparison.py) | PyDREAM, SCE-UA, SciPy comparison with ArviZ diagnostics | Choosing algorithms |
 | 07 | [model_comparison](notebooks/07_model_comparison.py) | GR4J, GR5J, GR6J vs Sacramento (13 objectives) | Choosing models |
 | 08 | [calibration_monitor](notebooks/08_calibration_monitor.py) | Real-time monitoring of MCMC calibrations | Long-running jobs |
 | 09 | [calibration_reports](notebooks/09_calibration_reports.py) | Working with saved CalibrationReport objects | Post-processing |
-| 10 | [executive_summary](notebooks/10_executive_summary.py) | Q&A guide from 65+ calibration experiments | Experimental insights |
-| 11 | [batch_runners](notebooks/11_batch_runners.py) | Batch experiment runner tutorial | Production workflows |
-| 12 | [network_runners](notebooks/12_network_runners.py) | Catchment network calibration | Multi-catchment systems |
-| 13 | [nuts_calibration](notebooks/13_nuts_calibration.py) | Bayesian MCMC with NumPyro NUTS | Bayesian inference |
-| 14 | [tvp_gr4j](notebooks/14_tvp_gr4j.py) | Time-varying parameter calibration with GR4J | Non-stationary catchments |
+| 10 | [batch_runners](notebooks/10_batch_runners.py) | Batch experiment runner tutorial | Production workflows |
+| 11 | [network_runners](notebooks/11_network_runners.py) | Catchment network calibration | Multi-catchment systems |
+| 12 | [nuts_calibration](notebooks/12_nuts_calibration.py) | Bayesian MCMC with NumPyro NUTS | Bayesian inference |
+| 13 | [tvp_gr4j](notebooks/13_tvp_gr4j.py) | Time-varying parameter calibration with GR4J | Non-stationary catchments |
 
 #### Learning Paths
 
-**Quick Start (1-2 hours):**
-1. [02_calibration_quickstart](notebooks/02_calibration_quickstart.py) - Get a working calibration
+**Quick Start (1–2 hours):**
+1. [02_calibration_quickstart](notebooks/02_calibration_quickstart.py) — Get a working calibration
 
-**Complete Understanding (6-8 hours):**
-1. [02_calibration_quickstart](notebooks/02_calibration_quickstart.py) - Fundamentals
-2. [04_objective_functions](notebooks/04_objective_functions.py) - What to optimize
-3. [06_algorithm_comparison](notebooks/06_algorithm_comparison.py) - How to optimize
-4. [07_model_comparison](notebooks/07_model_comparison.py) - Which model to use
-5. [03_routing_quickstart](notebooks/03_routing_quickstart.py) - Adding channel routing
-6. [08_calibration_monitor](notebooks/08_calibration_monitor.py) - Monitor long runs
+**Complete Understanding (6–8 hours):**
+1. [02_calibration_quickstart](notebooks/02_calibration_quickstart.py) — Fundamentals
+2. [04_objective_functions](notebooks/04_objective_functions.py) — What to optimize
+3. [06_algorithm_comparison](notebooks/06_algorithm_comparison.py) — How to optimize
+4. [07_model_comparison](notebooks/07_model_comparison.py) — Which model to use
+5. [03_routing_quickstart](notebooks/03_routing_quickstart.py) — Adding channel routing
+6. [08_calibration_monitor](notebooks/08_calibration_monitor.py) — Monitor long runs
 
-**Bayesian Inference (4-6 hours):**
-1. [02_calibration_quickstart](notebooks/02_calibration_quickstart.py) - Calibration fundamentals
-2. [06_algorithm_comparison](notebooks/06_algorithm_comparison.py) - Compare MCMC vs optimization
-3. [13_nuts_calibration](notebooks/13_nuts_calibration.py) - NumPyro NUTS sampler
-4. [14_tvp_gr4j](notebooks/14_tvp_gr4j.py) - Time-varying parameters
+**Bayesian Inference (4–6 hours):**
+1. [02_calibration_quickstart](notebooks/02_calibration_quickstart.py) — Calibration fundamentals
+2. [06_algorithm_comparison](notebooks/06_algorithm_comparison.py) — Compare MCMC vs optimization
+3. [12_nuts_calibration](notebooks/12_nuts_calibration.py) — NumPyro NUTS sampler
+4. [13_tvp_gr4j](notebooks/13_tvp_gr4j.py) — Time-varying parameters
 
-**Production Workflows (3-4 hours):**
-1. [02_calibration_quickstart](notebooks/02_calibration_quickstart.py) - Single catchment calibration
-2. [11_batch_runners](notebooks/11_batch_runners.py) - Grid-based batch experiments
-3. [12_network_runners](notebooks/12_network_runners.py) - Multi-catchment network calibration
+**Production Workflows (3–4 hours):**
+1. [02_calibration_quickstart](notebooks/02_calibration_quickstart.py) — Single catchment calibration
+2. [10_batch_runners](notebooks/10_batch_runners.py) — Grid-based batch experiments
+3. [11_network_runners](notebooks/11_network_runners.py) — Multi-catchment network calibration
 
 **Model Selection:**
-- [07_model_comparison](notebooks/07_model_comparison.py) - Compare GR4J, GR5J, GR6J, Sacramento across 13 objectives
+- [07_model_comparison](notebooks/07_model_comparison.py) — Compare GR4J, GR5J, GR6J, Sacramento across 13 objectives
 
 **Advanced Calibration:**
-- [05_apex_complete_guide](notebooks/05_apex_complete_guide.py) - Research-focused APEX evaluation with 6 research questions
-
-**Experimental Analysis:**
-- [10_executive_summary](notebooks/10_executive_summary.py) - Insights from 65+ calibration experiments on Queanbeyan River
+- [05_apex_complete_guide](notebooks/05_apex_complete_guide.py) — Research-focused APEX evaluation with 6 research questions
 
 **Verification/Validation:**
-- [01_sacramento_verification](notebooks/01_sacramento_verification.py) - Implementation correctness
+- [01_sacramento_verification](notebooks/01_sacramento_verification.py) — Implementation correctness
+
+### Supplementary Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Data Preparation Guide](docs/data_preparation.md) | How to prepare input data for single-catchment, batch, and network workflows |
+| [APEX Guide](docs/APEX_GUIDE.md) | Detailed APEX objective function documentation |
+| [Benchmark Scripts](benchmark/) | Sacramento verification against C# reference implementation |
+| [Changelog](CHANGELOG.md) | All notable changes to pyrrm |
+| [Lessons Learnt](LESSONS_LEARNT.md) | Development insights and pitfalls |
 
 ### API Reference
 
 Detailed API documentation is available in the source code docstrings, following Google-style conventions.
 
 ```python
-# Access built-in help
 from pyrrm.models import GR4J
 help(GR4J)
 help(GR4J.run)
@@ -760,7 +814,6 @@ Contributions are welcome! Whether you're fixing bugs, adding new models, improv
 ### Development Setup
 
 ```bash
-# Clone and install in development mode
 git clone https://github.com/ACTGovernment/ACT-Rainfall-Runoff-Modelling.git
 cd ACT-Rainfall-Runoff-Modelling
 pip install -e ".[dev]"
@@ -774,13 +827,13 @@ pytest tests/
 - Follow the existing code style (type hints, Google-style docstrings)
 - Add tests for new functionality
 - Update documentation as needed
-- See [AGENTS.md](AGENTS.md) for detailed development guidelines
+- See the `.cursor/rules/` directory for detailed development guidelines
 
 ---
 
 ## License
 
-This project is released under the **MIT License**. See [LICENSE](LICENSE) for details.
+This project is released under the **MIT License**.
 
 ---
 
