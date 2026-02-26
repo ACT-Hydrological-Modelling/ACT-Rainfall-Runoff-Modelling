@@ -1,0 +1,92 @@
+---
+description: Maintains a living LESSONS_LEARNT.md document capturing development insights and pitfalls
+globs: ["LESSONS_LEARNT.md", "pyrrm/**/*.py"]
+alwaysApply: true
+---
+
+# Lessons Learnt Maintenance
+
+`LESSONS_LEARNT.md` is a living document that captures development insights, pitfalls, and best practices. Update it whenever the development process produces a transferable lesson.
+
+## File Location
+
+`LESSONS_LEARNT.md` lives in the project root: `/LESSONS_LEARNT.md`
+
+## When to Add an Entry
+
+Add a lesson when any of the following occur:
+
+- **Non-trivial bug resolved** -- the root cause was surprising or the fix required investigation
+- **Performance pitfall discovered** -- a pattern that seemed correct but caused slowness or memory issues
+- **Unexpected library behaviour** -- an external dependency behaved differently than documented or expected
+- **Architecture decision made** -- a design choice was made between alternatives with meaningful trade-offs
+- **Anti-pattern identified** -- a coding pattern that worked initially but caused problems at scale
+- **Testing insight gained** -- a testing strategy that proved essential or insufficient
+- **Numerical issue encountered** -- floating-point, precision, or convergence problems and their solutions
+- **Dependency management lesson** -- issues with installation, version conflicts, or optional dependency handling
+
+## When NOT to Add an Entry
+
+- Trivial typo fixes or formatting changes
+- Routine feature implementation without surprises
+- Changes that follow established patterns documented elsewhere
+
+## Entry Format
+
+Each entry follows this structure:
+
+```markdown
+### <Concise Title>
+
+**Context**: One sentence describing the situation or task.
+
+**Lesson**: 2-4 sentences explaining the insight, what went wrong, or what best practice was discovered.
+
+**Evidence**: (Optional) Reference to specific files, commits, or test cases that demonstrate the lesson.
+```
+
+## Document Structure
+
+Entries are organized by category. Add new categories as needed.
+
+```markdown
+# Lessons Learnt
+
+## Numerical Precision
+### <entries>
+
+## Calibration
+### <entries>
+
+## Model Implementation
+### <entries>
+
+## Routing
+### <entries>
+
+## Testing
+### <entries>
+
+## Notebooks & Documentation
+### <entries>
+
+## Architecture
+### <entries>
+
+## Dependencies
+### <entries>
+```
+
+## Rules
+
+1. **Write for future developers** -- assume the reader has no context about the specific issue
+2. **Be specific** -- include file names, parameter values, tolerance thresholds, and commit hashes where helpful
+3. **Explain the "why"** -- don't just document what happened; explain why it matters and how to avoid the problem
+4. **Keep entries self-contained** -- each entry should be understandable without reading other entries
+5. **Update existing entries** when new evidence strengthens or refines a lesson
+6. **Don't duplicate** information that belongs in code comments or docstrings -- lessons are for cross-cutting insights that affect multiple parts of the codebase
+7. **Add entries proactively** -- don't wait for the user to ask; if you encounter a lesson-worthy situation during development, add it
+
+## Reviewing Lessons Before Starting Work
+
+When beginning a task that touches an area covered by existing lessons (e.g., adding a new calibration adapter, implementing a JAX model variant, writing tests for stochastic algorithms), review the relevant lessons first. This avoids repeating known mistakes.

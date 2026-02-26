@@ -1,0 +1,79 @@
+---
+description: Ensures README.md, CHANGELOG.md, and project documentation stay current when major features are added
+globs: ["pyrrm/**/*.py", "notebooks/*.py"]
+alwaysApply: false
+---
+
+# Documentation Update Checklist
+
+When generating commits for major changes -- new models, calibration methods, modules, notebooks, or significant refactors -- update the project documentation as part of the same work session. Do not leave documentation updates as a separate follow-up task.
+
+## When This Rule Applies
+
+This rule triggers when any of the following are true:
+
+- A new Python module or subpackage is added under `pyrrm/`
+- A new model, calibration adapter, objective function class, or routing method is created
+- A new notebook is added to `notebooks/`
+- A new optional dependency is introduced
+- A public API class or function is added to a package `__init__.py`
+- An existing feature is removed or renamed
+
+## Checklist
+
+For each triggering change, review and update the following files:
+
+### 1. README.md
+
+| Section | When to Update |
+|---------|---------------|
+| **Features** (lines ~45-90) | New model, calibration method, routing, objective, analysis tool, or visualization capability |
+| **Dependencies table** (lines ~125-135) | New optional dependency added to `pyproject.toml` |
+| **Calibration Methods table** (lines ~385-395) | New `run_*()` method on `CalibrationRunner` |
+| **Project Structure tree** (lines ~510-575) | Any new `.py` file under `pyrrm/` |
+| **Tutorial Notebooks table** (lines ~600-615) | New notebook added to `notebooks/` |
+| **Learning Paths** (lines ~620-640) | New notebook that fits into an existing or new learning path |
+| **Quick Start examples** (lines ~140-260) | Major new workflow that users should see immediately |
+| **References** (lines ~650-670) | New model or algorithm with citable paper |
+
+### 2. CHANGELOG.md
+
+Add an entry under the `## [Unreleased]` section. See `changelog-maintenance.mdc` for format details.
+
+### 3. pyproject.toml
+
+If a new optional dependency is introduced:
+- Add it to the appropriate optional dependency group
+- Add it to the `[full]` group
+- Update the conda install instructions in README.md
+
+### 4. Package `__init__.py` Exports
+
+When adding a new public class or function:
+- Export from the relevant subpackage `__init__.py`
+- Export from the top-level `pyrrm/__init__.py` if it is a primary user-facing API
+
+## Commit Convention
+
+When documentation is updated alongside feature code, include the doc changes in the same commit or in a dedicated follow-up commit:
+
+```
+docs: update README and CHANGELOG for <feature name>
+```
+
+If the documentation update is substantial (new sections, restructured learning paths), use a separate commit to keep the diff reviewable.
+
+## Project Structure Tree Maintenance
+
+The project structure tree in README.md is a curated representation, not an exhaustive listing. Include:
+- All `.py` files directly under each subpackage (not `__init__.py` or `tests/`)
+- Brief inline comments explaining each file's purpose
+- New subpackages as top-level entries with their key files
+
+## Notebook Table Maintenance
+
+When adding a notebook:
+1. Add a row to the Tutorial Notebooks table with `#`, linked name, description, and "Best For" column
+2. Link to the `.py` file (canonical source), not the `.ipynb`
+3. Consider which learning path(s) it belongs to and update accordingly
+4. Verify that notebook numbering is sequential with no gaps

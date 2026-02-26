@@ -32,8 +32,8 @@ conda activate pyrrm && python script.py
 # Correct - for pip installs
 conda activate pyrrm && pip install package_name
 
-# Correct - for jupytext sync
-conda activate pyrrm && jupytext --sync notebooks/script.py
+# Correct - for jupytext sync (.py → .ipynb, preserving outputs)
+conda activate pyrrm && jupytext --to notebook --update notebooks/script.py
 ```
 
 ## Environment Details
@@ -42,6 +42,7 @@ The `pyrrm` conda environment contains all required dependencies:
 
 - **Python**: 3.11
 - **Core**: numpy, pandas, scipy, matplotlib, seaborn
+- **Acceleration**: numba (JIT compilation for 30-70x faster model runs)
 - **Calibration**: pydream, scikit-learn
 - **Sensitivity**: SALib
 - **Notebooks**: jupytext
@@ -57,7 +58,7 @@ conda create -n pyrrm python=3.11 -y
 # Activate and install dependencies
 conda activate pyrrm
 pip install numpy pandas scipy matplotlib seaborn
-pip install pydream SALib scikit-learn jupytext
+pip install numba pydream SALib scikit-learn jupytext
 pip install ipykernel
 
 # Register kernel for Jupyter/Cursor notebooks
@@ -74,6 +75,7 @@ To verify the environment is correctly set up:
 ```bash
 conda activate pyrrm
 python -c "import pyrrm; print('pyrrm imported successfully')"
+python -c "from pyrrm.models import NUMBA_AVAILABLE; print(f'Numba JIT: {NUMBA_AVAILABLE}')"
 python -c "import pydream; print('pydream available')"
 ```
 

@@ -106,7 +106,7 @@ Commit when you have:
 
 1. **Edit `.py` scripts**, not `.ipynb` files
 2. **Commit the `.py` script** after making changes
-3. **Sync notebooks** using `jupytext --sync` (user responsibility)
+3. **Sync notebooks** using `jupytext --to notebook --update` (user responsibility)
 4. **Commit synced `.ipynb`** separately if needed, with message:
    ```
    chore(notebooks): sync notebooks with jupytext

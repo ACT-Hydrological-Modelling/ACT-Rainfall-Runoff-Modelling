@@ -166,7 +166,7 @@ When syncing notebooks with Jupytext:
 ```
 chore(notebooks): sync notebooks with jupytext
 
-Regenerate .ipynb files from paired .py scripts using jupytext --sync.
+Regenerate .ipynb files from paired .py scripts using jupytext --to notebook.
 No code changes - only notebook metadata updates.
 ```
 

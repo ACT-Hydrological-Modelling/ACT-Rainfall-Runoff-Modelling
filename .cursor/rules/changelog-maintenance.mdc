@@ -1,0 +1,118 @@
+---
+description: Enforces consistent CHANGELOG.md maintenance following Keep a Changelog format
+globs: ["CHANGELOG.md"]
+alwaysApply: true
+---
+
+# Changelog Maintenance
+
+`CHANGELOG.md` must be kept up to date as the codebase evolves. Follow the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format strictly.
+
+## File Location
+
+`CHANGELOG.md` lives in the project root: `/CHANGELOG.md`
+
+## When to Add an Entry
+
+Add a changelog entry for these commit types:
+
+| Commit Type | Changelog? | Category |
+|-------------|-----------|----------|
+| `feat` | **Yes** | Added |
+| `fix` | **Yes** | Fixed |
+| `refactor` (breaking) | **Yes** | Changed |
+| `perf` | **Yes** | Changed |
+| `feat` (removing) | **Yes** | Removed |
+| `deprecate` | **Yes** | Deprecated |
+| `security` | **Yes** | Security |
+| `refactor` (non-breaking) | Only if user-visible | Changed |
+| `docs` | No (unless major) | -- |
+| `style` | No | -- |
+| `chore` | No (unless user-visible) | -- |
+| `test` | No | -- |
+| `ci` | No | -- |
+
+## Entry Format
+
+Each entry is a single concise line under the appropriate category heading:
+
+```markdown
+- <Action verb> <what changed> (`<primary file or module>`)
+```
+
+**Good examples:**
+```markdown
+- Add NumPyro NUTS adapter for Bayesian MCMC calibration (`calibration/numpyro_adapter.py`)
+- Fix Sacramento UZTWM parameter bounds to match literature range (1, 300) (`models/sacramento.py`)
+- Remove SPOTPY dependency in favour of vendored SCE-UA (`calibration/sceua_adapter.py`)
+```
+
+**Bad examples:**
+```markdown
+- Updated stuff
+- Fixed bug
+- Changes to calibration module
+```
+
+## File Structure
+
+```markdown
+# Changelog
+
+All notable changes to **pyrrm** are documented in this file.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+---
+
+## [Unreleased]
+
+### Added
+- ...
+
+### Changed
+- ...
+
+### Fixed
+- ...
+
+### Removed
+- ...
+
+---
+
+## [X.Y.Z] - YYYY-MM-DD
+
+### Added
+- ...
+
+---
+
+[Unreleased]: https://github.com/ACTGovernment/ACT-Rainfall-Runoff-Modelling/compare/vX.Y.Z...HEAD
+[X.Y.Z]: https://github.com/ACTGovernment/ACT-Rainfall-Runoff-Modelling/releases/tag/vX.Y.Z
+```
+
+## Rules
+
+1. **Always add to `[Unreleased]`** -- never directly to a versioned section
+2. **Use the correct category**: Added, Changed, Deprecated, Removed, Fixed, Security
+3. **One entry per logical change** -- don't combine unrelated changes
+4. **Action verbs**: Add, Remove, Fix, Change, Deprecate, Improve, Replace, Update
+5. **Include file/module reference** in backtick-parentheses at end of entry
+6. **Chronological order** within each category -- newest entries at the bottom
+7. **No duplicate entries** -- check existing entries before adding
+
+## Version Bumping
+
+When cutting a release:
+
+1. Change `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`
+2. Add a new empty `## [Unreleased]` section above it
+3. Update the comparison links at the bottom of the file
+4. Update the version in `pyproject.toml` to match
+5. Commit as: `chore: release vX.Y.Z`
+
+## Versioning Guidelines
+
+- **Major** (X.0.0): Breaking API changes
+- **Minor** (0.X.0): New features, new models, new calibration methods
+- **Patch** (0.0.X): Bug fixes, documentation, performance improvements

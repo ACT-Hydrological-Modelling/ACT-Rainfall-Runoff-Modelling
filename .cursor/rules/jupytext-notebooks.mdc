@@ -8,11 +8,36 @@ alwaysApply: false
 
 When working with Jupyter notebooks in this project, **always use the Jupytext paired Python script workflow**.
 
-## Core Principle
+## Core Principle: `.py` is the Source of Truth
 
+- The **`.py` script is always the canonical source** for notebook content
 - **NEVER directly edit `.ipynb` notebook files**
-- **ALWAYS edit the paired `.py` script** and let Jupytext sync to the notebook
-- This ensures clean version control diffs and easier code review
+- **ALWAYS edit the paired `.py` script** and sync to the notebook
+- This ensures clean version control diffs and prevents accidental overwrites
+
+## Critical: Sync Direction
+
+**NEVER use `jupytext --sync`**. The `--sync` command compares timestamps and
+will overwrite the `.py` script if the `.ipynb` has a newer timestamp (which
+happens whenever Cursor runs cells). This destroys edits made to the `.py` file.
+
+**ALWAYS use `jupytext --to notebook`** to push changes from `.py` → `.ipynb`:
+
+```bash
+conda activate pyrrm && jupytext --to notebook notebooks/script.py
+```
+
+To preserve existing cell outputs when syncing, add `--update`:
+
+```bash
+conda activate pyrrm && jupytext --to notebook --update notebooks/script.py
+```
+
+| Command | Direction | Use when |
+|---------|-----------|----------|
+| `jupytext --to notebook script.py` | `.py` → `.ipynb` (replaces outputs) | After editing `.py`, outputs don't matter |
+| `jupytext --to notebook --update script.py` | `.py` → `.ipynb` (keeps outputs) | After editing `.py`, want to keep cached outputs |
+| ~~`jupytext --sync script.py`~~ | **BANNED** — bidirectional, timestamp-based | **Never** |
 
 ## Workflow Steps
 
@@ -25,12 +50,13 @@ When asked to create a new Jupyter notebook:
    # ---
    # jupyter:
    #   jupytext:
+   #     formats: ipynb,py:percent
    #     text_representation:
    #       extension: .py
    #       format_name: percent
    #       format_version: '1.3'
    #   kernelspec:
-   #     display_name: Python 3
+   #     display_name: pyrrm
    #     language: python
    #     name: python3
    # ---
@@ -44,7 +70,7 @@ When asked to create a new Jupyter notebook:
    ```
 
 2. Name the script with the same base name as the desired notebook
-3. The user will run `jupytext --sync script.py` to create the paired notebook
+3. Generate the paired `.ipynb` with: `jupytext --to notebook script.py`
 
 ### 2. Modifying Existing Notebooks
 
@@ -52,7 +78,7 @@ When modifications are needed to an existing notebook:
 
 1. Locate the paired `.py` script (same directory, same base name)
 2. Edit the `.py` file using the `# %%` cell delimiter syntax
-3. The user will sync changes with `jupytext --sync`
+3. Push changes to the notebook: `jupytext --to notebook --update script.py`
 
 ### 3. Cell Syntax Reference
 
@@ -83,10 +109,13 @@ Example notebooks for this project should be placed in:
 2. **Code Review**: Reviewers can easily see changes without notebook metadata noise
 3. **IDE Support**: Full IDE features (linting, autocomplete) work on `.py` files
 4. **Reproducibility**: Scripts can be run directly without Jupyter
+5. **No accidental overwrites**: One-way sync prevents `.ipynb` from clobbering `.py` edits
 
-## Commands for Users
+## Commands Reference
 
-Tell users to run these commands:
-- **Sync script to notebook**: `jupytext --sync script.py`
-- **Create notebook from script**: `jupytext --to notebook script.py`
-- **Pair existing notebook**: `jupytext --set-formats ipynb,py:percent notebook.ipynb`
+| Task | Command |
+|------|---------|
+| Push `.py` edits to notebook | `jupytext --to notebook script.py` |
+| Push edits, keep outputs | `jupytext --to notebook --update script.py` |
+| Create notebook from script | `jupytext --to notebook script.py` |
+| Pair existing notebook | `jupytext --set-formats ipynb,py:percent notebook.ipynb` |

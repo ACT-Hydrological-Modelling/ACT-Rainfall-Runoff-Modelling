@@ -22,7 +22,7 @@ This document provides high-level guidance for AI agents working on the `pyrrm` 
 
 1. **NEVER directly edit `.ipynb` files**
 2. **ALWAYS edit the paired `.py` script** using percent format (`# %%` cell delimiters)
-3. The user will sync changes using `jupytext --sync`
+3. The user will sync changes using `jupytext --to notebook --update`
 
 Example Python script format:
 ```python
