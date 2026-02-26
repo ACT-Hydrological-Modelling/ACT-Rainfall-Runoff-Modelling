@@ -1059,6 +1059,219 @@ if batch_results:
 
 # %% [markdown]
 # ---
+# ## Step 9: Diagnostic Clustermap — Which Calibration is Best?
+#
+# For each catchment we compute the **canonical diagnostic suite** on every
+# calibration experiment — 23 metrics organised into four groups:
+#
+# | Group | Metrics | Ideal | Count |
+# |-------|---------|-------|-------|
+# | **Skill** | NSE (×4 transforms), KGE (×4), KGE_np (×4) | 1 | 12 |
+# | **Error** | RMSE, MAE, SDEB | 0 | 3 |
+# | **Volume bias** | PBIAS, FHV, FMV, FLV | 0 | 4 |
+# | **Signature errors** | Sig_BFI, Sig_Flash, Sig_Q95, Sig_Q5 | 0 | 4 |
+#
+# Metrics are **normalised** so that every column follows a *"higher is better"*
+# convention:
+# - **Skill** (NSE, KGE, KGE_np): used as-is (ideal = 1).
+# - **Error** (RMSE, MAE, SDEB): negated (ideal → 0 becomes max).
+# - **Bias / signatures** (PBIAS, FHV, FMV, FLV, Sig_*): negated absolute
+#   value (ideal = 0 becomes max).
+#
+# Each column is then **min-max scaled to [0, 1]** within the catchment so that
+# the colour scale is comparable across metrics.
+#
+# A **seaborn `clustermap`** with Ward hierarchical clustering groups
+# experiments (rows) and metrics (columns) that behave similarly, making it easy
+# to spot which calibrations dominate and which metrics cluster together.
+
+# %%
+try:
+    import seaborn as sns
+    _SNS_AVAILABLE = True
+except ImportError:
+    _SNS_AVAILABLE = False
+
+from pyrrm.analysis.diagnostics import compute_diagnostics
+from pyrrm.objectives import SDEB as _SDEB_cls
+
+_sdeb_func = _SDEB_cls(alpha=0.1, lam=0.5)
+
+# ── Canonical diagnostic metrics for the clustermap ────────────────────
+#
+# 12 skill metrics  : NSE × 4 transforms + KGE × 4 + KGE_np × 4
+# 3  error metrics  : RMSE, MAE, SDEB
+# 4  volume metrics : PBIAS, FHV (high), FMV (mid), FLV (low)
+# 4  signature errs : Sig_BFI, Sig_Flash, Sig_Q95, Sig_Q5
+# -----------------------------------------------------------------------
+HEADLINE_METRICS = [
+    # Skill (higher = better, ideal = 1)
+    'NSE', 'NSE_sqrt', 'NSE_log', 'NSE_inv',
+    'KGE', 'KGE_sqrt', 'KGE_log', 'KGE_inv',
+    'KGE_np', 'KGE_np_sqrt', 'KGE_np_log', 'KGE_np_inv',
+    # Error (lower = better, ideal = 0)
+    'RMSE', 'MAE', 'SDEB',
+    # Volume bias (closer to 0 = better)
+    'PBIAS', 'FHV', 'FMV', 'FLV',
+    # Signature % errors (closer to 0 = better)
+    'Sig_BFI', 'Sig_Flash', 'Sig_Q95', 'Sig_Q5',
+]
+
+NEGATE_METRICS     = {'RMSE', 'MAE', 'SDEB'}
+ABS_NEGATE_METRICS = {'PBIAS', 'FHV', 'FMV', 'FLV',
+                      'Sig_BFI', 'Sig_Flash', 'Sig_Q95', 'Sig_Q5'}
+
+
+def _build_diagnostics_df(
+    result: BatchResult,
+    gauge_id: str,
+) -> pd.DataFrame:
+    """Build a DataFrame of canonical diagnostics for every experiment."""
+    rows = {}
+    for key, report in result.results.items():
+        metrics = dict(compute_diagnostics(report.simulated, report.observed))
+        metrics['SDEB'] = float(_sdeb_func(report.observed, report.simulated))
+        short_key = key.replace(f'{gauge_id}_', '', 1)
+        rows[short_key] = {m: metrics.get(m, np.nan) for m in HEADLINE_METRICS}
+    return pd.DataFrame.from_dict(rows, orient='index')
+
+
+def _normalise_higher_is_better(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise so every column follows 'higher = better' in [0, 1].
+
+    Handles NaN, +/-inf, and constant columns gracefully so that
+    scipy's linkage never encounters non-finite values.
+
+    Note: A column can be constant (e.g. all 0) when the metric is undefined
+    (NaN) for every experiment. For ephemeral/low-flow gauges, Sig_Q95 and FLV
+    now use fallbacks (0 or 100) instead of NaN; see compute_diagnostics Notes.
+    """
+    df_norm = df.copy()
+
+    df_norm.replace([np.inf, -np.inf], np.nan, inplace=True)
+
+    for col in df_norm.columns:
+        if col in NEGATE_METRICS:
+            df_norm[col] = -df_norm[col]
+        elif col in ABS_NEGATE_METRICS:
+            df_norm[col] = -df_norm[col].abs()
+
+    for col in df_norm.columns:
+        finite_min = df_norm[col].min()
+        if pd.isna(finite_min):
+            finite_min = 0.0
+        df_norm[col] = df_norm[col].fillna(finite_min)
+
+    col_min = df_norm.min()
+    col_max = df_norm.max()
+    span = col_max - col_min
+    span = span.replace(0.0, 1.0)
+    df_norm = (df_norm - col_min) / span
+
+    df_norm = df_norm.fillna(0.0)
+    return df_norm
+
+
+# ── Generate one clustermap per catchment ──────────────────────────────
+if not batch_results:
+    print("No batch results available — run Step 6 first.")
+elif not _SNS_AVAILABLE:
+    print("seaborn is not installed — install with:  pip install seaborn")
+else:
+    for gauge_id, result in batch_results.items():
+        if not result.results:
+            print(f"  {gauge_id}: no successful experiments, skipping.")
+            continue
+
+        df_raw  = _build_diagnostics_df(result, gauge_id)
+        df_norm = _normalise_higher_is_better(df_raw)
+
+        n_rows = len(df_norm)
+        fig_h  = max(10, 0.45 * n_rows)
+
+        g = sns.clustermap(
+            df_norm,
+            method='ward',
+            metric='euclidean',
+            cmap='RdYlGn',
+            figsize=(16, fig_h),
+            row_cluster=True,
+            col_cluster=True,
+            linewidths=0.5,
+            linecolor='white',
+            annot=True,
+            fmt='.2f',
+            annot_kws={'size': 7},
+            dendrogram_ratio=(0.12, 0.08),
+            cbar=False,
+        )
+        if g.ax_cbar is not None:
+            g.ax_cbar.set_visible(False)
+        g.figure.suptitle(
+            f'Gauge {gauge_id} — Calibration Diagnostic Clustermap',
+            y=1.02, fontsize=14, fontweight='bold',
+        )
+        plt.show()
+
+        # ── Top-3 experiments by mean normalised score ─────────────
+        mean_scores = df_norm.mean(axis=1).sort_values(ascending=False)
+        print(f"\n  Gauge {gauge_id} — Top-5 experiments (mean normalised score):")
+        for rank, (exp, score) in enumerate(mean_scores.head(5).items(), 1):
+            print(f"    {rank}. {exp:<45s}  {score:.3f}")
+        print()
+
+
+# %% [markdown]
+# ### Stylized table — raw values with per-category color scales
+#
+# Raw diagnostic values in a table with **per-category** color scaling so that
+# each metric type is interpreted correctly: skill (green = 1), error (green =
+# low), volume/signature (green = near 0). No single global scale; each
+# column or group uses a scale appropriate to that metric.
+
+# %%
+# Column groups for per-category styling (same order as HEADLINE_METRICS)
+_METRIC_SKILL = [
+    'NSE', 'NSE_sqrt', 'NSE_log', 'NSE_inv',
+    'KGE', 'KGE_sqrt', 'KGE_log', 'KGE_inv',
+    'KGE_np', 'KGE_np_sqrt', 'KGE_np_log', 'KGE_np_inv',
+]
+_METRIC_ERROR = ['RMSE', 'MAE', 'SDEB']
+_METRIC_VOLUME = ['PBIAS', 'FHV', 'FMV', 'FLV']
+_METRIC_SIG = ['Sig_BFI', 'Sig_Flash', 'Sig_Q95', 'Sig_Q5']
+
+def _style_diagnostics_table(df_raw: pd.DataFrame):
+    """Style raw diagnostics with per-column color scales (green = best in that column)."""
+    df = df_raw.replace([np.inf, -np.inf], np.nan).copy()
+    skill_cols = [c for c in _METRIC_SKILL if c in df.columns]
+    error_cols = [c for c in _METRIC_ERROR if c in df.columns]
+    volume_cols = [c for c in _METRIC_VOLUME if c in df.columns]
+    sig_cols = [c for c in _METRIC_SIG if c in df.columns]
+
+    sty = df.style.format('{:.3g}', na_rep='—')
+    # Skill: best = max (1). Per-column scale from column min to max; high = green.
+    if skill_cols:
+        sty = sty.background_gradient(subset=skill_cols, cmap='RdYlGn', axis=0)
+    # Error: best = lowest. Per-column scale; invert so low = green.
+    for col in error_cols:
+        sty = sty.background_gradient(subset=[col], cmap='RdYlGn', gmap=-df[col], axis=0)
+    # Volume / Signature: best = closest to zero. Per-column scale; |value| small = green.
+    for col in volume_cols:
+        sty = sty.background_gradient(subset=[col], cmap='RdYlGn', gmap=-np.abs(df[col]), axis=0)
+    for col in sig_cols:
+        sty = sty.background_gradient(subset=[col], cmap='RdYlGn', gmap=-np.abs(df[col]), axis=0)
+    return sty
+
+if batch_results:
+    for gauge_id, result in batch_results.items():
+        if not result.results:
+            continue
+        df_raw = _build_diagnostics_df(result, gauge_id)
+        styled = _style_diagnostics_table(df_raw)
+        display(styled.set_caption(f'Gauge {gauge_id} — Raw diagnostics (green = best per column)'))
+
+# %% [markdown]
+# ---
 # ## Summary
 #
 # | Feature | Component | Description |
@@ -1070,6 +1283,7 @@ if batch_results:
 # | **Batch execution** | `BatchExperimentRunner` | Resumable, parallel-friendly per-gauge calibration |
 # | **Result export** | `BatchResult.export()` | Excel / CSV export with diagnostics and FDC |
 # | **Resume** | `run(resume=True)` | Skip previously completed experiments on re-run |
+# | **Diagnostic clustermap** | `sns.clustermap` + `compute_diagnostics` | Hierarchical heatmap ranking calibrations per catchment |
 #
 # ### Key Takeaways
 #
