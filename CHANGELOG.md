@@ -15,6 +15,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add Bayesian Model Averaging (BMA) module with five combination levels: equal weights, GRC, Bayesian stacking, global BMA (PyMC), and regime-specific BMA with sigmoid blending (`bma/`)
+- Add `BMAConfig` dataclass with ACT CV presets and flexible year-boundary / block-size options (`bma/config.py`)
+- Add `BMARunner` pipeline orchestrator for end-to-end cross-validated BMA evaluation (`bma/pipeline.py`)
+- Add water-year-aligned block temporal CV and expanding-window CV with configurable buffer zones (`bma/data_prep.py`)
+- Add three-step model pre-screening: hard thresholds, residual correlation clustering, regime specialist preservation (`bma/pre_screen.py`)
+- Add probabilistic evaluation metrics: CRPS (ensemble), PIT, coverage, sharpness, regime-specific evaluation (`bma/evaluation.py`)
+- Add BMA-specific visualization: weight comparison, posterior violins, prediction bands, PIT histograms, regime weight heatmap (`bma/visualization.py`)
+- Add `[bma]` optional dependency group in `pyproject.toml` for PyMC, ArviZ, NUMPyro, JAX, scikit-learn (`pip install pyrrm[bma]`)
+- Add BMA test suite: 130 tests covering config, data prep, CV splits, pre-screening, Levels 1-5, evaluation metrics, prediction, and visualization (`bma/tests/`)
+- Add BMA / PyMC CI tier (Tier 4) in GitHub Actions workflow for dedicated BMA test coverage (`.github/workflows/ci.yml`)
+- Add BMA evaluation notebook for LBG headwater catchments: 10-step tutorial with pre-screening, Levels 1-5, CV, multi-gauge comparison, and CV sensitivity (`notebooks_ACT/LBG/bma_evaluation.py`)
 - Add `dream_result_to_inference_data()` converter to build ArviZ `InferenceData` from PyDREAM `CalibrationResult` chain data (`visualization/mcmc_plots.py`)
 - Add `plot_mcmc_forest()` wrapper around `az.plot_forest` for credible-interval forest plots (`visualization/mcmc_plots.py`)
 - Numba JIT-compiled kernels for Sacramento, GR4J, GR5J, and GR6J with 30-70x speedup over pure Python (`models/numba_kernels.py`)
