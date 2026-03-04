@@ -213,12 +213,65 @@ def _calculate_basic_metrics(obs: np.ndarray, sim: np.ndarray) -> dict:
         metrics['KGE_inv_beta'] = np.nan
     
     # ==========================================================================
+    # KGE non-parametric and variants
+    # ==========================================================================
+    from scipy import stats as scipy_stats
+    
+    # KGE non-parametric uses Spearman correlation and normalized flow duration curves
+    def kge_nonparametric(obs_arr, sim_arr):
+        """Compute KGE non-parametric: uses Spearman r, relative variability from FDC."""
+        if len(obs_arr) < 3:
+            return np.nan, np.nan, np.nan, np.nan
+        # Spearman correlation
+        rho, _ = scipy_stats.spearmanr(obs_arr, sim_arr)
+        # Relative variability from FDC
+        obs_sorted = np.sort(obs_arr)[::-1]
+        sim_sorted = np.sort(sim_arr)[::-1]
+        alpha_np = np.mean(sim_sorted) / np.mean(obs_sorted) if np.mean(obs_sorted) > 0 else np.nan
+        # Beta as bias ratio
+        beta_np = np.mean(sim_arr) / np.mean(obs_arr) if np.mean(obs_arr) != 0 else np.nan
+        if np.isnan(rho) or np.isnan(alpha_np) or np.isnan(beta_np):
+            return np.nan, rho, alpha_np, beta_np
+        kge_np = 1 - np.sqrt((rho - 1)**2 + (alpha_np - 1)**2 + (beta_np - 1)**2)
+        return kge_np, rho, alpha_np, beta_np
+    
+    # Standard KGE_np
+    kge_np_val, kge_np_rho, kge_np_alpha, kge_np_beta = kge_nonparametric(obs_v, sim_v)
+    metrics['KGE_np'] = kge_np_val
+    
+    # KGE_np on sqrt(Q)
+    kge_np_sqrt_val, _, _, _ = kge_nonparametric(sqrt_obs, sqrt_sim)
+    metrics['KGE_np_sqrt'] = kge_np_sqrt_val
+    
+    # KGE_np on log(Q)
+    if len(obs_pos) > 0:
+        log_obs_np = np.log(obs_pos + 1)
+        log_sim_np = np.log(np.maximum(sim_pos, 0) + 1)
+        kge_np_log_val, _, _, _ = kge_nonparametric(log_obs_np, log_sim_np)
+        metrics['KGE_np_log'] = kge_np_log_val
+    else:
+        metrics['KGE_np_log'] = np.nan
+    
+    # KGE_np on 1/Q
+    if len(obs_pos_inv) > 0:
+        inv_obs_np = 1.0 / obs_pos_inv
+        inv_sim_np = 1.0 / np.maximum(sim_pos_inv, 0.01)
+        kge_np_inv_val, _, _, _ = kge_nonparametric(inv_obs_np, inv_sim_np)
+        metrics['KGE_np_inv'] = kge_np_inv_val
+    else:
+        metrics['KGE_np_inv'] = np.nan
+    
+    # ==========================================================================
     # Traditional error metrics
     # ==========================================================================
     metrics['RMSE'] = np.sqrt(np.mean((sim_v - obs_v) ** 2))
     metrics['MAE'] = np.mean(np.abs(sim_v - obs_v))
     metrics['PBIAS'] = 100 * np.sum(sim_v - obs_v) / np.sum(obs_v) if np.sum(obs_v) != 0 else np.nan
     metrics['R2'] = r ** 2 if not np.isnan(r) else np.nan
+    
+    # SDEB - Standard Deviation of Error Bias (captures timing/shape errors)
+    residuals = sim_v - obs_v
+    metrics['SDEB'] = np.std(residuals)
     
     # ==========================================================================
     # FDC-based metrics (segmented flow errors)
@@ -256,6 +309,32 @@ def _calculate_basic_metrics(obs: np.ndarray, sim: np.ndarray) -> dict:
     
     metrics['Q90_bias'] = 100 * (q90_sim - q90_obs) / q90_obs if q90_obs > 0 else np.nan
     metrics['Q95_bias'] = 100 * (q95_sim - q95_obs) / q95_obs if q95_obs > 0 else np.nan
+    
+    # FHV, FMV, FLV - Flow volume errors (high, mid, low flow segments)
+    # FHV: High flow volume error (top 2% of flows)
+    idx_2pct = max(1, int(0.02 * n))
+    fhv_obs = np.sum(obs_sorted[:idx_2pct])
+    fhv_sim = np.sum(sim_sorted[:idx_2pct])
+    metrics['FHV'] = 100 * (fhv_sim - fhv_obs) / fhv_obs if fhv_obs > 0 else np.nan
+    
+    # FMV: Mid flow volume error (20-70% exceedance)
+    idx_20pct = int(0.20 * n)
+    idx_70pct = int(0.70 * n)
+    fmv_obs = np.sum(obs_sorted[idx_20pct:idx_70pct])
+    fmv_sim = np.sum(sim_sorted[idx_20pct:idx_70pct])
+    metrics['FMV'] = 100 * (fmv_sim - fmv_obs) / fmv_obs if fmv_obs > 0 else np.nan
+    
+    # FLV: Low flow volume error (bottom 30% of flows, log-transformed)
+    idx_70pct_start = int(0.70 * n)
+    lfv_obs = obs_sorted[idx_70pct_start:]
+    lfv_sim = sim_sorted[idx_70pct_start:]
+    # Use log for low flows to give them more weight
+    if np.all(lfv_obs > 0) and np.all(lfv_sim > 0):
+        log_lfv_obs = np.sum(np.log(lfv_obs + 1))
+        log_lfv_sim = np.sum(np.log(np.maximum(lfv_sim, 0.001) + 1))
+        metrics['FLV'] = 100 * (log_lfv_sim - log_lfv_obs) / log_lfv_obs if log_lfv_obs > 0 else np.nan
+    else:
+        metrics['FLV'] = np.nan
     
     # FDC slope (mid-section: 33-66% exceedance)
     idx_33 = int(0.33 * n)
@@ -317,6 +396,68 @@ def _calculate_basic_metrics(obs: np.ndarray, sim: np.ndarray) -> dict:
         metrics['Zero_flow_error'] = 100 * (zf_sim - zf_obs) / zf_obs
     else:
         metrics['Zero_flow_error'] = zf_sim - zf_obs  # Absolute difference in %
+    
+    # ==========================================================================
+    # Signature-based metrics (percent error from observed)
+    # ==========================================================================
+    # Sig_BFI: Baseflow Index error
+    # Simple baseflow separation using Eckhardt filter approximation
+    def baseflow_index(flow):
+        """Simple BFI using min-max approach over 5-day blocks."""
+        if len(flow) < 5:
+            return np.nan
+        block_size = 5
+        n_blocks = len(flow) // block_size
+        if n_blocks == 0:
+            return np.nan
+        baseflow = np.zeros(len(flow))
+        for i in range(n_blocks):
+            start = i * block_size
+            end = start + block_size
+            baseflow[start:end] = np.min(flow[start:end])
+        # Handle remainder
+        if len(flow) % block_size > 0:
+            baseflow[n_blocks * block_size:] = np.min(flow[n_blocks * block_size:])
+        return np.sum(baseflow) / np.sum(flow) if np.sum(flow) > 0 else np.nan
+    
+    bfi_obs = baseflow_index(obs_v)
+    bfi_sim = baseflow_index(sim_v)
+    if not np.isnan(bfi_obs) and bfi_obs > 0:
+        metrics['Sig_BFI'] = 100 * (bfi_sim - bfi_obs) / bfi_obs
+    else:
+        metrics['Sig_BFI'] = np.nan
+    
+    # Sig_Flash: Flashiness Index error (Richards-Baker)
+    def flashiness_index(flow):
+        """Richards-Baker flashiness index."""
+        if len(flow) < 2:
+            return np.nan
+        path_length = np.sum(np.abs(np.diff(flow)))
+        total_flow = np.sum(flow)
+        return path_length / total_flow if total_flow > 0 else np.nan
+    
+    flash_obs = flashiness_index(obs_v)
+    flash_sim = flashiness_index(sim_v)
+    if not np.isnan(flash_obs) and flash_obs > 0:
+        metrics['Sig_Flash'] = 100 * (flash_sim - flash_obs) / flash_obs
+    else:
+        metrics['Sig_Flash'] = np.nan
+    
+    # Sig_Q95: Low flow signature (Q95 = flow exceeded 95% of time)
+    q95_pct_obs = np.percentile(obs_v, 5)  # Q95 is 5th percentile (exceeded 95% of time)
+    q95_pct_sim = np.percentile(sim_v, 5)
+    if q95_pct_obs > 0:
+        metrics['Sig_Q95'] = 100 * (q95_pct_sim - q95_pct_obs) / q95_pct_obs
+    else:
+        metrics['Sig_Q95'] = np.nan
+    
+    # Sig_Q5: High flow signature (Q5 = flow exceeded 5% of time)
+    q5_pct_obs = np.percentile(obs_v, 95)  # Q5 is 95th percentile (exceeded 5% of time)
+    q5_pct_sim = np.percentile(sim_v, 95)
+    if q5_pct_obs > 0:
+        metrics['Sig_Q5'] = 100 * (q5_pct_sim - q5_pct_obs) / q5_pct_obs
+    else:
+        metrics['Sig_Q5'] = np.nan
     
     return metrics
 
@@ -1097,36 +1238,28 @@ def plot_parameter_bounds_chart(
 # Plotly Functions
 # =============================================================================
 
-def plot_report_card_plotly(
+def plot_report_card_components(
     report: 'CalibrationReport',
-    height: int = 1400
-):
+) -> dict:
     """
-    Generate an interactive Plotly report card with 2-column layout.
+    Generate separate Plotly figures for each report card component.
     
-    Layout (2 columns):
-    ┌───────────────────────────────────────┬─────────────────────────────────────┐
-    │  HEADER: Catchment Name               │  HEADER (continued)                 │
-    ├───────────────────────────────────────┼─────────────────────────────────────┤
-    │  Hydrograph (Linear Scale)            │  Comprehensive Performance Metrics  │
-    │                                       │  - NSE variants (Q, log, sqrt, inv) │
-    ├───────────────────────────────────────┤  - KGE variants (Q, log, sqrt, inv) │
-    │  Hydrograph (Log Scale)               │  - KGE components (r, α, β)         │
-    │                                       │  - Error metrics (RMSE, MAE, PBIAS) │
-    ├───────────────────────────────────────┼─────────────────────────────────────┤
-    │  Flow Duration Curve                  │  KGE Components Bar Chart           │
-    │                                       │                                     │
-    ├───────────────────────────────────────┼─────────────────────────────────────┤
-    │  Scatter Plot                         │  Parameter Bounds Chart             │
-    │                                       │                                     │
-    └───────────────────────────────────────┴─────────────────────────────────────┘
+    This approach returns independent figures that can be rendered sequentially,
+    avoiding the layout complexity issues of a single combined figure.
     
     Args:
         report: CalibrationReport instance
-        height: Figure height in pixels
         
     Returns:
-        Plotly Figure object (save with fig.write_html('file.html'))
+        Dictionary with keys:
+        - 'header': dict with catchment_name, gauge_id, subtitle info
+        - 'hydrograph_linear': Plotly Figure for linear-scale hydrograph
+        - 'hydrograph_log': Plotly Figure for log-scale hydrograph
+        - 'metrics_table': Plotly Figure with diagnostic metrics table
+        - 'fdc': Plotly Figure for flow duration curve
+        - 'scatter': Plotly Figure for scatter plot
+        - 'parameters': Plotly Figure for parameter bounds chart
+        - 'signatures_table': Plotly Figure with hydrologic signatures table
     """
     if not PLOTLY_AVAILABLE:
         raise ImportError("Plotly is required for this function. Install with: pip install plotly")
@@ -1138,6 +1271,24 @@ def plot_report_card_plotly(
     # Calculate comprehensive metrics
     metrics = _calculate_basic_metrics(obs, sim)
     
+    # Compute hydrologic signatures for observed and simulated
+    try:
+        from pyrrm.analysis.signatures import compute_all_signatures, signature_percent_error
+        obs_sigs = compute_all_signatures(obs, dates)
+        sim_sigs = compute_all_signatures(sim, dates)
+        pct_errors = {}
+        for sig_name in obs_sigs:
+            pct_errors[sig_name] = signature_percent_error(
+                obs_sigs[sig_name],
+                sim_sigs.get(sig_name, np.nan),
+            )
+        has_signatures = True
+    except Exception:
+        has_signatures = False
+        obs_sigs = {}
+        sim_sigs = {}
+        pct_errors = {}
+    
     # Colors
     color_obs = '#e74c3c'
     color_sim = '#3498db'
@@ -1145,310 +1296,196 @@ def plot_report_card_plotly(
     color_good = '#f39c12'
     color_poor = '#e74c3c'
     
-    # Create subplots with 2-column layout
-    fig = make_subplots(
-        rows=5, cols=2,
-        subplot_titles=(
-            '', '',  # Row 1: Header
-            'Hydrograph (Linear Scale)', 'Comprehensive Performance Metrics',
-            '', '',  # Row 3: Hydro Log + (merged with metrics table)
-            'Flow Duration Curve', 'KGE Components',
-            'Scatter Plot', 'Calibrated Parameters vs Bounds'
-        ),
-        row_heights=[0.05, 0.22, 0.22, 0.22, 0.29],
-        column_widths=[0.55, 0.45],
-        specs=[
-            [{"type": "scatter", "colspan": 2}, None],  # Header placeholder
-            [{"type": "scatter"}, {"type": "table", "rowspan": 2}],  # Hydro + Metrics Table (spans 2 rows)
-            [{"type": "scatter"}, None],  # Hydro Log
-            [{"type": "scatter"}, {"type": "bar"}],  # FDC + KGE
-            [{"type": "scatter"}, {"type": "bar"}]  # Scatter + Params
-        ],
-        vertical_spacing=0.05,
-        horizontal_spacing=0.08
+    # Common layout settings
+    common_layout = dict(
+        paper_bgcolor='white',
+        plot_bgcolor='#f8f9fa',
+        font=dict(family='Arial, sans-serif'),
+        margin=dict(l=60, r=20, t=40, b=40),
     )
     
+    result = {}
+    
     # ==========================================================================
-    # Header
+    # Header info
     # ==========================================================================
     catchment_name = report.catchment_info.get('name', 'Unknown Catchment')
     gauge_id = report.catchment_info.get('gauge_id', '')
     area = report.catchment_info.get('area_km2', '')
     
-    title_text = f"<b>{catchment_name}</b>"
-    if gauge_id:
-        title_text += f" ({gauge_id})"
-    
-    subtitle = f"Method: {report.result.method} | Objective: {report.result.objective_name}"
-    subtitle += f" | Best: {report.result.best_objective:.4f}"
-    if area:
-        subtitle += f" | Area: {area} km²"
-    subtitle += f" | Period: {report.calibration_period[0]} to {report.calibration_period[1]}"
+    result['header'] = {
+        'catchment_name': catchment_name,
+        'gauge_id': gauge_id,
+        'area': area,
+        'method': report.result.method,
+        'objective_name': report.result.objective_name,
+        'best_objective': report.result.best_objective,
+        'period_start': str(report.calibration_period[0]),
+        'period_end': str(report.calibration_period[1]),
+    }
     
     # ==========================================================================
-    # Row 2, Col 1: Hydrograph (Linear Scale)
+    # Hydrograph (Linear Scale)
     # ==========================================================================
-    fig.add_trace(
-        go.Scatter(x=dates, y=obs, name='Observed', line=dict(color=color_obs, width=1),
-                   showlegend=True, legendgroup='main'),
-        row=2, col=1
+    fig_hydro = go.Figure()
+    fig_hydro.add_trace(go.Scatter(x=dates, y=obs, name='Observed', line=dict(color=color_obs, width=1)))
+    fig_hydro.add_trace(go.Scatter(x=dates, y=sim, name='Simulated', line=dict(color=color_sim, width=1)))
+    fig_hydro.update_layout(
+        title='Hydrograph (Linear Scale)',
+        yaxis_title='Flow (ML/day)',
+        height=300,
+        legend=dict(orientation='h', y=1.02, x=0.5, xanchor='center'),
+        **common_layout
     )
-    fig.add_trace(
-        go.Scatter(x=dates, y=sim, name='Simulated', line=dict(color=color_sim, width=1),
-                   showlegend=True, legendgroup='main'),
-        row=2, col=1
-    )
-    fig.update_yaxes(title_text="Flow (ML/day)", row=2, col=1)
+    result['hydrograph_linear'] = fig_hydro
     
     # ==========================================================================
-    # Row 2-3, Col 2: Comprehensive Performance Metrics Table (spans 2 rows)
-    # ==========================================================================
-    def get_color_for_metric(value, metric_name):
-        if np.isnan(value):
-            return '#888888'
-        # NSE and KGE variants
-        if any(x in metric_name for x in ['NSE', 'KGE', 'R²']):
-            if 'component' not in metric_name.lower() and metric_name not in ['r', 'α', 'β']:
-                if value >= 0.75: return color_excellent
-                elif value >= 0.5: return color_good
-                else: return color_poor
-        # KGE components (close to 1 is good)
-        if metric_name in ['r', 'α', 'β']:
-            if 0.8 <= value <= 1.2: return color_excellent
-            elif 0.5 <= value <= 1.5: return color_good
-            else: return color_poor
-        # PBIAS (close to 0 is good)
-        if 'PBIAS' in metric_name:
-            if abs(value) <= 10: return color_excellent
-            elif abs(value) <= 25: return color_good
-            else: return color_poor
-        return '#2c3e50'
-    
-    # Build comprehensive metric list with grouping
-    metric_items = [
-        # NSE Variants
-        ('<b>NSE Variants</b>', '', '', True),
-        ('NSE', f"{metrics.get('NSE', np.nan):.4f}" if not np.isnan(metrics.get('NSE', np.nan)) else "N/A", 'Nash-Sutcliffe Efficiency', False),
-        ('NSE_log', f"{metrics.get('NSE_log', np.nan):.4f}" if not np.isnan(metrics.get('NSE_log', np.nan)) else "N/A", 'NSE on log(Q)', False),
-        ('NSE_sqrt', f"{metrics.get('NSE_sqrt', np.nan):.4f}" if not np.isnan(metrics.get('NSE_sqrt', np.nan)) else "N/A", 'NSE on √Q', False),
-        ('NSE_inv', f"{metrics.get('NSE_inv', np.nan):.4f}" if not np.isnan(metrics.get('NSE_inv', np.nan)) else "N/A", 'NSE on 1/Q', False),
-        # KGE Variants
-        ('<b>KGE Variants</b>', '', '', True),
-        ('KGE', f"{metrics.get('KGE', np.nan):.4f}" if not np.isnan(metrics.get('KGE', np.nan)) else "N/A", 'Kling-Gupta Efficiency', False),
-        ('KGE(log)', f"{metrics.get('KGE_log', np.nan):.4f}" if not np.isnan(metrics.get('KGE_log', np.nan)) else "N/A", 'KGE on log(Q)', False),
-        ('KGE(√Q)', f"{metrics.get('KGE_sqrt', np.nan):.4f}" if not np.isnan(metrics.get('KGE_sqrt', np.nan)) else "N/A", 'KGE on √Q', False),
-        ('KGE(1/Q)', f"{metrics.get('KGE_inv', np.nan):.4f}" if not np.isnan(metrics.get('KGE_inv', np.nan)) else "N/A", 'KGE on 1/Q', False),
-        # KGE Components
-        ('<b>KGE Components</b>', '', '', True),
-        ('r (corr)', f"{metrics.get('KGE_r', np.nan):.4f}" if not np.isnan(metrics.get('KGE_r', np.nan)) else "N/A", 'Pearson correlation', False),
-        ('α (var)', f"{metrics.get('KGE_alpha', np.nan):.4f}" if not np.isnan(metrics.get('KGE_alpha', np.nan)) else "N/A", 'Variability ratio σsim/σobs', False),
-        ('β (bias)', f"{metrics.get('KGE_beta', np.nan):.4f}" if not np.isnan(metrics.get('KGE_beta', np.nan)) else "N/A", 'Bias ratio μsim/μobs', False),
-        # Error Metrics
-        ('<b>Error Metrics</b>', '', '', True),
-        ('PBIAS', f"{metrics.get('PBIAS', np.nan):+.2f}%" if not np.isnan(metrics.get('PBIAS', np.nan)) else "N/A", 'Percent Bias', False),
-        ('RMSE', f"{metrics.get('RMSE', np.nan):.1f}" if not np.isnan(metrics.get('RMSE', np.nan)) else "N/A", 'Root Mean Square Error', False),
-        ('MAE', f"{metrics.get('MAE', np.nan):.1f}" if not np.isnan(metrics.get('MAE', np.nan)) else "N/A", 'Mean Absolute Error', False),
-        ('R²', f"{metrics.get('R2', np.nan):.4f}" if not np.isnan(metrics.get('R2', np.nan)) else "N/A", 'Coefficient of Determination', False),
-    ]
-    
-    metric_names = []
-    metric_values = []
-    metric_descs = []
-    metric_colors_name = []
-    metric_colors_val = []
-    metric_colors_desc = []
-    
-    for name, value, desc, is_header in metric_items:
-        metric_names.append(name)
-        metric_values.append(value)
-        metric_descs.append(desc)
-        if is_header:
-            metric_colors_name.append('#34495e')
-            metric_colors_val.append('#34495e')
-            metric_colors_desc.append('#34495e')
-        else:
-            # Get numeric value for coloring
-            try:
-                num_val = float(value.replace('%', '').replace('+', ''))
-            except:
-                num_val = np.nan
-            color = get_color_for_metric(num_val, name)
-            metric_colors_name.append('#f8f9fa')
-            metric_colors_val.append(color)
-            metric_colors_desc.append('#f8f9fa')
-    
-    fig.add_trace(
-        go.Table(
-            header=dict(
-                values=['<b>Metric</b>', '<b>Value</b>', '<b>Description</b>'],
-                fill_color='#34495e',
-                font=dict(color='white', size=11),
-                align='left',
-                height=28
-            ),
-            cells=dict(
-                values=[metric_names, metric_values, metric_descs],
-                fill_color=[metric_colors_name, metric_colors_val, metric_colors_desc],
-                font=dict(
-                    color=[['white' if '#34495e' in c else '#2c3e50' for c in metric_colors_name],
-                           ['white' if c != '#f8f9fa' else '#2c3e50' for c in metric_colors_val],
-                           ['white' if '#34495e' in c else '#7f8c8d' for c in metric_colors_desc]],
-                    size=10
-                ),
-                align='left',
-                height=22
-            ),
-            columnwidth=[0.2, 0.2, 0.6]
-        ),
-        row=2, col=2
-    )
-    
-    # ==========================================================================
-    # Row 3, Col 1: Hydrograph (Log Scale)
+    # Hydrograph (Log Scale)
     # ==========================================================================
     obs_log = np.where(obs > 0, obs, np.nan)
     sim_log = np.where(sim > 0, sim, np.nan)
-    fig.add_trace(
-        go.Scatter(x=dates, y=obs_log, name='Observed', line=dict(color=color_obs, width=1),
-                   showlegend=False),
-        row=3, col=1
+    fig_hydro_log = go.Figure()
+    fig_hydro_log.add_trace(go.Scatter(x=dates, y=obs_log, name='Observed', line=dict(color=color_obs, width=1)))
+    fig_hydro_log.add_trace(go.Scatter(x=dates, y=sim_log, name='Simulated', line=dict(color=color_sim, width=1)))
+    fig_hydro_log.update_layout(
+        title='Hydrograph (Log Scale)',
+        yaxis_title='Flow (ML/day)',
+        yaxis_type='log',
+        height=300,
+        legend=dict(orientation='h', y=1.02, x=0.5, xanchor='center'),
+        **common_layout
     )
-    fig.add_trace(
-        go.Scatter(x=dates, y=sim_log, name='Simulated', line=dict(color=color_sim, width=1),
-                   showlegend=False),
-        row=3, col=1
-    )
-    fig.update_yaxes(type="log", title_text="Flow (ML/day)", row=3, col=1)
-    # Add subtitle for log scale hydrograph
-    fig.add_annotation(
-        x=0.5, y=1.0, xref='x3 domain', yref='y3 domain',
-        text="<b>Hydrograph (Log Scale)</b>",
-        showarrow=False, font=dict(size=12),
-        yanchor='bottom'
-    )
+    result['hydrograph_log'] = fig_hydro_log
     
     # ==========================================================================
-    # Row 4, Col 1: Flow Duration Curve
+    # Diagnostic Metrics Table
+    # ==========================================================================
+    HEADLINE_METRICS = [
+        "NSE", "NSE_sqrt", "NSE_log", "NSE_inv",
+        "KGE", "KGE_sqrt", "KGE_log", "KGE_inv",
+        "KGE_np", "KGE_np_sqrt", "KGE_np_log", "KGE_np_inv",
+        "RMSE", "MAE", "SDEB",
+        "PBIAS", "FHV", "FMV", "FLV",
+        "Sig_BFI", "Sig_Flash", "Sig_Q95", "Sig_Q5",
+    ]
+    EFFICIENCY_METRICS = {"NSE", "NSE_sqrt", "NSE_log", "NSE_inv", "KGE", "KGE_sqrt", "KGE_log", "KGE_inv",
+                         "KGE_np", "KGE_np_sqrt", "KGE_np_log", "KGE_np_inv"}
+    ERROR_METRICS = {"RMSE", "MAE", "SDEB"}
+    PERCENT_ERROR_METRICS = {"PBIAS", "FHV", "FMV", "FLV", "Sig_BFI", "Sig_Flash", "Sig_Q95", "Sig_Q5"}
+    METRIC_DESCRIPTIONS = {
+        "NSE": "Nash-Sutcliffe (high flows)", "NSE_sqrt": "NSE on √Q (balanced)",
+        "NSE_log": "NSE on log(Q) (low flows)", "NSE_inv": "NSE on 1/Q (very low flows)",
+        "KGE": "Kling-Gupta (high flows)", "KGE_sqrt": "KGE on √Q (balanced)",
+        "KGE_log": "KGE on log(Q) (low flows)", "KGE_inv": "KGE on 1/Q (very low flows)",
+        "KGE_np": "KGE non-parametric (high flows)", "KGE_np_sqrt": "KGE_np on √Q (balanced)",
+        "KGE_np_log": "KGE_np on log(Q) (low flows)", "KGE_np_inv": "KGE_np on 1/Q (very low flows)",
+        "RMSE": "Root Mean Square Error", "MAE": "Mean Absolute Error", "SDEB": "Spectral Decomp. Error Bias",
+        "PBIAS": "Volume Bias (%)", "FHV": "High Flow Volume Error (%)",
+        "FMV": "Mid Flow Volume Error (%)", "FLV": "Low Flow Volume Error (%)",
+        "Sig_BFI": "Baseflow Index Error (%)", "Sig_Flash": "Flashiness Error (%)",
+        "Sig_Q95": "Q95 (low flow) Error (%)", "Sig_Q5": "Q5 (high flow) Error (%)",
+    }
+    
+    def get_metric_color(value, metric_name):
+        if np.isnan(value):
+            return '#888888'
+        if metric_name in EFFICIENCY_METRICS:
+            if value >= 0.7: return color_excellent
+            elif value >= 0.5: return color_good
+            else: return color_poor
+        if metric_name in ERROR_METRICS:
+            return '#2c3e50'
+        if metric_name in PERCENT_ERROR_METRICS:
+            if abs(value) <= 10: return color_excellent
+            elif abs(value) <= 20: return color_good
+            else: return color_poor
+        return '#2c3e50'
+    
+    metric_names, metric_values, metric_descs, cell_colors = [], [], [], []
+    for metric in HEADLINE_METRICS:
+        val = metrics.get(metric, np.nan)
+        metric_names.append(metric)
+        metric_descs.append(METRIC_DESCRIPTIONS.get(metric, ""))
+        if np.isnan(val):
+            metric_values.append("N/A")
+            cell_colors.append('#f8f9fa')
+        elif metric in PERCENT_ERROR_METRICS:
+            metric_values.append(f"{val:+.2f}%")
+            cell_colors.append(get_metric_color(val, metric))
+        elif metric in ERROR_METRICS:
+            metric_values.append(f"{val:.2f}")
+            cell_colors.append('#f8f9fa')
+        else:
+            metric_values.append(f"{val:.4f}")
+            cell_colors.append(get_metric_color(val, metric))
+    
+    fig_metrics = go.Figure(go.Table(
+        header=dict(values=['<b>Metric</b>', '<b>Value</b>', '<b>Description</b>'],
+                    fill_color='#34495e', font=dict(color='white', size=11), align='left', height=28),
+        cells=dict(values=[metric_names, metric_values, metric_descs],
+                   fill_color=['#f8f9fa', cell_colors, '#f8f9fa'],
+                   font=dict(color=[['#2c3e50']*len(metric_names),
+                                    ['white' if c not in ['#f8f9fa','#888888'] else '#2c3e50' for c in cell_colors],
+                                    ['#7f8c8d']*len(metric_names)], size=10),
+                   align='left', height=22),
+        columnwidth=[0.22, 0.18, 0.60]
+    ))
+    fig_metrics.update_layout(title='Diagnostic Metrics', height=650, margin=dict(l=10, r=10, t=40, b=10))
+    result['metrics_table'] = fig_metrics
+    
+    # ==========================================================================
+    # Flow Duration Curve
     # ==========================================================================
     obs_sorted = np.sort(obs[~np.isnan(obs)])[::-1]
     sim_sorted = np.sort(sim[~np.isnan(sim)])[::-1]
     exc_obs = np.arange(1, len(obs_sorted) + 1) / (len(obs_sorted) + 1) * 100
     exc_sim = np.arange(1, len(sim_sorted) + 1) / (len(sim_sorted) + 1) * 100
     
-    fig.add_trace(
-        go.Scatter(x=exc_obs, y=obs_sorted, name='Observed',
-                   line=dict(color=color_obs, width=2), showlegend=False,
-                   hovertemplate='Exceedance: %{x:.1f}%<br>Flow: %{y:.1f} ML/day<extra>Observed</extra>'),
-        row=4, col=1
+    fig_fdc = go.Figure()
+    fig_fdc.add_trace(go.Scatter(x=exc_obs, y=obs_sorted, name='Observed', line=dict(color=color_obs, width=2)))
+    fig_fdc.add_trace(go.Scatter(x=exc_sim, y=sim_sorted, name='Simulated', line=dict(color=color_sim, width=2, dash='dash')))
+    fig_fdc.update_layout(
+        title='Flow Duration Curve',
+        xaxis_title='Exceedance (%)', yaxis_title='Flow (ML/day)',
+        yaxis_type='log', xaxis_range=[0, 100],
+        height=350,
+        legend=dict(orientation='h', y=1.02, x=0.5, xanchor='center'),
+        **common_layout
     )
-    fig.add_trace(
-        go.Scatter(x=exc_sim, y=sim_sorted, name='Simulated',
-                   line=dict(color=color_sim, width=2, dash='dash'), showlegend=False,
-                   hovertemplate='Exceedance: %{x:.1f}%<br>Flow: %{y:.1f} ML/day<extra>Simulated</extra>'),
-        row=4, col=1
-    )
-    fig.update_yaxes(type="log", title_text="Flow (ML/day)", row=4, col=1)
-    fig.update_xaxes(range=[0, 100], title_text="Exceedance (%)", row=4, col=1)
+    result['fdc'] = fig_fdc
     
     # ==========================================================================
-    # Row 4, Col 2: KGE Components Breakdown
-    # ==========================================================================
-    kge_components = ['β (bias)', 'α (variability)', 'r (correlation)']
-    kge_values = [
-        metrics.get('KGE_beta', np.nan),
-        metrics.get('KGE_alpha', np.nan),
-        metrics.get('KGE_r', np.nan)
-    ]
-    kge_colors = []
-    for i, v in enumerate(kge_values):
-        if np.isnan(v):
-            kge_colors.append('#888888')
-        elif i == 2:  # correlation (r)
-            kge_colors.append(color_excellent if v >= 0.75 else color_good if v >= 0.5 else color_poor)
-        else:  # alpha and beta (close to 1 is good)
-            kge_colors.append(color_excellent if 0.8 <= v <= 1.2 else color_good if 0.5 <= v <= 1.5 else color_poor)
-    
-    fig.add_trace(
-        go.Bar(
-            y=kge_components, 
-            x=[v if not np.isnan(v) else 0 for v in kge_values],
-            orientation='h',
-            marker_color=kge_colors,
-            text=[f'{v:.3f}' if not np.isnan(v) else 'N/A' for v in kge_values],
-            textposition='outside',
-            showlegend=False,
-            hovertemplate='%{y}: %{x:.3f}<extra></extra>'
-        ),
-        row=4, col=2
-    )
-    kge_max = max(2.0, max([v for v in kge_values if not np.isnan(v)], default=1) * 1.2)
-    fig.add_trace(
-        go.Scatter(
-            x=[1.0, 1.0], y=[-0.5, 2.5],
-            mode='lines',
-            line=dict(color=color_excellent, dash='dash', width=2),
-            showlegend=False,
-            hoverinfo='skip',
-            name='Optimal (1.0)'
-        ),
-        row=4, col=2
-    )
-    fig.update_xaxes(range=[0, kge_max], title_text="Value", row=4, col=2)
-    fig.update_yaxes(range=[-0.5, 2.5], row=4, col=2)
-    
-    # ==========================================================================
-    # Row 5, Col 1: Scatter Plot with Statistics
+    # Scatter Plot
     # ==========================================================================
     valid = ~(np.isnan(obs) | np.isnan(sim))
-    obs_valid = obs[valid]
-    sim_valid = sim[valid]
-    
-    fig.add_trace(
-        go.Scatter(x=obs_valid, y=sim_valid, mode='markers',
-                   marker=dict(color=color_sim, size=4, opacity=0.3),
-                   name='Points', showlegend=False,
-                   hovertemplate='Observed: %{x:.1f}<br>Simulated: %{y:.1f}<extra></extra>'),
-        row=5, col=1
-    )
-    
+    obs_valid, sim_valid = obs[valid], sim[valid]
     max_val = max(np.nanmax(obs_valid), np.nanmax(sim_valid))
-    fig.add_trace(
-        go.Scatter(x=[0, max_val], y=[0, max_val], mode='lines',
-                   line=dict(color='green', dash='dash', width=2),
-                   name='1:1 Line', showlegend=False),
-        row=5, col=1
-    )
-    
     z = np.polyfit(obs_valid, sim_valid, 1)
     p = np.poly1d(z)
-    fig.add_trace(
-        go.Scatter(x=[0, max_val], y=p([0, max_val]), mode='lines',
-                   line=dict(color=color_obs, dash='dot', width=2),
-                   name=f'Fit (y={z[0]:.2f}x+{z[1]:.1f})', showlegend=False),
-        row=5, col=1
+    
+    fig_scatter = go.Figure()
+    fig_scatter.add_trace(go.Scatter(x=obs_valid, y=sim_valid, mode='markers', name='Points',
+                                      marker=dict(color=color_sim, size=4, opacity=0.3)))
+    fig_scatter.add_trace(go.Scatter(x=[0, max_val], y=[0, max_val], mode='lines', name='1:1 Line',
+                                      line=dict(color='green', dash='dash', width=2)))
+    fig_scatter.add_trace(go.Scatter(x=[0, max_val], y=p([0, max_val]), mode='lines',
+                                      name=f'Fit (y={z[0]:.2f}x+{z[1]:.1f})',
+                                      line=dict(color=color_obs, dash='dot', width=2)))
+    fig_scatter.update_layout(
+        title='Scatter Plot (Observed vs Simulated)',
+        xaxis_title='Observed (ML/day)', yaxis_title='Simulated (ML/day)',
+        height=400,
+        legend=dict(orientation='h', y=1.02, x=0.5, xanchor='center'),
+        **common_layout
     )
-    
-    fig.update_xaxes(title_text="Observed (ML/day)", row=5, col=1)
-    fig.update_yaxes(title_text="Simulated (ML/day)", row=5, col=1)
-    
-    r_squared = metrics.get('R2', np.nan)
-    if not np.isnan(r_squared):
-        fig.add_annotation(
-            x=0.95, y=0.05, xref='x5 domain', yref='y5 domain',
-            text=f"<b>R² = {r_squared:.3f}</b>",
-            showarrow=False, font=dict(size=11),
-            bgcolor='white', bordercolor='gray', borderwidth=1
-        )
+    result['scatter'] = fig_scatter
     
     # ==========================================================================
-    # Row 5, Col 2: Parameter Bounds Chart
+    # Parameter Bounds Chart
     # ==========================================================================
     if report.parameter_bounds:
         param_names = list(report.result.best_parameters.keys())
-        norm_values = []
-        actual_values = []
-        bar_colors = []
-        
+        norm_values, actual_values, bar_colors = [], [], []
         for param in param_names:
             value = report.result.best_parameters[param]
             actual_values.append(value)
@@ -1457,75 +1494,175 @@ def plot_report_card_plotly(
                 norm = (value - low) / (high - low) * 100 if high > low else 50
                 norm = np.clip(norm, 0, 100)
                 norm_values.append(norm)
-                if norm < 5 or norm > 95:
-                    bar_colors.append(color_poor)
-                elif norm < 15 or norm > 85:
-                    bar_colors.append(color_good)
-                else:
-                    bar_colors.append(color_sim)
+                if norm < 5 or norm > 95: bar_colors.append(color_poor)
+                elif norm < 15 or norm > 85: bar_colors.append(color_good)
+                else: bar_colors.append(color_sim)
             else:
                 norm_values.append(50)
                 bar_colors.append(color_sim)
         
-        fig.add_trace(
-            go.Bar(
-                y=param_names, 
-                x=norm_values, 
-                orientation='h',
-                marker_color=bar_colors,
-                text=[f'{v:.2f}' for v in actual_values],
-                textposition='outside',
-                showlegend=False,
-                hovertemplate='%{y}<br>Value: %{text}<br>Position: %{x:.1f}%<extra></extra>'
-            ),
-            row=5, col=2
+        fig_params = go.Figure(go.Bar(
+            y=param_names, x=norm_values, orientation='h', marker_color=bar_colors,
+            text=[f'{v:.3f}' for v in actual_values], textposition='outside',
+            hovertemplate='%{y}<br>Value: %{text}<br>Position: %{x:.1f}%<extra></extra>'
+        ))
+        fig_params.update_layout(
+            title='Calibrated Parameters (Position within Bounds)',
+            xaxis_title='Position within Bounds (%)',
+            xaxis_range=[-5, 115], xaxis_fixedrange=True,
+            yaxis_autorange='reversed', yaxis_fixedrange=True,
+            height=max(300, 25 * len(param_names) + 80),
+            margin=dict(l=100, r=60, t=40, b=40),
         )
-        n_params = len(param_names)
-        fig.add_trace(
-            go.Scatter(
-                x=[50, 50], y=[-0.5, n_params - 0.5],
-                mode='lines',
-                line=dict(color='gray', dash='dash', width=1),
-                showlegend=False,
-                hoverinfo='skip'
-            ),
-            row=5, col=2
-        )
-        fig.update_xaxes(range=[-5, 115], title_text="Position within Bounds (%)", row=5, col=2)
-        fig.update_yaxes(range=[-0.5, n_params - 0.5], row=5, col=2)
+        result['parameters'] = fig_params
+    else:
+        result['parameters'] = None
     
     # ==========================================================================
-    # Update Layout
+    # Hydrologic Signatures Table
     # ==========================================================================
-    fig.update_layout(
-        title=dict(
-            text=f"{title_text}<br><sup>{subtitle}</sup>",
-            font=dict(size=18),
-            x=0.5,
-            xanchor='center'
-        ),
-        height=height,
-        showlegend=True,
-        legend=dict(
-            orientation='h', 
-            y=0.99, 
-            x=0.3, 
-            xanchor='center',
-            bgcolor='rgba(255,255,255,0.8)'
-        ),
-        paper_bgcolor='white',
-        plot_bgcolor='#f8f9fa',
-        font=dict(family='Arial, sans-serif')
+    if has_signatures:
+        try:
+            from pyrrm.analysis.signatures import SIGNATURE_CATEGORIES, SIGNATURE_INFO
+        except ImportError:
+            SIGNATURE_CATEGORIES, SIGNATURE_INFO = {}, {}
+        
+        ALL_SIGNATURES = []
+        for cat_name, sig_ids in SIGNATURE_CATEGORIES.items():
+            for sig_id in sig_ids:
+                info = SIGNATURE_INFO.get(sig_id, {})
+                ALL_SIGNATURES.append((cat_name, sig_id, info.get("name", sig_id)))
+        
+        def fmt_val(val):
+            if val is None or (isinstance(val, float) and np.isnan(val)): return "N/A"
+            if abs(val) >= 1000: return f"{val:.1f}"
+            elif abs(val) >= 1: return f"{val:.2f}"
+            else: return f"{val:.3f}"
+        
+        def err_color(pct_err):
+            if pct_err is None or (isinstance(pct_err, float) and np.isnan(pct_err)): return '#888888'
+            if abs(pct_err) <= 10: return color_excellent
+            elif abs(pct_err) <= 20: return color_good
+            else: return color_poor
+        
+        sig_cats, sig_names, sig_obs, sig_sim, sig_errs, sig_colors = [], [], [], [], [], []
+        for cat, sig_id, sig_display in ALL_SIGNATURES:
+            sig_cats.append(cat)
+            sig_names.append(sig_display)
+            sig_obs.append(fmt_val(obs_sigs.get(sig_id)))
+            sig_sim.append(fmt_val(sim_sigs.get(sig_id)))
+            pct_err = pct_errors.get(sig_id)
+            if pct_err is not None and not (isinstance(pct_err, float) and np.isnan(pct_err)):
+                sig_errs.append(f"{pct_err:+.1f}%")
+            else:
+                sig_errs.append("N/A")
+            sig_colors.append(err_color(pct_err))
+        
+        fig_sigs = go.Figure(go.Table(
+            header=dict(values=['<b>Category</b>', '<b>Signature</b>', '<b>Observed</b>', '<b>Simulated</b>', '<b>% Error</b>'],
+                        fill_color='#34495e', font=dict(color='white', size=10), align='left', height=26),
+            cells=dict(values=[sig_cats, sig_names, sig_obs, sig_sim, sig_errs],
+                       fill_color=['#f8f9fa', '#f8f9fa', '#f8f9fa', '#f8f9fa', sig_colors],
+                       font=dict(color=[['#2c3e50']*len(sig_names)]*4 +
+                                       [['white' if c!='#888888' else '#2c3e50' for c in sig_colors]], size=9),
+                       align='left', height=18),
+            columnwidth=[0.20, 0.32, 0.16, 0.16, 0.16]
+        ))
+        fig_sigs.update_layout(title='Hydrologic Signatures', height=1000, margin=dict(l=10, r=10, t=40, b=10))
+        result['signatures_table'] = fig_sigs
+    else:
+        result['signatures_table'] = None
+    
+    return result
+
+
+def plot_report_card_plotly(
+    report: 'CalibrationReport',
+    height: int = 2400
+):
+    """
+    Generate an interactive Plotly report card (legacy single-figure version).
+    
+    NOTE: This function attempts to combine multiple components into a single figure,
+    which can cause layout issues. Consider using plot_report_card_components() instead,
+    which returns separate figures that render reliably.
+    
+    Args:
+        report: CalibrationReport instance
+        height: Figure height in pixels
+        
+    Returns:
+        Plotly Figure object
+    """
+    # Use the components version and combine into a simple vertical layout
+    components = plot_report_card_components(report)
+    
+    # For backwards compatibility, return a simple combined figure
+    # Just stack the hydrographs and FDC vertically
+    from plotly.subplots import make_subplots
+    
+    obs = report.observed
+    sim = report.simulated
+    dates = report.dates
+    
+    color_obs = '#e74c3c'
+    color_sim = '#3498db'
+    
+    fig = make_subplots(
+        rows=4, cols=1,
+        subplot_titles=('Hydrograph (Linear Scale)', 'Hydrograph (Log Scale)', 
+                       'Flow Duration Curve', 'Scatter Plot'),
+        row_heights=[0.25, 0.25, 0.25, 0.25],
+        vertical_spacing=0.08
     )
     
-    # Update all subplot backgrounds
-    for i in range(1, 6):
-        for j in range(1, 3):
-            try:
-                fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(0,0,0,0.1)', row=i, col=j)
-                fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(0,0,0,0.1)', row=i, col=j)
-            except Exception:
-                pass
+    # Hydrograph linear
+    fig.add_trace(go.Scatter(x=dates, y=obs, name='Observed', line=dict(color=color_obs, width=1)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=sim, name='Simulated', line=dict(color=color_sim, width=1)), row=1, col=1)
+    fig.update_yaxes(title_text="Flow (ML/day)", row=1, col=1)
+    
+    # Hydrograph log
+    obs_log = np.where(obs > 0, obs, np.nan)
+    sim_log = np.where(sim > 0, sim, np.nan)
+    fig.add_trace(go.Scatter(x=dates, y=obs_log, name='Observed', line=dict(color=color_obs, width=1), showlegend=False), row=2, col=1)
+    fig.add_trace(go.Scatter(x=dates, y=sim_log, name='Simulated', line=dict(color=color_sim, width=1), showlegend=False), row=2, col=1)
+    fig.update_yaxes(type="log", title_text="Flow (ML/day)", row=2, col=1)
+    
+    # FDC
+    obs_sorted = np.sort(obs[~np.isnan(obs)])[::-1]
+    sim_sorted = np.sort(sim[~np.isnan(sim)])[::-1]
+    exc_obs = np.arange(1, len(obs_sorted) + 1) / (len(obs_sorted) + 1) * 100
+    exc_sim = np.arange(1, len(sim_sorted) + 1) / (len(sim_sorted) + 1) * 100
+    fig.add_trace(go.Scatter(x=exc_obs, y=obs_sorted, name='Observed', line=dict(color=color_obs, width=2), showlegend=False), row=3, col=1)
+    fig.add_trace(go.Scatter(x=exc_sim, y=sim_sorted, name='Simulated', line=dict(color=color_sim, width=2, dash='dash'), showlegend=False), row=3, col=1)
+    fig.update_yaxes(type="log", title_text="Flow (ML/day)", row=3, col=1)
+    fig.update_xaxes(title_text="Exceedance (%)", range=[0, 100], row=3, col=1)
+    
+    # Scatter
+    valid = ~(np.isnan(obs) | np.isnan(sim))
+    obs_valid, sim_valid = obs[valid], sim[valid]
+    max_val = max(np.nanmax(obs_valid), np.nanmax(sim_valid))
+    fig.add_trace(go.Scatter(x=obs_valid, y=sim_valid, mode='markers', marker=dict(color=color_sim, size=4, opacity=0.3), showlegend=False), row=4, col=1)
+    fig.add_trace(go.Scatter(x=[0, max_val], y=[0, max_val], mode='lines', line=dict(color='green', dash='dash', width=2), showlegend=False), row=4, col=1)
+    fig.update_xaxes(title_text="Observed (ML/day)", row=4, col=1)
+    fig.update_yaxes(title_text="Simulated (ML/day)", row=4, col=1)
+    
+    # Header
+    catchment_name = report.catchment_info.get('name', 'Unknown Catchment')
+    gauge_id = report.catchment_info.get('gauge_id', '')
+    title_text = f"<b>{catchment_name}</b>"
+    if gauge_id:
+        title_text += f" ({gauge_id})"
+    subtitle = f"Method: {report.result.method} | Objective: {report.result.objective_name} | Best: {report.result.best_objective:.4f}"
+    
+    fig.update_layout(
+        title=dict(text=f"{title_text}<br><sup>{subtitle}</sup>", x=0.5, xanchor='center'),
+        height=1200,
+        showlegend=True,
+        legend=dict(orientation='h', y=1.02, x=0.5, xanchor='center'),
+        paper_bgcolor='white',
+        plot_bgcolor='#f8f9fa',
+    )
     
     return fig
 
