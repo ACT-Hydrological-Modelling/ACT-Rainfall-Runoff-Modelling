@@ -62,7 +62,7 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run core tests
-        run: pytest pyrrm/ -m "not slow" -v --tb=short -x --ignore=pyrrm/models/tests/test_numba_equivalence.py --ignore=pyrrm/models/tests/test_numba_benchmark.py --ignore=pyrrm/models/tests/test_sacramento_jax.py --ignore=pyrrm/models/tests/test_gr4j_jax.py --ignore=pyrrm/calibration/tests/test_numpyro_adapter.py --ignore=pyrrm/calibration/tests/test_likelihoods_jax.py --ignore=pyrrm/models/tests/test_sacramento_perf_comparison.py
+        run: pytest pyrrm/ -m "not slow" -v --tb=short -x --ignore=pyrrm/models/tests/test_numba_equivalence.py --ignore=pyrrm/models/tests/test_numba_benchmark.py --ignore=pyrrm/models/tests/test_sacramento_jax.py --ignore=pyrrm/models/tests/test_gr4j_jax.py --ignore=pyrrm/calibration/tests/test_numpyro_adapter.py --ignore=pyrrm/calibration/tests/test_likelihoods_jax.py --ignore=pyrrm/models/tests/test_sacramento_perf_comparison.py --ignore=pyrrm/bma/tests/test_levels_4_5.py
 
   # ── Tier 3: Optional dependency tests ──────────────────────────────
   test-optional:
@@ -96,12 +96,48 @@ jobs:
           pip install pytest pytest-cov
 
       - name: Run full test suite
-        run: pytest pyrrm/ -m "not slow" -v --tb=short --ignore=pyrrm/models/tests/test_sacramento_jax.py --ignore=pyrrm/models/tests/test_gr4j_jax.py --ignore=pyrrm/calibration/tests/test_numpyro_adapter.py --ignore=pyrrm/calibration/tests/test_likelihoods_jax.py --ignore=pyrrm/models/tests/test_sacramento_perf_comparison.py
+        run: pytest pyrrm/ -m "not slow" -v --tb=short --ignore=pyrrm/models/tests/test_sacramento_jax.py --ignore=pyrrm/models/tests/test_gr4j_jax.py --ignore=pyrrm/calibration/tests/test_numpyro_adapter.py --ignore=pyrrm/calibration/tests/test_likelihoods_jax.py --ignore=pyrrm/models/tests/test_sacramento_perf_comparison.py --ignore=pyrrm/bma/tests/test_levels_4_5.py
 
       - name: Run Numba equivalence tests
         run: pytest pyrrm/models/tests/test_numba_equivalence.py -v --tb=short
 
-  # ── Tier 4: JAX / NumPyro tests ───────────────────────────────────
+  # ── Tier 4: BMA / PyMC tests ─────────────────────────────────────
+  test-bma:
+    name: "BMA / PyMC (Python ${{ matrix.python-version }})"
+    needs: test-core
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-bma-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      - name: Install with BMA dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[bma]"
+          pip install pytest pytest-cov
+
+      - name: Run BMA core tests (no PyMC)
+        run: pytest pyrrm/bma/tests/ -m "not slow" -v --tb=short --ignore=pyrrm/bma/tests/test_levels_4_5.py
+
+      - name: Run BMA PyMC tests
+        run: pytest pyrrm/bma/tests/test_levels_4_5.py -m "not slow" -v --tb=short
+
+  # ── Tier 5: JAX / NumPyro tests ───────────────────────────────────
   test-jax:
     name: "JAX / NumPyro (Python ${{ matrix.python-version }})"
     needs: test-core

@@ -46,6 +46,7 @@ The `pyrrm` conda environment contains all required dependencies:
 - **Calibration**: pydream, scikit-learn
 - **Sensitivity**: SALib
 - **Notebooks**: jupytext
+- **BMA (optional)**: pymc, arviz, numpyro, jax, scikit-learn — required for BMA Levels 4–5 and the BMA evaluation notebook
 - **pyrrm**: Installed in editable mode
 
 ## Installation Reference
@@ -61,12 +62,16 @@ pip install numpy pandas scipy matplotlib seaborn
 pip install numba pydream SALib scikit-learn jupytext
 pip install ipykernel
 
+# Optional: BMA module (Levels 4–5, PyMC, ArviZ, NumPyro, JAX)
+pip install "pyrrm[bma]"
+
 # Register kernel for Jupyter/Cursor notebooks
 python -m ipykernel install --user --name pyrrm --display-name "Python (pyrrm)"
 
-# Install pyrrm in editable mode
+# Install pyrrm in editable mode (with BMA if you want full notebook/CI support)
 cd /path/to/ACT-Rainfall-Runoff-Modelling
 pip install -e .
+# With BMA: pip install -e ".[bma]"
 ```
 
 ## Verification
@@ -77,6 +82,7 @@ conda activate pyrrm
 python -c "import pyrrm; print('pyrrm imported successfully')"
 python -c "from pyrrm.models import NUMBA_AVAILABLE; print(f'Numba JIT: {NUMBA_AVAILABLE}')"
 python -c "import pydream; print('pydream available')"
+python -c "import pymc; import arviz; print('PyMC/ArviZ available (BMA)')"
 ```
 
 ## NEVER Forget

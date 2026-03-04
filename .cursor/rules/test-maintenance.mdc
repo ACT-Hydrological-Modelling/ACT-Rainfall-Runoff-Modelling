@@ -32,6 +32,18 @@ pyrrm/
 │       ├── test_traditional.py
 │       ├── test_kge.py
 │       └── ...
+├── bma/
+│   └── tests/
+│       ├── __init__.py
+│       ├── fixtures.py
+│       ├── test_config.py
+│       ├── test_data_prep.py
+│       ├── test_pre_screen.py
+│       ├── test_levels_1_3.py
+│       ├── test_levels_4_5.py      # requires PyMC (skipif guard)
+│       ├── test_evaluation.py
+│       ├── test_prediction.py
+│       └── test_visualization.py
 ├── data/
 │   └── tests/
 │       └── test_input_handler.py
@@ -140,6 +152,7 @@ Use these skip markers consistently:
 - `jax` / `numpyro` — JAX and NUTS tests
 - `numba` — Numba kernel tests
 - `openpyxl` — Excel export tests
+- `pymc` — PyMC BMA tests (Levels 4-5)
 
 ## Pytest Markers
 

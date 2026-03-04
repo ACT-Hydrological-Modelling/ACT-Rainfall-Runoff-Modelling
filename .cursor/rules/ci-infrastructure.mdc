@@ -14,7 +14,7 @@ All CI workflows live in `.github/workflows/`:
 
 | File | Purpose | Triggers |
 |------|---------|----------|
-| `ci.yml` | Core test suite, lint, type-check | push to main, all PRs |
+| `ci.yml` | Core test suite, lint, type-check, BMA, JAX | push to main, all PRs |
 
 ## Workflow Design Principles
 
@@ -30,7 +30,9 @@ The CI pipeline uses a tiered approach to balance speed and coverage:
 ├──────────────────────────────────────────┤
 │  Tier 3: Optional-Dep Tests (< 5 min)   │  ← pydream, SALib, numba, openpyxl
 ├──────────────────────────────────────────┤
-│  Tier 4: JAX/NumPyro Tests  (< 8 min)   │  ← Separate job (large deps)
+│  Tier 4: BMA / PyMC Tests   (< 10 min)  │  ← pymc, arviz, numpyro, scikit-learn
+├──────────────────────────────────────────┤
+│  Tier 5: JAX/NumPyro Tests  (< 8 min)   │  ← Separate job (large deps)
 └──────────────────────────────────────────┘
 ```
 
