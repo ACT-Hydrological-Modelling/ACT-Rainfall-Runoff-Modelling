@@ -1,0 +1,50 @@
+Package: EflowStats
+Type: Package
+Title: Hydrologic Indicator and Alteration Stats
+Version: 5.2.0
+Date: 2017-08-04
+Authors@R: c( person("Joe", "Mills", role = c("aut"),
+    email = "jmills@ucar.edu"),
+              person("David", "Blodgett", role = c("aut","cre"),
+    email = "dblodgett@usgs.gov"),
+              person("Jared", "Smith", role = c("aut"),
+    email = "jsmith@usgs.gov"),
+              person("Jens", "Kiesel", role = c("ctb"),
+    email = "jkiesel@hydrology.uni-kiel.de")
+    )
+Depends:
+    R (>= 3.3)
+Imports:
+    lmom,
+    dplyr,
+    lubridate,
+    RcppRoll,
+    imputeTS
+Suggests:
+    xtable,
+    knitr,
+    testthat,
+    rmarkdown,
+    DT,
+    dataRetrieval,
+    readr
+Description: A reimplementation of the Hydrologic Index Tool 
+        (HIT; Henriksen et al, 2006) for calculating 171 hydrologic indices 
+        for stream classification analysis. EflowStats also calculates 7 
+        additional statistics used for streamflow classification reffered 
+        to as the "Magnificent Seven" (MAG7, Archfield et al., 2013). 
+        Unlike the original HIT, EflowStats has been redesigned to injest 
+        general hydrologic timeseries data and is not restricted to data 
+        formats used by the USGS National Water Information System.
+License: CC0
+LazyLoad: yes
+LazyData: yes
+VignetteBuilder: knitr
+BuildVignettes: true
+Copyright: This software is in the public domain because it contains materials
+    that originally came from the United States Geological Survey, an agency of
+    the United States Department of Interior. For more information, see the
+    official USGS copyright policy at
+    http://www.usgs.gov/visual-id/credit_usgs.html#copyright
+RoxygenNote: 7.2.3
+Encoding: UTF-8
