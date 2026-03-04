@@ -94,6 +94,13 @@ def __getattr__(name):
     elif name == "create_backend":
         from pyrrm.parallel import create_backend
         return create_backend
+    # BMA
+    elif name == "BMAConfig":
+        from pyrrm.bma.config import BMAConfig
+        return BMAConfig
+    elif name == "BMARunner":
+        from pyrrm.bma.pipeline import BMARunner
+        return BMARunner
     raise AttributeError(f"module 'pyrrm' has no attribute '{name}'")
 
 __all__ = [
@@ -122,6 +129,9 @@ __all__ = [
     "NetworkDataLoader",
     # Parallel backend
     "create_backend",
+    # BMA
+    "BMAConfig",
+    "BMARunner",
     # Version
     "__version__",
 ]

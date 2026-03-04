@@ -66,9 +66,24 @@ jax = [
 numba = [
     "numba>=0.57",
 ]
+# Bayesian Model Averaging (pip install pyrrm[bma])
+bma = [
+    "pymc>=5.10",
+    "arviz>=0.17",
+    "numpyro>=0.13",
+    "jax>=0.4",
+    "scikit-learn>=1.0",
+]
 # Excel export for CalibrationReport (pip install pyrrm[export])
 export = [
     "openpyxl>=3.1.0",
+]
+# Report card PDF/HTML export (pip install pyrrm[report])
+# Note: weasyprint has system-level dependencies on some platforms
+# See: https://doc.courtbouillon.org/weasyprint/stable/first_steps.html
+report = [
+    "kaleido>=0.2.1",
+    "weasyprint>=60.0",
 ]
 full = [
     "pydream>=1.0",
@@ -79,6 +94,8 @@ full = [
     "numpyro>=0.15.0",
     "arviz>=0.18.0",
     "numba>=0.57",
+    "pymc>=5.10",
+    "scikit-learn>=1.0",
 ]
 dev = [
     "pytest>=7.0",
