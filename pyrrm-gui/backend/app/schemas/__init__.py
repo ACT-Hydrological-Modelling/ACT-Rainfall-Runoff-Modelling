@@ -29,6 +29,15 @@ from app.schemas.result import (
     MetricsResponse,
     TimeSeriesResponse,
 )
+from app.schemas.analysis import (
+    LoadSessionRequest,
+    SessionSummary,
+    SessionDetailResponse,
+    GaugeSummary,
+    ExperimentInfo,
+    DiagnosticsResponse,
+    SummaryTableRow,
+)
 
 __all__ = [
     # Catchment
@@ -54,4 +63,12 @@ __all__ = [
     "ParameterResponse",
     "MetricsResponse",
     "TimeSeriesResponse",
+    # Analysis
+    "LoadSessionRequest",
+    "SessionSummary",
+    "SessionDetailResponse",
+    "GaugeSummary",
+    "ExperimentInfo",
+    "DiagnosticsResponse",
+    "SummaryTableRow",
 ]

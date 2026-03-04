@@ -4,7 +4,7 @@ API routes for pyrrm-gui.
 
 from fastapi import APIRouter
 
-from app.api import catchments, datasets, experiments, results, reference
+from app.api import catchments, datasets, experiments, results, reference, analysis, geodata
 
 # Create main API router
 api_router = APIRouter()
@@ -38,4 +38,16 @@ api_router.include_router(
     reference.router,
     prefix="/reference",
     tags=["Reference Data"]
+)
+
+api_router.include_router(
+    analysis.router,
+    prefix="/analysis",
+    tags=["Batch Analysis"]
+)
+
+api_router.include_router(
+    geodata.router,
+    prefix="/geodata",
+    tags=["Geospatial Data"]
 )

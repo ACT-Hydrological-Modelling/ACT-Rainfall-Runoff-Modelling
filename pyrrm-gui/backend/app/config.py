@@ -41,7 +41,11 @@ class Settings(BaseSettings):
     
     # pyrrm path (for development, can mount pyrrm library)
     pyrrm_path: Optional[str] = None
-    
+
+    # Batch analysis: directory where batch result folders are placed on the server.
+    # Each subfolder = one batch. Override via BATCH_RESULTS_DIR env var.
+    batch_results_dir: Optional[str] = None
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -50,6 +54,14 @@ class Settings(BaseSettings):
         """Create necessary directories if they don't exist."""
         for dir_path in [self.data_dir, self.uploads_dir, self.reports_dir, self.checkpoints_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
+        self.get_batch_results_dir().mkdir(parents=True, exist_ok=True)
+
+    def get_batch_results_dir(self) -> Path:
+        """Absolute path to the directory where batch result folders are placed."""
+        if self.batch_results_dir:
+            return Path(self.batch_results_dir).resolve()
+        # Default: pyrrm-gui/batch_results/ (sibling to backend/)
+        return Path(__file__).resolve().parents[2] / "batch_results"
 
 
 @lru_cache()

@@ -1,7 +1,7 @@
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
 import { 
   LayoutDashboard, 
-  Map, 
+  BarChart3,
   FlaskConical,
   ChevronRight,
   Droplets
@@ -9,7 +9,8 @@ import {
 import clsx from 'clsx'
 
 // Pages
-import Dashboard from './pages/Dashboard'
+import LandingPage from './pages/LandingPage'
+import RunnerPlaceholder from './pages/RunnerPlaceholder'
 import CatchmentList from './pages/CatchmentList'
 import CatchmentDetail from './pages/CatchmentDetail'
 import DatasetDetail from './pages/DatasetDetail'
@@ -19,11 +20,15 @@ import ExperimentMonitor from './pages/ExperimentMonitor'
 import ResultsPage from './pages/ResultsPage'
 import ComparisonPage from './pages/ComparisonPage'
 
-// Navigation items
+// Analysis pages
+import AnalysisHome from './pages/analysis/AnalysisHome'
+import SessionOverview from './pages/analysis/SessionOverview'
+import GaugeDetail from './pages/analysis/GaugeDetail'
+
 const navItems = [
-  { path: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { path: '/catchments', label: 'Catchments', icon: Map },
-  { path: '/experiments', label: 'Experiments', icon: FlaskConical },
+  { path: '/', label: 'Home', icon: LayoutDashboard },
+  { path: '/runner', label: 'Experiment Runner', icon: FlaskConical },
+  { path: '/analysis', label: 'Batch Analysis', icon: BarChart3 },
 ]
 
 function Sidebar() {
@@ -31,13 +36,11 @@ function Sidebar() {
   
   return (
     <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
-      {/* Logo */}
       <div className="h-16 flex items-center px-6 border-b border-gray-200">
         <Droplets className="w-8 h-8 text-hydro" />
         <span className="ml-3 text-xl font-bold text-gray-900">pyrrm</span>
       </div>
       
-      {/* Navigation */}
       <nav className="flex-1 px-4 py-4 space-y-1">
         {navItems.map((item) => {
           const Icon = item.icon
@@ -62,14 +65,23 @@ function Sidebar() {
         })}
       </nav>
       
-      {/* Footer */}
       <div className="p-4 border-t border-gray-200">
         <p className="text-xs text-gray-500">
-          pyrrm-gui v0.1.0
+          pyrrm-gui v0.2.0
         </p>
       </div>
     </aside>
   )
+}
+
+const BREADCRUMB_LABELS: Record<string, string> = {
+  analysis: 'Batch Analysis',
+  sessions: 'Sessions',
+  gauges: 'Gauges',
+  runner: 'Experiment Runner',
+  catchments: 'Catchments',
+  experiments: 'Experiments',
+  compare: 'Compare',
 }
 
 function Breadcrumbs() {
@@ -82,13 +94,13 @@ function Breadcrumbs() {
     <nav className="flex items-center text-sm text-gray-500 mb-4">
       <Link to="/" className="hover:text-gray-700">Home</Link>
       {paths.map((path, index) => (
-        <span key={path} className="flex items-center">
+        <span key={index} className="flex items-center">
           <ChevronRight className="w-4 h-4 mx-2" />
           <Link 
             to={`/${paths.slice(0, index + 1).join('/')}`}
-            className="hover:text-gray-700 capitalize"
+            className="hover:text-gray-700"
           >
-            {path.replace(/-/g, ' ')}
+            {BREADCRUMB_LABELS[path] || path.replace(/-/g, ' ')}
           </Link>
         </span>
       ))}
@@ -106,7 +118,15 @@ function App() {
           <Breadcrumbs />
           
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<LandingPage />} />
+
+            {/* Batch Analysis */}
+            <Route path="/analysis" element={<AnalysisHome />} />
+            <Route path="/analysis/sessions/:sessionId" element={<SessionOverview />} />
+            <Route path="/analysis/sessions/:sessionId/gauges/:gaugeId" element={<GaugeDetail />} />
+
+            {/* Experiment Runner (placeholder + existing pages) */}
+            <Route path="/runner" element={<RunnerPlaceholder />} />
             <Route path="/catchments" element={<CatchmentList />} />
             <Route path="/catchments/:id" element={<CatchmentDetail />} />
             <Route path="/catchments/:catchmentId/datasets/:datasetId" element={<DatasetDetail />} />

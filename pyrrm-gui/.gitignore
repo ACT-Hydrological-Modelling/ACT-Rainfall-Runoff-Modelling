@@ -38,6 +38,9 @@ data/reports/
 data/checkpoints/
 *.db
 
+# Batch results (large pkl files placed on the server)
+batch_results/*/
+
 # Build
 frontend/dist/
 *.log
