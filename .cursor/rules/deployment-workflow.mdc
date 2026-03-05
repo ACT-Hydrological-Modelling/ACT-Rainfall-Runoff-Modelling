@@ -1,0 +1,146 @@
+---
+description: "How to deploy pyrrm-gui updates to the Mac mini server"
+globs: ["deploy/**", "pyrrm-gui/**"]
+alwaysApply: false
+---
+
+# Deployment Workflow
+
+This rule describes how to deploy pyrrm-gui updates to the Mac mini server from the development machine. All operations are performed remotely via SSH -- no physical access to the server is needed.
+
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| Full deploy | `./deploy/deploy.sh` |
+| Sync batch results | `./deploy/sync-batch-results.sh` |
+| Check status | `./deploy/status.sh` |
+| View logs | `./deploy/logs.sh [service]` |
+| View backend logs only | `./deploy/logs.sh backend` |
+
+## Deploy Code Changes
+
+After committing and pushing code:
+
+```bash
+./deploy/deploy.sh
+```
+
+This script does:
+1. `git pull` on the server
+2. `docker compose up --build -d` (rebuilds only changed layers)
+3. Reloads Homebrew Nginx
+4. Shows service status
+
+**Typical duration**: ~15-20 seconds (cached layers), up to 2-3 minutes (full rebuild).
+
+## Deploy Batch Results
+
+After generating new `.pkl` files from calibration notebooks:
+
+```bash
+./deploy/sync-batch-results.sh
+```
+
+This uses `rsync -avzL` (follows symlinks, compresses transfer). The backend discovers new batch folders automatically -- no restart required.
+
+## Ad-Hoc SSH Commands
+
+For any command not covered by the scripts, SSH directly:
+
+```bash
+ssh macmini 'export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; <command>'
+```
+
+The PATH export is **required** for Docker and Homebrew commands.
+
+### Common ad-hoc commands
+
+```bash
+# Restart just the backend (no rebuild)
+ssh macmini 'export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; cd ~/Desktop/ACT-Rainfall-Runoff-Modelling/pyrrm-gui && docker compose restart backend'
+
+# Rebuild and restart a single service
+ssh macmini 'export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; cd ~/Desktop/ACT-Rainfall-Runoff-Modelling/pyrrm-gui && docker compose up --build -d backend'
+
+# Execute a command inside the backend container
+ssh macmini 'export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; docker exec pyrrm-gui-backend-1 python3 -c "from app.config import get_settings; print(get_settings().get_batch_results_dir())"'
+
+# Full teardown and clean restart
+ssh macmini 'export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; cd ~/Desktop/ACT-Rainfall-Runoff-Modelling/pyrrm-gui && docker compose down && docker compose up --build -d'
+
+# Reload Nginx config (passwordless sudo)
+ssh macmini 'sudo /opt/homebrew/bin/nginx -t && sudo kill -HUP $(cat /opt/homebrew/var/run/nginx.pid)'
+
+# Check Nginx error log
+ssh macmini 'tail -50 /opt/homebrew/var/log/nginx/pyrrm_error.log'
+
+# Check free disk space
+ssh macmini 'df -h / | tail -1'
+```
+
+## Updating the docker-compose.override.yml
+
+The override file exists on both machines and is gitignored. If you change it locally, copy it to the server:
+
+```bash
+scp pyrrm-gui/docker-compose.override.yml macmini:~/Desktop/ACT-Rainfall-Runoff-Modelling/pyrrm-gui/docker-compose.override.yml
+```
+
+Then restart the stack:
+
+```bash
+ssh macmini 'export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; cd ~/Desktop/ACT-Rainfall-Runoff-Modelling/pyrrm-gui && docker compose down && docker compose up -d'
+```
+
+## Updating the Nginx Config
+
+The Nginx config lives only on the server at `/opt/homebrew/etc/nginx/servers/pyrrm.conf`. To edit it:
+
+```bash
+# Write new config (use heredoc or scp a local file)
+ssh macmini 'cat > /opt/homebrew/etc/nginx/servers/pyrrm.conf << '\''EOF'\''
+<config content>
+EOF'
+
+# Test and reload
+ssh macmini 'sudo /opt/homebrew/bin/nginx -t && sudo kill -HUP $(cat /opt/homebrew/var/run/nginx.pid)'
+```
+
+## Verification After Deploy
+
+After any deployment, verify the app is healthy:
+
+```bash
+# Health check
+curl -s http://192.168.1.5:8085/health | python3 -m json.tool
+
+# Batch results visible
+curl -s http://192.168.1.5:8085/api/analysis/batches | python3 -m json.tool
+
+# Frontend serves HTML
+curl -s -o /dev/null -w "%{http_code}" http://192.168.1.5:8085/
+```
+
+Expected: health returns `{"status": "healthy", ...}`, batches lists available campaigns, frontend returns 200.
+
+## When the User Asks to Deploy
+
+If the user asks you to deploy, push an update, or refresh the server:
+
+1. **If there are uncommitted changes**: ask if they want to commit first
+2. **If changes are committed and pushed**: run `./deploy/deploy.sh`
+3. **If batch results changed**: also run `./deploy/sync-batch-results.sh`
+4. **Always verify** with a health check after deploying
+5. **Report** the URLs: LAN (`http://192.168.1.5:3000`) and Public (`http://59.167.129.31:8085`)
+
+## When the User Asks to Check the Server
+
+Run `./deploy/status.sh` and report the output. If something is down, check logs with `./deploy/logs.sh`.
+
+## Important Constraints
+
+- **All deploy files are gitignored** (`deploy/` and `pyrrm-gui/docker-compose.override.yml`). Do not remove them from `.gitignore`.
+- **Do not change Docker port mappings** without verifying no conflicts with sim4action (port 8000) or other services.
+- **Do not modify** the other Nginx configs (`act_water_dashboard.conf`, `drought-alert.conf`, `sim4action.conf`).
+- **PATH export is mandatory** for all SSH commands that use `docker` or `brew`.

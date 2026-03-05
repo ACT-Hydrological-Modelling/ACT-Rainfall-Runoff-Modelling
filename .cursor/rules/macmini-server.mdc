@@ -1,0 +1,122 @@
+---
+description: "Mac mini server infrastructure for pyrrm-gui deployment"
+globs:
+alwaysApply: true
+---
+
+# Mac Mini Server Infrastructure
+
+The pyrrm-gui web application is deployed on a Mac mini server accessible via SSH. This rule describes the server setup so any Cursor agent can operate it remotely.
+
+## Server Details
+
+| Property | Value |
+|----------|-------|
+| SSH alias | `macmini` (configured in `~/.ssh/config`) |
+| LAN IP | `192.168.1.5` |
+| Public IP | `59.167.129.31` |
+| User | `jcastilla` |
+| macOS | 26.x (Apple Silicon / arm64) |
+| Repo path | `~/Desktop/ACT-Rainfall-Runoff-Modelling` |
+
+## SSH Access
+
+Passwordless SSH is configured. Always use the alias:
+
+```bash
+ssh macmini '<command>'
+```
+
+**PATH requirement**: The default SSH shell does not include Homebrew or the Docker credential shim. Prefix remote commands with:
+
+```bash
+ssh macmini 'export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; <command>'
+```
+
+## Architecture
+
+```
+Browser  -->  Homebrew Nginx (:8085)  -->  Docker Frontend/Nginx (:3000)  -->  Docker Backend/FastAPI (:8000)
+                                                                                     |
+                                                                              Celery Worker  <-->  Redis (:6379)
+```
+
+Two layers of Nginx:
+1. **Homebrew Nginx** (host-level, port 8085) -- public-facing reverse proxy managed via `/opt/homebrew/etc/nginx/servers/pyrrm.conf`
+2. **Docker Nginx** (container, port 3000) -- serves React SPA and proxies `/api` and `/ws` to the FastAPI backend
+
+## Service Ports
+
+| Port | Service | Scope |
+|------|---------|-------|
+| 8085 | Homebrew Nginx (pyrrm) | Public + LAN |
+| 3000 | Docker frontend (Nginx + React) | Host only |
+| 8000 | Docker backend (FastAPI) | Host only |
+| 6379 | Docker Redis | Host only |
+
+Other Nginx services on the same server (do not interfere with these):
+
+| Port | App |
+|------|-----|
+| 80/443 | sim4action (SSL) |
+| 8082 | sim4action (direct IP) |
+| 8083 | ACT Water Dashboard |
+| 8084 | Drought Alert |
+
+## Docker Stack
+
+The app runs via Docker Compose in `~/Desktop/ACT-Rainfall-Runoff-Modelling/pyrrm-gui/`.
+
+Four containers:
+- `pyrrm-gui-frontend-1` -- Nginx serving React build, proxies API/WS to backend
+- `pyrrm-gui-backend-1` -- FastAPI (Uvicorn)
+- `pyrrm-gui-celery_worker-1` -- Celery worker for async calibration
+- `pyrrm-gui-redis-1` -- Redis message broker
+
+**Override file**: `docker-compose.override.yml` (gitignored) mounts `batch_results/` and sets `BATCH_RESULTS_DIR=/app/batch_results`.
+
+## Nginx Configuration
+
+The Homebrew Nginx config for pyrrm lives at:
+```
+/opt/homebrew/etc/nginx/servers/pyrrm.conf
+```
+
+To test and reload Nginx (passwordless sudo is configured):
+```bash
+ssh macmini 'sudo /opt/homebrew/bin/nginx -t && sudo kill -HUP $(cat /opt/homebrew/var/run/nginx.pid)'
+```
+
+## Batch Results
+
+Batch calibration results (`.pkl` files) are stored at:
+- **Local** (dev machine): `pyrrm-gui/batch_results/` (symlinked to `notebooks_ACT/LBG/results/`)
+- **Server**: `~/Desktop/ACT-Rainfall-Runoff-Modelling/pyrrm-gui/batch_results/`
+
+Synced via `rsync -avzL` (follows symlinks). The `-L` flag is required because the local directory contains symlinks.
+
+## Key Files (all gitignored)
+
+| File | Location | Purpose |
+|------|----------|---------|
+| `deploy/deploy.sh` | Dev machine | Full redeploy script |
+| `deploy/sync-batch-results.sh` | Dev machine | rsync batch results to server |
+| `deploy/logs.sh` | Dev machine | Tail Docker logs |
+| `deploy/status.sh` | Dev machine | Check service status |
+| `pyrrm-gui/docker-compose.override.yml` | Both machines | Volume mounts and env vars |
+| `/opt/homebrew/etc/nginx/servers/pyrrm.conf` | Server only | Nginx reverse proxy config |
+
+## Troubleshooting
+
+### Docker keychain error
+If Docker commands fail with "keychain cannot be accessed", the macOS keychain is locked. Unlock it:
+```bash
+ssh macmini 'security unlock-keychain -p "<password>" ~/Library/Keychains/login.keychain-db'
+```
+Auto-lock is disabled via `security set-keychain-settings`, but a reboot may re-lock it.
+
+### Port 8000 conflict
+Both sim4action (Python, IPv4) and Docker backend (IPv6) listen on port 8000. This coexistence works because they bind to different address families. Do NOT change Docker's backend port mapping without checking sim4action first.
+
+### Nginx won't reload
+The master process runs as root. Passwordless sudo is configured for `/opt/homebrew/bin/nginx` and `/bin/kill` via `/etc/sudoers.d/nginx-reload`.
