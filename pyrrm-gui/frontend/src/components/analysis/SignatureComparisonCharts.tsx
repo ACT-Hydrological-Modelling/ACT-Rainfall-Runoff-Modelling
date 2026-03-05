@@ -133,7 +133,7 @@ export default function SignatureComparisonCharts({
         <PlotlyChart
           figure={data.bar_figures[activeCategory]}
           loading={false}
-          className="h-[400px]"
+          autoHeight
         />
       </div>
 

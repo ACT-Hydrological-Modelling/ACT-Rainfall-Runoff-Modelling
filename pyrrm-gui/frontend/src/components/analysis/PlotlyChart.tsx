@@ -6,9 +6,13 @@ interface PlotlyChartProps {
   figure: PlotlyFigure | null | undefined
   loading?: boolean
   className?: string
+  /** When true, the chart height is driven by the figure's layout.height
+   *  instead of filling 100% of the CSS container. This prevents overflow
+   *  when the server-side figure height is larger than a fixed CSS class. */
+  autoHeight?: boolean
 }
 
-export default function PlotlyChart({ figure, loading, className }: PlotlyChartProps) {
+export default function PlotlyChart({ figure, loading, className, autoHeight }: PlotlyChartProps) {
   const revisionRef = useRef(0)
   const prevFigureRef = useRef<PlotlyFigure | null | undefined>(null)
 
@@ -24,6 +28,10 @@ export default function PlotlyChart({ figure, loading, className }: PlotlyChartP
       autosize: true,
     }
   }, [figure?.layout])
+
+  const figureHeight = autoHeight
+    ? (figure?.layout?.height as number | undefined) ?? 450
+    : undefined
 
   if (loading) {
     return (
@@ -42,7 +50,7 @@ export default function PlotlyChart({ figure, loading, className }: PlotlyChartP
   }
 
   return (
-    <div className={className}>
+    <div className={className} style={figureHeight ? { height: figureHeight } : undefined}>
       <Plot
         data={figure.data}
         layout={layout}
