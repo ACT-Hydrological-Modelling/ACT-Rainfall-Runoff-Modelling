@@ -8,13 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed
-
-- Define Sig_Q95 and Sig_Q5 when observed percentile is zero (ephemeral catchments): use 0% if sim also low, else 100% (`analysis/diagnostics.py`)
-- Define FLV for degenerate low-flow regimes: constant observed low flows (zero log-spread) and no observed flow above epsilon (`analysis/diagnostics.py`)
-
 ### Added
 
+- Add Cursor rules for Mac mini deployment workflow and server infrastructure (`.cursor/rules/deployment-workflow.mdc`, `.cursor/rules/macmini-server.mdc`)
+- Add PlotlyChart autoHeight prop to prevent overflow in batch analysis signature charts (`pyrrm-gui/frontend`)
 - Add Bayesian Model Averaging (BMA) module with five combination levels: equal weights, GRC, Bayesian stacking, global BMA (PyMC), and regime-specific BMA with sigmoid blending (`bma/`)
 - Add `BMAConfig` dataclass with ACT CV presets and flexible year-boundary / block-size options (`bma/config.py`)
 - Add `BMARunner` pipeline orchestrator for end-to-end cross-validated BMA evaluation (`bma/pipeline.py`)
@@ -80,6 +77,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add comprehensive test documentation for reviewer confidence (`TESTING.md`)
 - Add GitHub Actions CI workflow for automated test execution (`.github/workflows/tests.yml`)
 - Add coverage reporting via pytest-cov in default pytest configuration (`pyproject.toml`)
+
+### Fixed
+
+- Allow null in summary table parameters (backend schema and frontend types) (`pyrrm-gui/backend/app/schemas/analysis.py`, `pyrrm-gui/frontend/src/types/analysis.ts`)
+- Summary table error handling and remove success column in batch analysis session overview (`pyrrm-gui/frontend/src/pages/analysis/SessionOverview.tsx`)
+- Define Sig_Q95 and Sig_Q5 when observed percentile is zero (ephemeral catchments): use 0% if sim also low, else 100% (`analysis/diagnostics.py`)
+- Define FLV for degenerate low-flow regimes: constant observed low flows (zero log-spread) and no observed flow above epsilon (`analysis/diagnostics.py`)
 
 ### Changed
 
