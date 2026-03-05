@@ -81,3 +81,7 @@ test_data/
 
 # Benchmark outputs (if regenerated)
 benchmark/*.cache
+
+# Local deployment scripts and server config (not for repo)
+deploy/
+pyrrm-gui/docker-compose.override.yml
