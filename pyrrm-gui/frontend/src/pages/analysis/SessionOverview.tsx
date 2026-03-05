@@ -34,7 +34,7 @@ export default function SessionOverview() {
     enabled: !!sessionId,
   })
 
-  const { data: summary } = useQuery({
+  const { data: summary, isError: summaryError } = useQuery({
     queryKey: ['analysis-summary', sessionId],
     queryFn: () => getSessionSummary(sessionId!),
     enabled: !!sessionId && view === 'table',
@@ -115,7 +115,7 @@ export default function SessionOverview() {
       )}
 
       {/* Summary table */}
-      {view === 'table' && <SummaryTable data={summary} />}
+      {view === 'table' && <SummaryTable data={summary} isError={summaryError} />}
     </div>
   )
 }
@@ -234,9 +234,13 @@ function MetaItem({
 
 // ── Summary Table ───────────────────────────────────────────────────────────
 
-function SummaryTable({ data }: { data: SummaryTableRow[] | undefined }) {
+function SummaryTable({ data, isError }: { data: SummaryTableRow[] | undefined; isError?: boolean }) {
   const [sortField, setSortField] = useState<keyof SummaryTableRow>('gauge_id')
   const [sortAsc, setSortAsc] = useState(true)
+
+  if (isError) {
+    return <div className="text-center py-12 text-red-500">Failed to load summary table. Check server logs for details.</div>
+  }
 
   if (!data) {
     return <div className="text-center py-12 text-gray-400">Loading summary…</div>
@@ -271,7 +275,6 @@ function SummaryTable({ data }: { data: SummaryTableRow[] | undefined }) {
     { key: 'algorithm', label: 'Algorithm' },
     { key: 'best_objective', label: 'Best Obj.' },
     { key: 'runtime_seconds', label: 'Runtime (s)' },
-    { key: 'success', label: 'OK' },
   ]
 
   return (
@@ -304,13 +307,6 @@ function SummaryTable({ data }: { data: SummaryTableRow[] | undefined }) {
                 </td>
                 <td className="px-4 py-1.5 font-mono text-gray-500">
                   {row.runtime_seconds != null ? row.runtime_seconds.toFixed(1) : '—'}
-                </td>
-                <td className="px-4 py-1.5">
-                  {row.success ? (
-                    <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
-                  ) : (
-                    <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
-                  )}
                 </td>
               </tr>
             ))}
