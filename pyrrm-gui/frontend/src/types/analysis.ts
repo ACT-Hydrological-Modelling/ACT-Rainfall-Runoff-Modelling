@@ -99,7 +99,7 @@ export interface SummaryTableRow {
   best_objective: number | null
   runtime_seconds: number | null
   success: boolean
-  parameters: Record<string, number>
+  parameters: Record<string, number | null>
 }
 
 // ── Signature comparison types ──────────────────────────────────────────────

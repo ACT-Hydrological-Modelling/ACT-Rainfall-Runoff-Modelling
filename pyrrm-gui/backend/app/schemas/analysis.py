@@ -118,4 +118,4 @@ class SummaryTableRow(BaseModel):
     best_objective: Optional[float] = None
     runtime_seconds: Optional[float] = None
     success: bool = True
-    parameters: Dict[str, float] = Field(default_factory=dict)
+    parameters: Dict[str, Optional[float]] = Field(default_factory=dict)
