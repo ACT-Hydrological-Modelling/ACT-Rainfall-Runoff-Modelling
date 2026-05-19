@@ -112,14 +112,17 @@ ssh macmini 'sudo /opt/homebrew/bin/nginx -t && sudo kill -HUP $(cat /opt/homebr
 After any deployment, verify the app is healthy:
 
 ```bash
-# Health check
+# Health check (HTTPS — public)
+curl -s https://pyrrm.sim4action-hydro.io/health | python3 -m json.tool
+
+# Health check (LAN fallback)
 curl -s http://192.168.1.5:8085/health | python3 -m json.tool
 
 # Batch results visible
-curl -s http://192.168.1.5:8085/api/analysis/batches | python3 -m json.tool
+curl -s https://pyrrm.sim4action-hydro.io/api/analysis/batches | python3 -m json.tool
 
 # Frontend serves HTML
-curl -s -o /dev/null -w "%{http_code}" http://192.168.1.5:8085/
+curl -s -o /dev/null -w "%{http_code}" https://pyrrm.sim4action-hydro.io/
 ```
 
 Expected: health returns `{"status": "healthy", ...}`, batches lists available campaigns, frontend returns 200.
@@ -132,7 +135,7 @@ If the user asks you to deploy, push an update, or refresh the server:
 2. **If changes are committed and pushed**: run `./deploy/deploy.sh`
 3. **If batch results changed**: also run `./deploy/sync-batch-results.sh`
 4. **Always verify** with a health check after deploying
-5. **Report** the URLs: LAN (`http://192.168.1.5:3000`) and Public (`http://59.167.129.31:8085`)
+5. **Report** the URLs: Public (`https://pyrrm.sim4action-hydro.io`), LAN (`http://192.168.1.5:8085`)
 
 ## When the User Asks to Check the Server
 

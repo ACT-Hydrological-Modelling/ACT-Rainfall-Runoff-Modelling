@@ -21,6 +21,7 @@ import {
   getComparisonFdc,
   getComparisonScatter,
   getExperimentReportCard,
+  getExperimentTemporalBias,
   getExportSections,
   exportSingleReportCard,
   exportBatchReportCard,
@@ -32,7 +33,7 @@ import ClustermapChart from '../../components/analysis/ClustermapChart'
 import MetricThresholdPanel from '../../components/analysis/MetricThresholdPanel'
 import ExperimentSelector from '../../components/analysis/ExperimentSelector'
 import SignatureComparisonCharts from '../../components/analysis/SignatureComparisonCharts'
-import type { ExperimentInfo, ReportCardResponse } from '../../types/analysis'
+import type { ExperimentInfo, ReportCardResponse, PlotlyFigure } from '../../types/analysis'
 
 type TabId = 'detailed-comparison' | 'rapid-comparison' | 'report-card'
 
@@ -521,6 +522,12 @@ function ReportCardTab({
     enabled: !!selectedKey,
   })
 
+  const { data: temporalBias, isLoading: temporalBiasLoading } = useQuery<PlotlyFigure>({
+    queryKey: ['temporal-bias', sessionId, gaugeId, selectedKey],
+    queryFn: () => getExperimentTemporalBias(sessionId, gaugeId, selectedKey),
+    enabled: !!selectedKey,
+  })
+
   const { data: availableSections } = useQuery<ExportSection[]>({
     queryKey: ['export-sections'],
     queryFn: getExportSections,
@@ -818,6 +825,28 @@ function ReportCardTab({
           </div>
         </>
       )}
+
+      {/* Row 4: Temporal Bias */}
+      <div className="bg-white rounded-lg border border-gray-200">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
+          <h3 className="text-sm font-semibold text-gray-800">Temporal Bias Analysis</h3>
+          <span className="text-xs text-gray-400">Monthly rolling window &amp; cumulative bias</span>
+        </div>
+        {temporalBiasLoading && (
+          <div className="p-8 text-center text-gray-400 text-sm">Loading temporal bias...</div>
+        )}
+        {temporalBias && !temporalBiasLoading && (
+          <div className="p-2">
+            <PlotlyChart figure={temporalBias} />
+          </div>
+        )}
+        {!temporalBias && !temporalBiasLoading && selectedKey && (
+          <div className="p-8 text-center text-gray-400 text-sm">No temporal bias data available</div>
+        )}
+        {!selectedKey && (
+          <div className="p-8 text-center text-gray-400 text-sm">Select an experiment to view temporal bias</div>
+        )}
+      </div>
     </div>
   )
 }

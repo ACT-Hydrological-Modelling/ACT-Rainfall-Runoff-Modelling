@@ -6,28 +6,38 @@ alwaysApply: true
 
 # Mac Mini Server Infrastructure
 
-The pyrrm-gui web application is deployed on a Mac mini server accessible via SSH. This rule describes the server setup so any Cursor agent can operate it remotely.
+The Mac mini server hosts multiple web applications accessible via SSH. This rule describes the complete server setup so any Cursor agent can operate it remotely.
 
 ## Server Details
 
 | Property | Value |
 |----------|-------|
-| SSH alias | `macmini` (configured in `~/.ssh/config`) |
+| SSH alias | `macmini` (configured in `~/.ssh/config` on dev machine) |
 | LAN IP | `192.168.1.5` |
 | Public IP | `59.167.129.31` |
 | User | `jcastilla` |
 | macOS | 26.x (Apple Silicon / arm64) |
 | Repo path | `~/Desktop/ACT-Rainfall-Runoff-Modelling` |
 
+## Domains
+
+| Domain | App | SSL |
+|--------|-----|-----|
+| `sim4action.io` | Sim4Action systems mapping platform | Let's Encrypt (system-level `/etc/letsencrypt/`) |
+| `pyrrm.sim4action-hydro.io` | pyrrm rainfall-runoff GUI | Let's Encrypt (user-level `~/certbot/config/`) |
+| `sim4action-hydro.io` | Reserved for future hydro apps | DNS configured, no app yet |
+
+The `sim4action-hydro.io` domain (managed in Squarespace DNS) is dedicated to hydrological modelling apps. Each app gets a subdomain (e.g., `pyrrm.sim4action-hydro.io`, `dashboard.sim4action-hydro.io`).
+
 ## SSH Access
 
-Passwordless SSH is configured. Always use the alias:
+Passwordless SSH is configured via key authentication. Always use the alias:
 
 ```bash
 ssh macmini '<command>'
 ```
 
-**PATH requirement**: The default SSH shell does not include Homebrew or the Docker credential shim. Prefix remote commands with:
+**PATH requirement**: The default SSH shell does not include Homebrew or user scripts. Prefix remote commands with:
 
 ```bash
 ssh macmini 'export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; <command>'
@@ -36,36 +46,41 @@ ssh macmini 'export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; <co
 ## Architecture
 
 ```
-Browser  -->  Homebrew Nginx (:8085)  -->  Docker Frontend/Nginx (:3000)  -->  Docker Backend/FastAPI (:8000)
-                                                                                     |
-                                                                              Celery Worker  <-->  Redis (:6379)
+Internet
+  │
+  ├─ sim4action.io (:443 SSL) ─────────────── Nginx ──► Python app (:8000, IPv4)
+  ├─ sim4action.io (:8082 HTTP) ─── direct IP fallback ─┘
+  │
+  ├─ pyrrm.sim4action-hydro.io (:443 SSL) ── Nginx ──► Docker Frontend (:3000) ──► Docker Backend (:8000, IPv6)
+  ├─ pyrrm (LAN :8085 HTTP) ──────── direct IP fallback ─┘                              │
+  │                                                                              Celery Worker ◄──► Redis (:6379)
+  │
+  ├─ ACT Water Dashboard (:8083 HTTP) ────── Nginx ──► Static files (no backend)
+  └─ Drought Alert (:8084 HTTP) ──────────── Nginx ──► Python app (:9000)
 ```
 
-Two layers of Nginx:
-1. **Homebrew Nginx** (host-level, port 8085) -- public-facing reverse proxy managed via `/opt/homebrew/etc/nginx/servers/pyrrm.conf`
+Two layers of Nginx for pyrrm:
+1. **Homebrew Nginx** (host-level) -- public-facing reverse proxy at `/opt/homebrew/etc/nginx/servers/pyrrm.conf`
 2. **Docker Nginx** (container, port 3000) -- serves React SPA and proxies `/api` and `/ws` to the FastAPI backend
 
 ## Service Ports
 
-| Port | Service | Scope |
-|------|---------|-------|
-| 8085 | Homebrew Nginx (pyrrm) | Public + LAN |
-| 3000 | Docker frontend (Nginx + React) | Host only |
-| 8000 | Docker backend (FastAPI) | Host only |
-| 6379 | Docker Redis | Host only |
-
-Other Nginx services on the same server (do not interfere with these):
-
-| Port | App |
-|------|-----|
-| 80/443 | sim4action (SSL) |
-| 8082 | sim4action (direct IP) |
-| 8083 | ACT Water Dashboard |
-| 8084 | Drought Alert |
+| Port | Service | Scope | Domain/Access |
+|------|---------|-------|---------------|
+| 80 | HTTP redirect → HTTPS | Public | `sim4action.io`, `pyrrm.sim4action-hydro.io` |
+| 443 | HTTPS (Nginx SSL termination) | Public | `sim4action.io`, `pyrrm.sim4action-hydro.io` |
+| 3000 | Docker frontend (Nginx + React) | Host only | pyrrm internal |
+| 8000 | Docker backend (FastAPI, IPv6) + sim4action (Python, IPv4) | Host only | Shared port, different address families |
+| 6379 | Docker Redis | Host only | pyrrm internal |
+| 8082 | sim4action (direct IP HTTP) | LAN + Public | Fallback for sim4action |
+| 8083 | ACT Water Dashboard (static) | LAN + Public | Direct IP access |
+| 8084 | Drought Alert | LAN + Public | Direct IP access |
+| 8085 | pyrrm (plain HTTP) | LAN + Public | LAN development/fallback |
+| 9000 | Drought Alert (Python app) | Host only | Proxied by :8084 |
 
 ## Docker Stack
 
-The app runs via Docker Compose in `~/Desktop/ACT-Rainfall-Runoff-Modelling/pyrrm-gui/`.
+The pyrrm app runs via Docker Compose in `~/Desktop/ACT-Rainfall-Runoff-Modelling/pyrrm-gui/`.
 
 Four containers:
 - `pyrrm-gui-frontend-1` -- Nginx serving React build, proxies API/WS to backend
@@ -75,17 +90,69 @@ Four containers:
 
 **Override file**: `docker-compose.override.yml` (gitignored) mounts `batch_results/` and sets `BATCH_RESULTS_DIR=/app/batch_results`.
 
+## SSL / Let's Encrypt
+
+Two separate certificate stores exist on the server:
+
+| Store | Location | Managed by | Certs |
+|-------|----------|------------|-------|
+| System-level | `/etc/letsencrypt/` | `sudo certbot` | `sim4action.io` |
+| User-level | `~/certbot/config/` | `certbot --config-dir ~/certbot/config` | `pyrrm.sim4action-hydro.io` |
+
+User-level certbot avoids sudo for certificate operations. All `sim4action-hydro.io` subdomain certs should use the user-level store.
+
+### Obtaining a new certificate (for a new subdomain)
+
+```bash
+ssh macmini 'export PATH="$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; \
+  certbot certonly --webroot \
+    -w /opt/homebrew/var/www/certbot \
+    -d <appname>.sim4action-hydro.io \
+    --non-interactive --agree-tos --email jcastilla@sim4action.io \
+    --config-dir ~/certbot/config \
+    --work-dir ~/certbot/work \
+    --logs-dir ~/certbot/logs'
+```
+
+**Prerequisite**: A port 80 server block with `/.well-known/acme-challenge/` must exist for the domain before running certbot.
+
+### Auto-renewal
+
+A cron job runs daily at 3:00 AM server time:
+
+```
+0 3 * * * /Users/jcastilla/bin/certbot-renew.sh
+```
+
+The script (`~/bin/certbot-renew.sh`) renews all user-level certs and reloads Nginx on success. Certbot only actually renews certs within 30 days of expiry. Logs are at `~/certbot/logs/renew-cron.log`.
+
+Any new certificate added to `~/certbot/config/` is automatically included in the renewal cycle.
+
 ## Nginx Configuration
 
-The Homebrew Nginx config for pyrrm lives at:
-```
-/opt/homebrew/etc/nginx/servers/pyrrm.conf
-```
+All Nginx server configs live in `/opt/homebrew/etc/nginx/servers/`:
+
+| Config file | App |
+|-------------|-----|
+| `pyrrm.conf` | pyrrm GUI (HTTP redirect + HTTPS + LAN fallback) |
+| `sim4action.conf` | Sim4Action (HTTP redirect + HTTPS + direct IP) |
+| `act_water_dashboard.conf` | ACT Water Dashboard (static files) |
+| `drought-alert.conf` | Drought Alert (reverse proxy) |
+
+Main Nginx config: `/opt/homebrew/etc/nginx/nginx.conf`
 
 To test and reload Nginx (passwordless sudo is configured):
 ```bash
 ssh macmini 'sudo /opt/homebrew/bin/nginx -t && sudo kill -HUP $(cat /opt/homebrew/var/run/nginx.pid)'
 ```
+
+## Sudoers
+
+Passwordless sudo is configured for:
+- `/opt/homebrew/bin/nginx` -- config testing and management
+- `/bin/kill` -- sending HUP signal to reload Nginx
+
+Defined in `/etc/sudoers.d/nginx-reload`. All other sudo commands require a password.
 
 ## Batch Results
 
@@ -95,7 +162,7 @@ Batch calibration results (`.pkl` files) are stored at:
 
 Synced via `rsync -avzL` (follows symlinks). The `-L` flag is required because the local directory contains symlinks.
 
-## Key Files (all gitignored)
+## Key Files
 
 | File | Location | Purpose |
 |------|----------|---------|
@@ -103,20 +170,40 @@ Synced via `rsync -avzL` (follows symlinks). The `-L` flag is required because t
 | `deploy/sync-batch-results.sh` | Dev machine | rsync batch results to server |
 | `deploy/logs.sh` | Dev machine | Tail Docker logs |
 | `deploy/status.sh` | Dev machine | Check service status |
-| `pyrrm-gui/docker-compose.override.yml` | Both machines | Volume mounts and env vars |
-| `/opt/homebrew/etc/nginx/servers/pyrrm.conf` | Server only | Nginx reverse proxy config |
+| `deploy/server-bootstrap.sh` | Dev machine | One-time server setup |
+| `pyrrm-gui/docker-compose.yml` | Repo (committed) | Docker Compose stack definition |
+| `pyrrm-gui/docker-compose.override.yml` | Both machines (gitignored) | Volume mounts and env vars |
+| `/opt/homebrew/etc/nginx/servers/pyrrm.conf` | Server only | Nginx config (HTTP + HTTPS + LAN) |
+| `~/bin/certbot-renew.sh` | Server only | SSL auto-renewal script |
+| `~/certbot/config/` | Server only | User-level Let's Encrypt store |
+
+All deploy scripts and override files are gitignored.
+
+## Adding a New App to sim4action-hydro.io
+
+1. **Squarespace DNS**: Add A record — Host: `<appname>`, Data: `59.167.129.31`
+2. **Wait for DNS**: `dig +short <appname>.sim4action-hydro.io @8.8.8.8`
+3. **Certbot**: Obtain cert using user-level config dirs (see command above)
+4. **Nginx config**: Create `/opt/homebrew/etc/nginx/servers/<appname>.conf` with HTTP redirect + HTTPS server block
+5. **Reload Nginx**: `nginx -t && kill -HUP`
+6. **Verify**: `curl -I https://<appname>.sim4action-hydro.io`
+
+Auto-renewal is handled automatically for any cert in `~/certbot/config/`.
 
 ## Troubleshooting
 
 ### Docker keychain error
-If Docker commands fail with "keychain cannot be accessed", the macOS keychain is locked. Unlock it:
+If Docker commands fail with "keychain cannot be accessed", the macOS keychain is locked:
 ```bash
 ssh macmini 'security unlock-keychain -p "<password>" ~/Library/Keychains/login.keychain-db'
 ```
-Auto-lock is disabled via `security set-keychain-settings`, but a reboot may re-lock it.
 
 ### Port 8000 conflict
 Both sim4action (Python, IPv4) and Docker backend (IPv6) listen on port 8000. This coexistence works because they bind to different address families. Do NOT change Docker's backend port mapping without checking sim4action first.
 
 ### Nginx won't reload
 The master process runs as root. Passwordless sudo is configured for `/opt/homebrew/bin/nginx` and `/bin/kill` via `/etc/sudoers.d/nginx-reload`.
+
+### SSL certificate not renewing
+Check the renewal log: `ssh macmini 'cat ~/certbot/logs/renew-cron.log'`
+Manual renewal test: `ssh macmini '~/bin/certbot-renew.sh'`

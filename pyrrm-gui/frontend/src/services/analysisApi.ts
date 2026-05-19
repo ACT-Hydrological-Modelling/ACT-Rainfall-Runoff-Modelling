@@ -211,6 +211,19 @@ export async function getExperimentReportCard(
   return response.data
 }
 
+// ── Temporal bias ────────────────────────────────────────────────────────────
+
+export async function getExperimentTemporalBias(
+  sessionId: string,
+  gaugeId: string,
+  expKey: string
+): Promise<PlotlyFigure> {
+  const response = await api.get(
+    `/analysis/sessions/${sessionId}/gauges/${gaugeId}/experiments/${encodeURIComponent(expKey)}/temporal-bias`
+  )
+  return response.data
+}
+
 // ── Report card export ───────────────────────────────────────────────────────
 
 export interface ExportSection {

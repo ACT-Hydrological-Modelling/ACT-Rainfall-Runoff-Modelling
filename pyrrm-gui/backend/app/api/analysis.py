@@ -294,6 +294,25 @@ async def experiment_report_card(session_id: str, gauge_id: str, exp_key: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/sessions/{session_id}/gauges/{gauge_id}/experiments/{exp_key}/temporal-bias")
+async def experiment_temporal_bias(session_id: str, gauge_id: str, exp_key: str):
+    """
+    3-panel temporal bias figure for a single experiment (Plotly JSON).
+
+    Panels:
+    - (a) Daily flow — observed vs simulated (log scale)
+    - (b) Monthly inflow bias in GL/month (bar chart, red = excess, blue = deficit)
+    - (c) Cumulative bias in GL (fill-to-zero)
+
+    Drought periods (Millennium Drought 2002–2009, Drought 2017–20) are overlaid
+    as translucent shading where they intersect the record.
+    """
+    try:
+        return analysis_service.get_experiment_temporal_bias(session_id, gauge_id, exp_key)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 # ── Report card export ────────────────────────────────────────────────────────
 
 @router.get("/export/sections")

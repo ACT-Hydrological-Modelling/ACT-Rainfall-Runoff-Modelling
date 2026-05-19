@@ -84,7 +84,7 @@ const SKILL_METRICS = [
 const ERROR_METRICS = ['RMSE', 'MAE', 'SDEB'] as const
 
 const VOLUME_METRICS = [
-  'PBIAS', 'FHV', 'FMV', 'FLV',
+  'PBIAS', 'PBIAS_log', 'FHV', 'FMV', 'FLV',
   'Sig_BFI', 'Sig_Flash', 'Sig_Q95', 'Sig_Q5',
 ] as const
 

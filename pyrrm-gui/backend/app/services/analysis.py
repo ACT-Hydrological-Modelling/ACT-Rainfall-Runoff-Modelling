@@ -70,7 +70,7 @@ HEADLINE_METRICS = [
     "KGE", "KGE_sqrt", "KGE_log", "KGE_inv",
     "KGE_np", "KGE_np_sqrt", "KGE_np_log", "KGE_np_inv",
     "RMSE", "MAE", "SDEB",
-    "PBIAS", "FHV", "FMV", "FLV",
+    "PBIAS", "PBIAS_log", "FHV", "FMV", "FLV",
     "Sig_BFI", "Sig_Flash", "Sig_Q95", "Sig_Q5",
 ]
 
@@ -82,7 +82,7 @@ HIGHER_IS_BETTER = {
 
 ERROR_METRICS = {"RMSE", "MAE", "SDEB"}
 
-VOLUME_METRICS = {"PBIAS", "FHV", "FMV", "FLV", "Sig_BFI", "Sig_Flash", "Sig_Q95", "Sig_Q5"}
+VOLUME_METRICS = {"PBIAS", "PBIAS_log", "FHV", "FMV", "FLV", "Sig_BFI", "Sig_Flash", "Sig_Q95", "Sig_Q5"}
 
 
 # ── Color palette for comparison traces ─────────────────────────────────────
@@ -358,11 +358,23 @@ class AnalysisService:
 
         br = self.get_gauge_batch(session_id, gauge_id)
         sdeb_obj = SDEB(alpha=0.1, lam=0.5)
+        _eps = 1e-6
         rows = {}
         for key, report in br.results.items():
             try:
-                diag = compute_diagnostics(report.simulated, report.observed)
-                diag["SDEB"] = sdeb_obj(report.observed, report.simulated)
+                sim = np.asarray(report.simulated, dtype=np.float64)
+                obs = np.asarray(report.observed, dtype=np.float64)
+                diag = compute_diagnostics(sim, obs)
+                diag["SDEB"] = sdeb_obj(obs, sim)
+                # Log PBIAS — percent bias on log-transformed flows
+                _valid = obs > 0
+                _log_obs = np.log(obs[_valid] + _eps)
+                _log_sim = np.log(sim[_valid] + _eps)
+                _denom = float(np.sum(_log_obs))
+                diag["PBIAS_log"] = (
+                    100.0 * float(np.sum(_log_sim - _log_obs)) / _denom
+                    if _valid.any() and _denom != 0 else np.nan
+                )
                 rows[key] = {m: diag.get(m, np.nan) for m in HEADLINE_METRICS}
             except Exception as e:
                 logger.warning("Diagnostics failed for %s: %s", key, e)
@@ -739,6 +751,206 @@ class AnalysisService:
             result[key] = json.loads(fig.to_json()) if fig is not None else None
         
         return result
+
+    # ── Temporal bias (per-experiment) ────────────────────────────────────
+
+    def get_experiment_temporal_bias(
+        self, session_id: str, gauge_id: str, exp_key: str
+    ) -> Dict[str, Any]:
+        """
+        Build a 3-panel Plotly figure showing temporal bias for a single experiment.
+
+        Panels:
+            (a) Daily flow — observed vs simulated (log scale, ML/day)
+            (b) Monthly inflow bias — red bars (excess) / blue bars (deficit) in GL/month
+            (c) Cumulative bias — fill-to-zero area chart in GL
+
+        Known drought periods (Millennium Drought 2002–2009, Drought 2017–20) are
+        highlighted with translucent red shading.
+
+        Returns:
+            Plotly figure serialised to a JSON-compatible dict.
+        """
+        if not PLOTLY_AVAILABLE:
+            raise ImportError("Plotly required")
+
+        br = self.get_gauge_batch(session_id, gauge_id)
+        if exp_key not in br.results:
+            raise KeyError(f"Experiment {exp_key} not found")
+
+        report = br.results[exp_key]
+        sim = np.asarray(report.simulated, dtype=np.float64)
+        obs = np.asarray(report.observed, dtype=np.float64)
+        dates = report.dates  # list of datetime-like objects
+
+        # ── Bias computation ──────────────────────────────────────────────
+        bias_ml = sim - obs
+
+        date_index = pd.to_datetime([d.isoformat() if hasattr(d, 'isoformat') else d for d in dates])
+        monthly_bias_gl = pd.Series(bias_ml, index=date_index).resample('ME').sum() / 1000.0
+        cumulative_bias_gl = np.cumsum(bias_ml) / 1000.0
+
+        valid = obs > 0
+        pbias = (
+            float(np.sum(bias_ml[valid]) / np.sum(obs[valid]) * 100.0)
+            if np.any(valid) else 0.0
+        )
+
+        # Log PBIAS: percent bias on log-transformed flows (captures low-flow bias)
+        # Uses a small epsilon to avoid log(0); only computed where obs > 0
+        _eps = 1e-6
+        log_obs = np.log(obs[valid] + _eps)
+        log_sim = np.log(sim[valid] + _eps)
+        pbias_log = (
+            float(np.sum(log_sim - log_obs) / np.sum(log_obs) * 100.0)
+            if np.any(valid) and np.sum(log_obs) != 0 else 0.0
+        )
+
+        final_cum = float(cumulative_bias_gl[-1])
+
+        # ── Experiment label ──────────────────────────────────────────────
+        p = parse_experiment_key(exp_key)
+        model = p.get('model', '?')
+        obj = p.get('objective', '?')
+        trans = p.get('transformation', '')
+        alg = p.get('algorithm', '?')
+        exp_label = f"{model} {obj}({trans}) [{alg}]" if trans else f"{model} {obj} [{alg}]"
+
+        catchment_name = ''
+        if report.catchment_info:
+            catchment_name = report.catchment_info.get('name', '') or ''
+            area_km2 = report.catchment_info.get('area_km2')
+            if area_km2:
+                catchment_name += f" ({area_km2:.0f} km²)"
+
+        title = (
+            f"{catchment_name} — {exp_label}"
+            f"  |  PBIAS = {pbias:+.1f}%"
+            f"  |  Log PBIAS = {pbias_log:+.1f}%"
+            f"  |  End bias = {final_cum:+.0f} GL"
+        )
+
+        # ── Colours ───────────────────────────────────────────────────────
+        CLR_OBS = '#888888'
+        CLR_SIM = '#D35F5F'
+        CLR_EXCESS = 'rgba(232,153,141,0.65)'
+        CLR_DEFICIT = 'rgba(141,170,232,0.65)'
+
+        # ── Figure ────────────────────────────────────────────────────────
+        fig = make_subplots(
+            rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+            row_heights=[0.35, 0.30, 0.35],
+            subplot_titles=[
+                '(a) Daily flow — observed vs simulated (log scale)',
+                '(b) Monthly inflow bias (GL/month)',
+                '(c) Cumulative bias (GL)',
+            ],
+        )
+
+        # Panel (a): daily flow
+        date_strs = [d.isoformat() if hasattr(d, 'isoformat') else str(d) for d in dates]
+        obs_plot = np.where(obs > 0, obs, np.nan)
+        sim_plot = np.where(sim > 0, sim, np.nan)
+
+        fig.add_trace(go.Scattergl(
+            x=date_strs, y=obs_plot.tolist(), mode='lines',
+            line=dict(color=CLR_OBS, width=0.7),
+            name='Observed', legendgroup='obs', showlegend=True,
+        ), row=1, col=1)
+        fig.add_trace(go.Scattergl(
+            x=date_strs, y=sim_plot.tolist(), mode='lines',
+            line=dict(color=CLR_SIM, width=0.7),
+            name='Simulated', legendgroup='sim', showlegend=True,
+        ), row=1, col=1)
+
+        # Panel (b): monthly bias — single Bar trace, colour by sign
+        mb_valid = monthly_bias_gl.dropna()
+        mb_dates = [d.isoformat() for d in mb_valid.index]
+        mb_vals = mb_valid.values.tolist()
+        bar_colors = [CLR_EXCESS if v >= 0 else CLR_DEFICIT for v in mb_vals]
+        fig.add_trace(go.Bar(
+            x=mb_dates, y=mb_vals,
+            marker_color=bar_colors,
+            name='Monthly bias',
+            showlegend=False,
+        ), row=2, col=1)
+
+        # Invisible legend proxies for excess / deficit
+        fig.add_trace(go.Bar(
+            x=[None], y=[None],
+            marker_color=CLR_EXCESS,
+            name='Excess (sim > obs)', showlegend=True,
+        ), row=2, col=1)
+        fig.add_trace(go.Bar(
+            x=[None], y=[None],
+            marker_color=CLR_DEFICIT,
+            name='Deficit (sim < obs)', showlegend=True,
+        ), row=2, col=1)
+
+        # Panel (c): cumulative bias, fill-to-zero
+        cum_pos = np.where(cumulative_bias_gl >= 0, cumulative_bias_gl, 0.0)
+        cum_neg = np.where(cumulative_bias_gl <= 0, cumulative_bias_gl, 0.0)
+        fig.add_trace(go.Scattergl(
+            x=date_strs, y=cum_pos.tolist(), mode='lines',
+            line=dict(width=0), fill='tozeroy', fillcolor=CLR_EXCESS,
+            name='Cumulative excess', showlegend=False,
+        ), row=3, col=1)
+        fig.add_trace(go.Scattergl(
+            x=date_strs, y=cum_neg.tolist(), mode='lines',
+            line=dict(width=0), fill='tozeroy', fillcolor=CLR_DEFICIT,
+            name='Cumulative deficit', showlegend=False,
+        ), row=3, col=1)
+
+        # ── Zero reference lines ──────────────────────────────────────────
+        fig.add_hline(y=0, line_dash='solid', line_color='black', line_width=0.5, row=2, col=1)
+        fig.add_hline(y=0, line_dash='solid', line_color='black', line_width=0.5, row=3, col=1)
+
+        # ── Drought shading ───────────────────────────────────────────────
+        DROUGHT_PERIODS = [
+            ('2002-01-01', '2009-12-31', 'Millennium<br>Drought'),
+            ('2017-07-01', '2020-03-31', 'Drought<br>2017–20'),
+        ]
+        d_min = date_index.min()
+        d_max = date_index.max()
+        for d_start, d_end, d_label in DROUGHT_PERIODS:
+            ds = max(pd.Timestamp(d_start), d_min)
+            de = min(pd.Timestamp(d_end), d_max)
+            if ds >= de:
+                continue
+            for row in range(1, 4):
+                fig.add_vrect(
+                    x0=ds.isoformat(), x1=de.isoformat(),
+                    fillcolor='rgba(255,180,180,0.15)', line_width=0,
+                    row=row, col=1,
+                )
+            mid = ds + (de - ds) / 2
+            fig.add_annotation(
+                x=mid.isoformat(), y=0.98, yref='y domain',
+                text=d_label, showarrow=False,
+                font=dict(size=9, color='#AA4444'), opacity=0.65,
+                xanchor='center', yanchor='top', row=1, col=1,
+            )
+
+        # ── Axis formatting ───────────────────────────────────────────────
+        fig.update_yaxes(type='log', title_text='Flow (ML/day)', row=1, col=1)
+        fig.update_yaxes(title_text='Monthly bias (GL/mo)', row=2, col=1)
+        start_year = date_index.min().year
+        fig.update_yaxes(title_text=f'Cumulative bias since {start_year} (GL)', row=3, col=1)
+        fig.update_xaxes(type='date', row=3, col=1)
+
+        fig.update_layout(
+            title=dict(text=title, font=dict(size=12)),
+            height=950,
+            hovermode='x unified',
+            barmode='overlay',
+            legend=dict(
+                font=dict(size=10), orientation='h',
+                yanchor='top', y=-0.03, xanchor='left', x=0,
+            ),
+            margin=dict(l=75, r=20, t=85, b=70),
+        )
+
+        return json.loads(fig.to_json())
 
     # ── Report card export ─────────────────────────────────────────────────
 

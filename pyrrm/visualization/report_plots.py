@@ -268,6 +268,13 @@ def _calculate_basic_metrics(obs: np.ndarray, sim: np.ndarray) -> dict:
     metrics['MAE'] = np.mean(np.abs(sim_v - obs_v))
     metrics['PBIAS'] = 100 * np.sum(sim_v - obs_v) / np.sum(obs_v) if np.sum(obs_v) != 0 else np.nan
     metrics['R2'] = r ** 2 if not np.isnan(r) else np.nan
+
+    # Log PBIAS — percent bias on log-transformed flows; highlights low-flow bias
+    _eps = 1e-6
+    _log_obs = np.log(obs_v + _eps)
+    _log_sim = np.log(sim_v + _eps)
+    _denom = np.sum(_log_obs)
+    metrics['PBIAS_log'] = 100 * np.sum(_log_sim - _log_obs) / _denom if _denom != 0 else np.nan
     
     # SDEB - Standard Deviation of Error Bias (captures timing/shape errors)
     residuals = sim_v - obs_v
@@ -1365,13 +1372,13 @@ def plot_report_card_components(
         "KGE", "KGE_sqrt", "KGE_log", "KGE_inv",
         "KGE_np", "KGE_np_sqrt", "KGE_np_log", "KGE_np_inv",
         "RMSE", "MAE", "SDEB",
-        "PBIAS", "FHV", "FMV", "FLV",
+        "PBIAS", "PBIAS_log", "FHV", "FMV", "FLV",
         "Sig_BFI", "Sig_Flash", "Sig_Q95", "Sig_Q5",
     ]
     EFFICIENCY_METRICS = {"NSE", "NSE_sqrt", "NSE_log", "NSE_inv", "KGE", "KGE_sqrt", "KGE_log", "KGE_inv",
                          "KGE_np", "KGE_np_sqrt", "KGE_np_log", "KGE_np_inv"}
     ERROR_METRICS = {"RMSE", "MAE", "SDEB"}
-    PERCENT_ERROR_METRICS = {"PBIAS", "FHV", "FMV", "FLV", "Sig_BFI", "Sig_Flash", "Sig_Q95", "Sig_Q5"}
+    PERCENT_ERROR_METRICS = {"PBIAS", "PBIAS_log", "FHV", "FMV", "FLV", "Sig_BFI", "Sig_Flash", "Sig_Q95", "Sig_Q5"}
     METRIC_DESCRIPTIONS = {
         "NSE": "Nash-Sutcliffe (high flows)", "NSE_sqrt": "NSE on √Q (balanced)",
         "NSE_log": "NSE on log(Q) (low flows)", "NSE_inv": "NSE on 1/Q (very low flows)",
@@ -1380,7 +1387,8 @@ def plot_report_card_components(
         "KGE_np": "KGE non-parametric (high flows)", "KGE_np_sqrt": "KGE_np on √Q (balanced)",
         "KGE_np_log": "KGE_np on log(Q) (low flows)", "KGE_np_inv": "KGE_np on 1/Q (very low flows)",
         "RMSE": "Root Mean Square Error", "MAE": "Mean Absolute Error", "SDEB": "Spectral Decomp. Error Bias",
-        "PBIAS": "Volume Bias (%)", "FHV": "High Flow Volume Error (%)",
+        "PBIAS": "Volume Bias (%)", "PBIAS_log": "Log-space Volume Bias (%)",
+        "FHV": "High Flow Volume Error (%)",
         "FMV": "Mid Flow Volume Error (%)", "FLV": "Low Flow Volume Error (%)",
         "Sig_BFI": "Baseflow Index Error (%)", "Sig_Flash": "Flashiness Error (%)",
         "Sig_Q95": "Q95 (low flow) Error (%)", "Sig_Q5": "Q5 (high flow) Error (%)",

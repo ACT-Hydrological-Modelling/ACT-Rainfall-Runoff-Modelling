@@ -364,7 +364,7 @@ DIAGNOSTIC_GROUPS: OrderedDict = OrderedDict([
     ("KGE_np(log Q)", ["KGE_np_log", "KGE_np_log_r", "KGE_np_log_alpha", "KGE_np_log_beta"]),
     ("KGE_np(sqrt Q)", ["KGE_np_sqrt", "KGE_np_sqrt_r", "KGE_np_sqrt_alpha", "KGE_np_sqrt_beta"]),
     ("KGE_np(1/Q)", ["KGE_np_inv", "KGE_np_inv_r", "KGE_np_inv_alpha", "KGE_np_inv_beta"]),
-    ("Error metrics", ["RMSE", "MAE", "PBIAS"]),
+    ("Error metrics", ["RMSE", "MAE", "SDEB", "PBIAS", "PBIAS_log"]),
     ("FDC volume bias", ["FHV", "FMV", "FLV"]),
     ("Signatures (raw)", ["BFI_obs", "BFI_sim"]),
     ("Signatures (% error)", ["Sig_BFI", "Sig_Flash", "Sig_Q95", "Sig_Q5"]),
